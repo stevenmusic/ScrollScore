@@ -178,7 +178,7 @@ input[type=file]{display:none}
   <div class="tempo-box">速度 <input type="range" id="tempo" min="40" max="220" value="100"><b id="tempoVal">100</b></div>
   <div class="tempo-box">移調 <button class="btn" id="transDown" style="padding:4px 10px" disabled>−</button><b id="transVal">原調</b><button class="btn" id="transUp" style="padding:4px 10px" disabled>＋</button></div>
   <div class="tempo-box">樂器
-    <select id="instrument" style="background:var(--bg);color:var(--ivory);border:1px solid var(--gold);border-radius:8px;padding:5px 8px;font-family:inherit;font-size:13px">
+    <select id="instrument" style="background:var(--bg);color:var(--ivory);border:1px solid var(--gold);border-radius:8px;padding:5px 8px;font-family:inherit;font-size:13px;text-align:center;text-align-last:center">
       <option value="piano">鋼琴</option>
       <option value="strings">弦樂</option>
       <option value="flute">長笛</option>
@@ -314,6 +314,7 @@ async function renderScore(xmlText){
 
   await osmd.load(xmlText);
   osmd.Sheet.Transpose = transposeSemitones;
+  osmd.updateGraphic();
   osmd.zoom = 0.9;
   osmd.render();
 
@@ -477,14 +478,21 @@ function startPlayback(fromSec){
 function startAudioFrom(fromSec){
   startCtxTime = audioCtx.currentTime - fromSec;
   scheduled = [];
+  let errCount = 0, lastErr = null;
   for (const ev of events) {
     const t = wholeToSec(ev.tWhole);
     if (t < fromSec - 0.02) continue;
     for (const n of ev.notes) {
-      if (n.drum) scheduleDrum(n.key, startCtxTime + t);
-      else scheduleNote(n.freq, startCtxTime + t, wholeToSec(n.durWhole));
+      try {
+        if (n.drum) scheduleDrum(n.key, startCtxTime + t);
+        else scheduleNote(n.freq, startCtxTime + t, wholeToSec(n.durWhole));
+      } catch (e) {
+        errCount++; lastErr = e;
+        console.error("排程音符失敗:", e);
+      }
     }
   }
+  if (errCount) setStatus("警告:" + errCount + " 個音符排程失敗(" + (lastErr && lastErr.message || "") + ")");
 }
 
 function currentInstrument(){ return $("instrument").value; }
