@@ -177,6 +177,16 @@ input[type=file]{display:none}
   <div class="spacer"></div>
   <div class="tempo-box">速度 <input type="range" id="tempo" min="40" max="220" value="100"><b id="tempoVal">100</b></div>
   <div class="tempo-box">移調 <button class="btn" id="transDown" style="padding:4px 10px" disabled>−</button><b id="transVal">原調</b><button class="btn" id="transUp" style="padding:4px 10px" disabled>＋</button></div>
+  <div class="tempo-box">樂器
+    <select id="instrument" style="background:var(--bg);color:var(--ivory);border:1px solid var(--gold);border-radius:8px;padding:5px 8px;font-family:inherit;font-size:13px">
+      <option value="piano">鋼琴</option>
+      <option value="strings">弦樂</option>
+      <option value="flute">長笛</option>
+      <option value="guitar">木吉他</option>
+      <option value="clarinet">單簧管</option>
+    </select>
+  </div>
+  <div class="tempo-box"><label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="showTempoMarks" style="width:16px;height:16px">顯示速度記號</label></div>
   <button class="btn" id="recBtn" disabled>錄影模式</button>
   <button class="btn" id="exportBtn" disabled>⬇ 匯出影片</button>
   <input type="file" id="fileInput" accept=".xml,.musicxml,.mxl">
@@ -294,6 +304,7 @@ async function renderScore(xmlText){
     drawTitle: false, drawSubtitle: false, drawComposer: false, drawLyricist: false,
     drawPartNames: false,
     drawMeasureNumbers: true,
+    drawMetronomeMarks: $("showTempoMarks").checked,
     followCursor: false
   });
   osmd.TransposeCalculator = new opensheetmusicdisplay.TransposeCalculator();
@@ -427,6 +438,17 @@ async function applyTranspose(delta){
 $("transUp").addEventListener("click", () => applyTranspose(1));
 $("transDown").addEventListener("click", () => applyTranspose(-1));
 
+$("showTempoMarks").addEventListener("change", async () => {
+  if (!lastXmlText) return;
+  const wasPlaying = playing;
+  const at = wasPlaying ? currentSec() : pausedAtSec;
+  stopPlayback();
+  await renderScore(lastXmlText);
+  pausedAtSec = at;
+  updateTimeLabel(at);
+  if (wasPlaying) startPlayback(at);
+});
+
 /* ── 播放控制 ─────────────────────────────── */
 $("playBtn").addEventListener("click", () => {
   if (!events.length) return;
@@ -465,7 +487,19 @@ function startAudioFrom(fromSec){
   }
 }
 
+function currentInstrument(){ return $("instrument").value; }
+
 function scheduleNote(freq, when, dur){
+  switch (currentInstrument()) {
+    case "strings":  scheduleStrings(freq, when, dur); break;
+    case "flute":    scheduleFlute(freq, when, dur); break;
+    case "guitar":   scheduleGuitar(freq, when, dur); break;
+    case "clarinet": scheduleClarinet(freq, when, dur); break;
+    default:         schedulePiano(freq, when, dur);
+  }
+}
+
+function schedulePiano(freq, when, dur){
   const osc = audioCtx.createOscillator();
   const osc2 = audioCtx.createOscillator();
   const g = audioCtx.createGain();
@@ -484,6 +518,101 @@ function scheduleNote(freq, when, dur){
   const stopAt = when + sustain + 0.3;
   osc.stop(stopAt); osc2.stop(stopAt);
   scheduled.push(osc, osc2);
+}
+
+/* 弦樂:兩個微調頻鋸齒波製造厚度,慢起音,低通柔化高頻鋸齒噪聲 */
+function scheduleStrings(freq, when, dur){
+  const g = audioCtx.createGain();
+  const lp = audioCtx.createBiquadFilter();
+  lp.type = "lowpass"; lp.frequency.value = Math.min(freq * 5, 6000); lp.Q.value = 0.7;
+  const sustain = Math.max(dur, 0.15);
+  const attack = Math.min(0.09, sustain * 0.35);
+  g.gain.setValueAtTime(0, when);
+  g.gain.linearRampToValueAtTime(0.28, when + attack);
+  g.gain.setValueAtTime(0.28, when + Math.max(sustain - 0.12, attack));
+  g.gain.exponentialRampToValueAtTime(0.0001, when + sustain + 0.35);
+  const detunes = [-6, 0, 6];
+  const oscs = [];
+  for (const d of detunes) {
+    const o = audioCtx.createOscillator();
+    o.type = "sawtooth"; o.frequency.value = freq; o.detune.value = d;
+    o.connect(lp); o.start(when); o.stop(when + sustain + 0.4);
+    oscs.push(o);
+  }
+  lp.connect(g); g.connect(masterGain);
+  scheduled.push(...oscs);
+}
+
+/* 長笛:正弦波為主 + 微量高頻噪聲模擬氣音,柔軟包絡 */
+function scheduleFlute(freq, when, dur){
+  const g = audioCtx.createGain();
+  const sustain = Math.max(dur, 0.12);
+  const attack = Math.min(0.06, sustain * 0.4);
+  g.gain.setValueAtTime(0, when);
+  g.gain.linearRampToValueAtTime(0.34, when + attack);
+  g.gain.exponentialRampToValueAtTime(0.0001, when + sustain + 0.2);
+  const o = audioCtx.createOscillator();
+  o.type = "sine"; o.frequency.value = freq;
+  o.connect(g);
+  const o2 = audioCtx.createOscillator();
+  o2.type = "sine"; o2.frequency.value = freq * 2; 
+  const g2 = audioCtx.createGain(); g2.gain.value = 0.06;
+  o2.connect(g2); g2.connect(g);
+  // 氣音噪聲層
+  const len = Math.floor(audioCtx.sampleRate * (sustain + 0.1));
+  const buf = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = (Math.random()*2-1);
+  const noise = audioCtx.createBufferSource(); noise.buffer = buf;
+  const hp = audioCtx.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = 3500;
+  const ng = audioCtx.createGain(); ng.gain.value = 0.02;
+  noise.connect(hp); hp.connect(ng); ng.connect(masterGain);
+  g.connect(masterGain);
+  o.start(when); o2.start(when); noise.start(when);
+  const stopAt = when + sustain + 0.3;
+  o.stop(stopAt); o2.stop(stopAt); noise.stop(stopAt);
+  scheduled.push(o, o2, noise);
+}
+
+/* 木吉他/撥奏:快速起音、快速衰減,方波+三角波堆疊高次泛音 */
+function scheduleGuitar(freq, when, dur){
+  const g = audioCtx.createGain();
+  const lp = audioCtx.createBiquadFilter();
+  lp.type = "lowpass"; lp.frequency.value = Math.min(freq * 8, 9000);
+  const decay = Math.max(dur * 0.8, 0.3);
+  g.gain.setValueAtTime(0.4, when);
+  g.gain.exponentialRampToValueAtTime(0.0001, when + decay);
+  const o = audioCtx.createOscillator();
+  o.type = "square"; o.frequency.value = freq;
+  const o2 = audioCtx.createOscillator();
+  o2.type = "triangle"; o2.frequency.value = freq * 2;
+  const g2 = audioCtx.createGain(); g2.gain.value = 0.15;
+  o.connect(lp); o2.connect(g2); g2.connect(lp);
+  lp.connect(g); g.connect(masterGain);
+  o.start(when); o2.start(when);
+  const stopAt = when + decay + 0.1;
+  o.stop(stopAt); o2.stop(stopAt);
+  scheduled.push(o, o2);
+}
+
+/* 單簧管:方波為主(奇次泛音特性),中等延音,柔和起音 */
+function scheduleClarinet(freq, when, dur){
+  const g = audioCtx.createGain();
+  const lp = audioCtx.createBiquadFilter();
+  lp.type = "lowpass"; lp.frequency.value = Math.min(freq * 5.5, 6500);
+  const sustain = Math.max(dur, 0.14);
+  const attack = Math.min(0.05, sustain * 0.3);
+  g.gain.setValueAtTime(0, when);
+  g.gain.linearRampToValueAtTime(0.3, when + attack);
+  g.gain.setValueAtTime(0.3, when + Math.max(sustain - 0.1, attack));
+  g.gain.exponentialRampToValueAtTime(0.0001, when + sustain + 0.22);
+  const o = audioCtx.createOscillator();
+  o.type = "square"; o.frequency.value = freq;
+  o.connect(lp); lp.connect(g); g.connect(masterGain);
+  o.start(when);
+  const stopAt = when + sustain + 0.3;
+  o.stop(stopAt);
+  scheduled.push(o);
 }
 
 /* ── 鼓音色引擎:原聲取樣 + 銅鈸合成 ───────── */
