@@ -187,6 +187,7 @@ input[type=file]{display:none}
       <option value="clarinet">單簧管</option>
     </select>
   </div>
+  <div class="tempo-box"><label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="legatoPedal" checked style="width:16px;height:16px">圓滑/踏板效果</label></div>
   <div class="tempo-box">背景透明度 <input type="range" id="scoreBgOpacity" min="0" max="100" value="0"><b id="scoreBgOpacityVal">0</b></div>
   <div class="tempo-box"><label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="showTempoMarks" style="width:16px;height:16px">顯示速度記號</label></div>
   <button class="btn" id="recBtn" disabled>錄影模式</button>
@@ -244,7 +245,8 @@ const statusEl = $("status");
 function setStatus(msg){ statusEl.textContent = msg; }
 
 let osmd = null;
-let events = [];        // {tWhole, x, notes:[{freq,durWhole}]}
+let events = [];        // {tWhole, x, notes:[{freq,durWhole}], legato, pedalOn}
+let slurRanges = [], pedalRanges = [];
 let endX = 0, totalWhole = 0;
 let audioCtx = null, masterGain = null;
 let playing = false, startCtxTime = 0, pausedAtSec = 0;
@@ -272,6 +274,9 @@ $("fileInput").addEventListener("change", async e => {
     updateTransposeLabel();
     await renderScore(xmlText);
     lastXmlText = xmlText;
+    const parsed = parseXmlTimeline(xmlText);
+    slurRanges = parsed.slurRanges;
+    pedalRanges = parsed.pedalRanges;
     setStatus("已載入:" + file.name + "(" + events.length + " 個節點)");
     loadInstrumentSamples(currentInstrument());
   } catch (err) {
@@ -334,6 +339,79 @@ async function renderScore(xmlText){
   updateTimeLabel(0);
 }
 
+/* ── 從原始 MusicXML 讀取踏板記號與圓滑線範圍 ── */
+function parseXmlTimeline(xmlText){
+  try {
+    const doc = new DOMParser().parseFromString(xmlText, "text/xml");
+    const parts = Array.from(doc.getElementsByTagName("part"));
+    let bestPart = null, bestCount = -1;
+    for (const p of parts) {
+      const c = p.getElementsByTagName("note").length;
+      if (c > bestCount) { bestCount = c; bestPart = p; }
+    }
+    if (!bestPart) return { slurRanges: [], pedalRanges: [] };
+
+    let divisions = 1, cursor = 0;
+    const slurStarts = {};
+    const outSlurs = [];
+    const pedalStack = [];
+    const outPedals = [];
+
+    for (const measure of Array.from(bestPart.getElementsByTagName("measure"))) {
+      for (const child of Array.from(measure.children)) {
+        if (child.tagName === "attributes") {
+          const d = child.getElementsByTagName("divisions")[0];
+          if (d) divisions = parseFloat(d.textContent) || divisions;
+        } else if (child.tagName === "direction") {
+          const pedalEl = child.getElementsByTagName("pedal")[0];
+          if (pedalEl) {
+            const type = pedalEl.getAttribute("type");
+            if (type === "start" || type === "resume") {
+              pedalStack.push(cursor);
+            } else if ((type === "stop" || type === "change") && pedalStack.length) {
+              const start = pedalStack.pop();
+              outPedals.push({ start, end: cursor });
+              if (type === "change") pedalStack.push(cursor);
+            }
+          }
+        } else if (child.tagName === "backup") {
+          const d = child.getElementsByTagName("duration")[0];
+          if (d) cursor -= (parseFloat(d.textContent) / divisions) / 4;
+        } else if (child.tagName === "forward") {
+          const d = child.getElementsByTagName("duration")[0];
+          if (d) cursor += (parseFloat(d.textContent) / divisions) / 4;
+        } else if (child.tagName === "note") {
+          const isChord = !!child.getElementsByTagName("chord")[0];
+          const isGrace = !!child.getElementsByTagName("grace")[0];
+          const durEl = child.getElementsByTagName("duration")[0];
+          const durWhole = durEl ? (parseFloat(durEl.textContent) / divisions) / 4 : 0;
+          const notations = child.getElementsByTagName("notations")[0];
+          if (notations) {
+            for (const s of Array.from(notations.getElementsByTagName("slur"))) {
+              const num = s.getAttribute("number") || "1";
+              const type = s.getAttribute("type");
+              if (type === "start") slurStarts[num] = cursor;
+              else if (type === "stop" && slurStarts[num] !== undefined) {
+                outSlurs.push({ start: slurStarts[num], end: cursor + durWhole });
+                delete slurStarts[num];
+              }
+            }
+          }
+          if (!isChord && !isGrace) cursor += durWhole;
+        }
+      }
+    }
+    return { slurRanges: outSlurs, pedalRanges: outPedals };
+  } catch (e) {
+    console.error("讀取踏板/圓滑線資訊失敗:", e);
+    return { slurRanges: [], pedalRanges: [] };
+  }
+}
+function inRanges(t, ranges){
+  for (const r of ranges) if (t >= r.start && t < r.end) return true;
+  return false;
+}
+
 function buildTimeline(){
   events = [];
   const cursor = osmd.cursor;
@@ -364,7 +442,9 @@ function buildTimeline(){
         }
       }
     }
-    events.push({ tWhole, x, notes });
+    const pedalOn = inRanges(tWhole, pedalRanges);
+    const legato = !pedalOn && inRanges(tWhole, slurRanges);
+    events.push({ tWhole, x, notes, pedalOn, legato });
     cursor.next();
   }
   // 終點
@@ -494,7 +574,7 @@ function startAudioFrom(fromSec){
     for (const n of ev.notes) {
       try {
         if (n.drum) scheduleDrum(n.key, startCtxTime + t);
-        else scheduleNote(n.freq, startCtxTime + t, wholeToSec(n.durWhole));
+        else scheduleNote(n.freq, startCtxTime + t, wholeToSec(n.durWhole), ev.legato, ev.pedalOn);
       } catch (e) {
         errCount++; lastErr = e;
         console.error("排程音符失敗:", e);
@@ -549,7 +629,7 @@ function loadInstrumentSamples(instKey){
 function freqToMidi(freq){ return 69 + 12 * Math.log2(freq / 440); }
 
 /* 找最接近的取樣,用 playbackRate 補足音高差(標準取樣器做法) */
-function playSampledInstrument(instKey, freq, when, dur){
+function playSampledInstrument(instKey, freq, when, dur, legato, pedal){
   const list = instrumentBuffers[instKey];
   if (!list || !list.length) return false;
   const targetMidi = freqToMidi(freq);
@@ -564,33 +644,37 @@ function playSampledInstrument(instKey, freq, when, dur){
   src.playbackRate.value = rate;
   const g = audioCtx.createGain();
   const sustain = Math.max(dur, 0.1);
+  let tail = 0.4;
+  if (pedal) tail = 1.1;        // 踏板:讓共鳴拖長,音符彼此重疊
+  else if (legato) tail = 0.6;  // 圓滑線:小幅重疊,模擬連奏
   g.gain.setValueAtTime(0.6, when);
   g.gain.setValueAtTime(0.6, when + sustain * 0.6);
-  g.gain.exponentialRampToValueAtTime(0.0001, when + sustain + 0.4);
+  g.gain.exponentialRampToValueAtTime(0.0001, when + sustain + tail);
   src.connect(g); g.connect(masterGain);
   src.start(when);
-  const stopAt = when + sustain + 0.5;
+  const stopAt = when + sustain + tail + 0.1;
   src.stop(stopAt);
   scheduled.push(src);
   return true;
 }
 
-function scheduleNote(freq, when, dur){
+function scheduleNote(freq, when, dur, legato, pedal){
+  if (!$("legatoPedal").checked) { legato = false; pedal = false; }
   const inst = currentInstrument();
-  if (REAL_INSTRUMENTS[inst] && playSampledInstrument(inst, freq, when, dur)) return;
+  if (REAL_INSTRUMENTS[inst] && playSampledInstrument(inst, freq, when, dur, legato, pedal)) return;
   // 真實取樣尚未載入完成或缺失時,退回合成音色,絕不會沒有聲音
   switch (inst) {
     case "strings":  scheduleStrings(freq, when, dur); break;
     case "flute":    scheduleFlute(freq, when, dur); break;
     case "guitar":   scheduleGuitar(freq, when, dur); break;
     case "clarinet": scheduleClarinet(freq, when, dur); break;
-    default:         schedulePiano(freq, when, dur);
+    default:         schedulePiano(freq, when, dur, legato, pedal);
   }
 }
 
 $("instrument").addEventListener("change", () => { ensureAudio(); loadInstrumentSamples(currentInstrument()); });
 
-function schedulePiano(freq, when, dur){
+function schedulePiano(freq, when, dur, legato, pedal){
   const osc = audioCtx.createOscillator();
   const osc2 = audioCtx.createOscillator();
   const g = audioCtx.createGain();
@@ -599,14 +683,18 @@ function schedulePiano(freq, when, dur){
   osc2.type = "sine";    osc2.frequency.value = freq * 2; // 一點泛音
   lp.type = "lowpass";   lp.frequency.value = Math.min(freq * 6, 8000);
   const g2 = audioCtx.createGain(); g2.gain.value = 0.18;
-  const peak = 0.32, sustain = Math.max(dur * 0.9, 0.08);
+  const peak = 0.32;
+  let sustain = Math.max(dur * 0.9, 0.08);
+  let releaseTail = 0.25;
+  if (pedal) { sustain = Math.max(dur * 1.3, 0.08); releaseTail = 0.9; }
+  else if (legato) { sustain = Math.max(dur * 1.15, 0.08); releaseTail = 0.35; }
   g.gain.setValueAtTime(0, when);
   g.gain.linearRampToValueAtTime(peak, when + 0.012);
-  g.gain.exponentialRampToValueAtTime(0.0001, when + sustain + 0.25);
+  g.gain.exponentialRampToValueAtTime(0.0001, when + sustain + releaseTail);
   osc.connect(lp); osc2.connect(g2); g2.connect(lp);
   lp.connect(g); g.connect(masterGain);
   osc.start(when); osc2.start(when);
-  const stopAt = when + sustain + 0.3;
+  const stopAt = when + sustain + releaseTail + 0.05;
   osc.stop(stopAt); osc2.stop(stopAt);
   scheduled.push(osc, osc2);
 }
@@ -1001,7 +1089,7 @@ async function exportVideo(cfg){
       const t = wholeToSec(ev.tWhole);
       for (const n of ev.notes) {
         if (n.drum) scheduleDrum(n.key, startCtxTime + t);
-        else scheduleNote(n.freq, startCtxTime + t, wholeToSec(n.durWhole));
+        else scheduleNote(n.freq, startCtxTime + t, wholeToSec(n.durWhole), ev.legato, ev.pedalOn);
       }
     }
     const total = totalSec();
