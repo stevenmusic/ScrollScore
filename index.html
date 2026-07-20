@@ -442,10 +442,14 @@ function buildTimeline(){
         }
       }
     }
-    const pedalOn = inRanges(tWhole, pedalRanges);
-    const legato = !pedalOn && inRanges(tWhole, slurRanges);
-    events.push({ tWhole, x, notes, pedalOn, legato });
+    events.push({ tWhole, x, notes });
     cursor.next();
+  }
+  // 踏板範圍:優先用樂譜裡明確的踏板記號;沒有的話自動用低音變化+不協和音偵測
+  const effectivePedalRanges = pedalRanges.length ? pedalRanges : computeAutoPedalRanges(events);
+  for (const ev of events) {
+    ev.pedalOn = inRanges(ev.tWhole, effectivePedalRanges);
+    ev.legato = !ev.pedalOn && inRanges(ev.tWhole, slurRanges);
   }
   // 終點
   const lastEv = events[events.length-1];
@@ -454,6 +458,48 @@ function buildTimeline(){
   totalWhole = (lastEv ? lastEv.tWhole : 0) + lastDur;
   endX = lastX + 120;
   cursor.hide();
+}
+
+/* ── 自動踏板:低音變化為主,不協和音偵測為輔 ── */
+function computeAutoPedalRanges(evts){
+  const ranges = [];
+  let pedalStart = null, currentBass = null, harmonySet = new Set();
+  for (const ev of evts) {
+    const midis = ev.notes.filter(n => !n.drum && n.freq).map(n => Math.round(freqToMidi(n.freq)));
+    if (!midis.length) continue; // 休止符/純鼓組不影響踏板判斷
+    const bass = Math.min(...midis);
+    if (currentBass === null) {
+      currentBass = bass; pedalStart = ev.tWhole;
+      harmonySet = new Set(midis.map(m => ((m % 12) + 12) % 12));
+      continue;
+    }
+    let changePedal = bass !== currentBass;
+    if (!changePedal) {
+      // 低音沒變,檢查新音符是否跟目前和聲明顯衝突(小二度/三全音)
+      outer:
+      for (const m of midis) {
+        const pc = ((m % 12) + 12) % 12;
+        for (const hpc of harmonySet) {
+          const interval = Math.abs(pc - hpc) % 12;
+          const iv = Math.min(interval, 12 - interval);
+          if (iv === 1 || iv === 6) { changePedal = true; break outer; }
+        }
+      }
+    }
+    if (changePedal) {
+      ranges.push({ start: pedalStart, end: ev.tWhole });
+      pedalStart = ev.tWhole;
+      currentBass = bass;
+      harmonySet = new Set(midis.map(m => ((m % 12) + 12) % 12));
+    } else {
+      midis.forEach(m => harmonySet.add(((m % 12) + 12) % 12));
+    }
+  }
+  if (pedalStart !== null) {
+    const lastT = evts.length ? evts[evts.length - 1].tWhole + 1 : pedalStart + 1;
+    ranges.push({ start: pedalStart, end: lastT });
+  }
+  return ranges;
 }
 
 /* ── 鼓譜偵測 ─────────────────────────────── */
