@@ -1,0 +1,842 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>ScrollScore — 橫向捲動樂譜播放器</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@600;700&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/opensheetmusicdisplay@2.0.0/build/opensheetmusicdisplay.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<style>
+:root{
+  --bg:#0C0A07;
+  --panel:#161209;
+  --gold:#C9A24B;
+  --gold-bright:#EFD48A;
+  --ivory:#F4ECDA;
+  --muted:#8A7D5F;
+  --line:#2A2415;
+}
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;overflow:hidden}
+body{
+  background:var(--bg);color:var(--ivory);
+  font-family:"Noto Sans TC",sans-serif;
+  display:flex;flex-direction:column;
+}
+/* ── 頂欄 ───────────────────────── */
+header{
+  display:flex;align-items:center;gap:10px;
+  padding:10px 14px;border-bottom:1px solid var(--line);
+  background:var(--panel);flex-wrap:wrap;
+}
+header h1{
+  font-family:"Noto Serif TC",serif;font-size:17px;font-weight:700;
+  letter-spacing:.12em;color:var(--gold);white-space:nowrap;
+}
+header h1 span{color:var(--ivory);font-weight:600}
+.btn{
+  border:1px solid var(--gold);background:transparent;color:var(--gold);
+  font-family:inherit;font-size:14px;font-weight:500;
+  padding:8px 16px;border-radius:999px;cursor:pointer;
+  transition:background .2s,color .2s;
+}
+.btn:active{background:var(--gold);color:var(--bg)}
+.btn.primary{background:var(--gold);color:var(--bg);font-weight:700}
+.btn.primary:disabled{opacity:.35}
+.btn:disabled{opacity:.35}
+.spacer{flex:1}
+.tempo-box{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
+.tempo-box b{color:var(--gold-bright);font-size:15px;min-width:34px;text-align:right;font-variant-numeric:tabular-nums}
+input[type=range]{
+  -webkit-appearance:none;width:110px;height:3px;border-radius:2px;
+  background:var(--line);outline:none;
+}
+input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;width:20px;height:20px;border-radius:50%;
+  background:var(--gold);border:2px solid var(--bg);
+}
+/* ── 樂譜視窗 ───────────────────── */
+#stage{
+  flex:1;position:relative;overflow:hidden;
+  display:flex;align-items:center;
+  background:
+    radial-gradient(ellipse 120% 80% at 50% 0%, #171208 0%, var(--bg) 60%);
+}
+#scroller{will-change:transform;padding:0 0 0 0}
+#score{filter:invert(92%) sepia(18%) saturate(180%) hue-rotate(10deg) brightness(1.02)}
+/* OSMD 產出 SVG 為黑底白紙,用濾鏡翻成象牙色譜面 */
+#playline{
+  position:absolute;top:6%;bottom:6%;width:2px;
+  left:var(--playx,25%);
+  background:linear-gradient(to bottom,transparent,var(--gold-bright) 12%,var(--gold-bright) 88%,transparent);
+  box-shadow:0 0 14px 2px rgba(233,203,122,.45);
+  pointer-events:none;z-index:5;
+}
+#playline::before{
+  content:"";position:absolute;top:-2px;left:50%;transform:translateX(-50%);
+  border:7px solid transparent;border-top:10px solid var(--gold);
+}
+#empty{
+  position:absolute;inset:0;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:14px;color:var(--muted);
+  text-align:center;padding:24px;z-index:2;
+}
+#empty .mark{
+  font-family:"Noto Serif TC",serif;font-size:52px;color:var(--gold);
+  line-height:1;opacity:.85;
+}
+#empty p{font-size:14px;line-height:1.8;max-width:420px}
+/* ── 底部狀態列 ─────────────────── */
+footer{
+  padding:8px 14px;border-top:1px solid var(--line);background:var(--panel);
+  font-size:12px;color:var(--muted);display:flex;gap:12px;align-items:center;
+}
+#progressbar{flex:1;height:3px;background:var(--line);border-radius:2px;overflow:hidden}
+#progressfill{height:100%;width:0%;background:var(--gold);transition:width .1s linear}
+#status{white-space:nowrap;max-width:55%;overflow:hidden;text-overflow:ellipsis}
+/* ── 錄影模式 ───────────────────── */
+body.recording header, body.recording footer{display:none}
+body.recording #stage{background:#FFFDF6}
+body.recording #score{filter:none}
+body.recording #playline{
+  background:linear-gradient(to bottom,transparent,#B8860B 12%,#B8860B 88%,transparent);
+  box-shadow:0 0 10px 1px rgba(184,134,11,.35);
+}
+body.recording #playline::before{border-top-color:#B8860B}
+#countdown{
+  position:absolute;inset:0;display:none;align-items:center;justify-content:center;
+  font-family:"Noto Serif TC",serif;font-size:120px;font-weight:700;color:var(--gold);
+  background:rgba(12,10,7,.55);z-index:20;
+}
+body.recording #countdown{color:#B8860B;background:rgba(255,253,246,.7)}
+#exitrec{
+  position:absolute;top:10px;right:10px;z-index:30;display:none;
+  width:36px;height:36px;border-radius:50%;border:1px solid #B8860B;
+  color:#B8860B;background:rgba(255,253,246,.8);font-size:18px;line-height:1;
+}
+body.recording #exitrec{display:block}
+input[type=file]{display:none}
+/* ── 匯出覆蓋層 ─────────────────── */
+#exportOverlay{
+  position:absolute;inset:0;z-index:40;display:none;
+  align-items:center;justify-content:center;
+  background:rgba(12,10,7,.88);backdrop-filter:blur(3px);
+}
+#exportOverlay.show{display:flex}
+#exportOverlay .box{
+  text-align:center;padding:28px 32px;border:1px solid var(--gold);
+  border-radius:14px;background:var(--panel);max-width:320px;
+}
+#exportOverlay .title{
+  font-family:"Noto Serif TC",serif;font-size:20px;color:var(--gold);
+  letter-spacing:.1em;margin-bottom:10px;
+}
+#exportTime{font-size:26px;color:var(--gold-bright);font-variant-numeric:tabular-nums;margin-bottom:10px}
+#exportBar{height:4px;background:var(--line);border-radius:2px;overflow:hidden;margin-bottom:14px}
+#exportFill{height:100%;width:0%;background:var(--gold)}
+#exportOverlay p{font-size:12px;color:var(--muted);line-height:1.8;margin-bottom:16px}
+/* ── 格式選擇 ───────────────────── */
+#formatOverlay{
+  position:absolute;inset:0;z-index:45;display:none;
+  align-items:center;justify-content:center;
+  background:rgba(12,10,7,.88);backdrop-filter:blur(3px);
+}
+#formatOverlay.show{display:flex}
+#formatOverlay .box{
+  text-align:center;padding:26px 28px;border:1px solid var(--gold);
+  border-radius:14px;background:var(--panel);width:300px;
+}
+#formatOverlay .title{
+  font-family:"Noto Serif TC",serif;font-size:19px;color:var(--gold);
+  letter-spacing:.1em;margin-bottom:18px;
+}
+.fmt{
+  display:flex;align-items:center;gap:14px;width:100%;
+  padding:13px 16px;margin-bottom:12px;border-radius:12px;
+  border:1px solid var(--line);background:var(--bg);color:var(--ivory);
+  font-family:inherit;font-size:14px;text-align:left;cursor:pointer;
+  transition:border-color .2s;
+}
+.fmt:active{border-color:var(--gold)}
+.fmt b{color:var(--gold-bright);font-size:15px}
+.fmt small{color:var(--muted);font-size:12px}
+.ratio{border:1.5px solid var(--gold);border-radius:3px;flex:none}
+.ratio-l{width:34px;height:19px}
+.ratio-p{width:19px;height:34px;margin:0 7.5px}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Scroll<span>Score</span></h1>
+  <button class="btn" id="loadBtn">載入樂譜</button>
+  <button class="btn primary" id="playBtn" disabled>▶ 播放</button>
+  <button class="btn" id="stopBtn" disabled>■ 停止</button>
+  <div class="spacer"></div>
+  <div class="tempo-box">速度 <input type="range" id="tempo" min="40" max="220" value="100"><b id="tempoVal">100</b></div>
+  <div class="tempo-box">移調 <button class="btn" id="transDown" style="padding:4px 10px" disabled>−</button><b id="transVal">原調</b><button class="btn" id="transUp" style="padding:4px 10px" disabled>＋</button></div>
+  <button class="btn" id="recBtn" disabled>錄影模式</button>
+  <button class="btn" id="exportBtn" disabled>⬇ 匯出影片</button>
+  <input type="file" id="fileInput" accept=".xml,.musicxml,.mxl">
+</header>
+
+<div id="stage">
+  <div id="empty">
+    <div class="mark">𝄞</div>
+    <p>從 Sibelius 匯出 MusicXML(.musicxml / .xml / .mxl),<br>
+    點「載入樂譜」即可生成單行橫向捲動樂譜。<br>
+    播放時樂譜會流過固定的金色播放線,音符同步發聲。</p>
+  </div>
+  <div id="scroller"><div id="score"></div></div>
+  <div id="playline"></div>
+  <div id="countdown">3</div>
+  <button id="exitrec" title="離開錄影模式">✕</button>
+  <div id="formatOverlay">
+    <div class="box">
+      <div class="title">選擇影片格式</div>
+      <button class="fmt" id="fmtLandscape">
+        <span class="ratio ratio-l"></span>
+        <span><b>橫式 1920 × 1080</b><br><small>YouTube 影片</small></span>
+      </button>
+      <button class="fmt" id="fmtPortrait">
+        <span class="ratio ratio-p"></span>
+        <span><b>直式 1080 × 1920</b><br><small>Shorts / Reels / TikTok</small></span>
+      </button>
+      <button class="btn" id="fmtCancel">取消</button>
+    </div>
+  </div>
+  <div id="exportOverlay">
+    <div class="box">
+      <div class="title">影片輸出中</div>
+      <div id="exportTime">0:00 / 0:00</div>
+      <div id="exportBar"><div id="exportFill"></div></div>
+      <p>請保持此頁面在前景、螢幕不要熄滅。<br>輸出時間 = 樂曲長度,完成後自動下載。</p>
+      <button class="btn" id="exportCancel">取消</button>
+    </div>
+  </div>
+</div>
+
+<footer>
+  <span id="status">尚未載入樂譜</span>
+  <div id="progressbar"><div id="progressfill"></div></div>
+  <span id="timeLabel">0:00 / 0:00</span>
+</footer>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const statusEl = $("status");
+function setStatus(msg){ statusEl.textContent = msg; }
+
+let osmd = null;
+let events = [];        // {tWhole, x, notes:[{freq,durWhole}]}
+let endX = 0, totalWhole = 0;
+let audioCtx = null, masterGain = null;
+let playing = false, startCtxTime = 0, pausedAtSec = 0;
+let rafId = 0;
+let scheduled = [];     // 已排程的 audio nodes,停止時關閉
+let lastXmlText = null;
+let transposeSemitones = 0;
+const PLAYLINE_RATIO = 0.25;
+
+/* ── 載入檔案 ──────────────────────────────── */
+$("loadBtn").addEventListener("click", () => $("fileInput").click());
+$("fileInput").addEventListener("change", async e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  stopPlayback();
+  setStatus("解析中:" + file.name);
+  try {
+    let xmlText;
+    if (/\.mxl$/i.test(file.name)) {
+      xmlText = await extractMXL(file);
+    } else {
+      xmlText = await file.text();
+    }
+    transposeSemitones = 0;
+    updateTransposeLabel();
+    await renderScore(xmlText);
+    lastXmlText = xmlText;
+    setStatus("已載入:" + file.name + "(" + events.length + " 個節點)");
+  } catch (err) {
+    setStatus("載入失敗:" + (err.message || err));
+  }
+  e.target.value = "";
+});
+
+async function extractMXL(file){
+  const zip = await JSZip.loadAsync(file);
+  // 先讀 container.xml 找 rootfile
+  let rootPath = null;
+  const container = zip.file("META-INF/container.xml");
+  if (container) {
+    const cx = await container.async("text");
+    const m = cx.match(/full-path="([^"]+)"/);
+    if (m) rootPath = m[1];
+  }
+  if (!rootPath) {
+    rootPath = Object.keys(zip.files).find(p => /\.(xml|musicxml)$/i.test(p) && !p.startsWith("META-INF"));
+  }
+  if (!rootPath) throw new Error("MXL 內找不到 MusicXML");
+  return zip.file(rootPath).async("text");
+}
+
+/* ── 渲染 + 建立時間軸 ─────────────────────── */
+async function renderScore(xmlText){
+  $("empty").style.display = "none";
+  const scoreDiv = $("score");
+  scoreDiv.innerHTML = "";
+  osmd = new opensheetmusicdisplay.OpenSheetMusicDisplay(scoreDiv, {
+    backend: "svg",
+    autoResize: false,
+    drawTitle: false, drawSubtitle: false, drawComposer: false, drawLyricist: false,
+    drawPartNames: false,
+    drawMeasureNumbers: true,
+    followCursor: false
+  });
+  osmd.TransposeCalculator = new opensheetmusicdisplay.TransposeCalculator();
+  osmd.EngravingRules.RenderSingleHorizontalStaffline = true;
+  osmd.EngravingRules.PageTopMargin = 1;
+  osmd.EngravingRules.PageBottomMargin = 1;
+
+  await osmd.load(xmlText);
+  osmd.Sheet.Transpose = transposeSemitones;
+  osmd.zoom = 0.9;
+  osmd.render();
+
+  buildTimeline();
+  if (events.some(ev => ev.notes.some(n => n.drum))) loadDrumKit();
+  resetScroll();
+  $("playBtn").disabled = false;
+  $("stopBtn").disabled = false;
+  $("recBtn").disabled = false;
+  $("exportBtn").disabled = false;
+  $("transUp").disabled = false;
+  $("transDown").disabled = false;
+  updateTimeLabel(0);
+}
+
+function buildTimeline(){
+  events = [];
+  const cursor = osmd.cursor;
+  cursor.show();
+  cursor.reset();
+  const it = cursor.Iterator;
+  let lastX = 0;
+  while (!it.EndReached) {
+    const tWhole = it.currentTimeStamp.RealValue;   // 以全音符為單位
+    const el = cursor.cursorElement;
+    const x = el ? (el.offsetLeft + el.offsetWidth / 2) : lastX;
+    lastX = x;
+    const notes = [];
+    const ves = it.CurrentVoiceEntries || [];
+    for (const ve of ves) {
+      for (const n of ve.Notes) {
+        if (!n.Pitch) continue;                      // 休止符
+        if (n.NoteTie && n.NoteTie.StartNote !== n) continue; // 連結線後段不重發聲
+        let durWhole = n.Length.RealValue;
+        if (n.NoteTie && n.NoteTie.StartNote === n) {
+          durWhole = n.NoteTie.Notes.reduce((s,t)=>s+t.Length.RealValue,0);
+        }
+        const drumKey = getDrumKey(n);
+        if (drumKey !== null) {
+          notes.push({ drum: true, key: drumKey, durWhole });
+        } else {
+          notes.push({ freq: n.Pitch.Frequency, durWhole });
+        }
+      }
+    }
+    events.push({ tWhole, x, notes });
+    cursor.next();
+  }
+  // 終點
+  const lastEv = events[events.length-1];
+  const lastDur = lastEv && lastEv.notes.length
+    ? Math.max(...lastEv.notes.map(n=>n.durWhole)) : 0.25;
+  totalWhole = (lastEv ? lastEv.tWhole : 0) + lastDur;
+  endX = lastX + 120;
+  cursor.hide();
+}
+
+/* ── 鼓譜偵測 ─────────────────────────────── */
+function isPercussionInstrument(instr){
+  if (!instr || !instr.SubInstruments) return false;
+  return instr.SubInstruments.some(s => s.fixedKey > 0);
+}
+function getDrumKey(n){
+  let instr = null;
+  try { instr = n.ParentVoiceEntry.ParentVoice.Parent; } catch(e){}
+  if (!isPercussionInstrument(instr)) return null;
+  // 1) 優先:MusicXML midi-unpitched(Sibelius 鼓組會寫入)
+  const pid = n.PlaybackInstrumentId || n.playbackInstrumentId;
+  if (pid) {
+    const sub = instr.SubInstruments.find(s => s.idString === pid);
+    if (sub && sub.fixedKey > 0) return normalizeDrumKey(sub.fixedKey);
+  }
+  // 2) 備援:標準爵士鼓記譜位置(顯示音高 → GM)
+  const midi = n.Pitch.getHalfTone ? n.Pitch.getHalfTone() + 12 : (n.Pitch.halfTone + 12);
+  const posMap = { 64:36, 65:36, 67:41, 69:43, 72:38, 74:47, 76:48, 77:51, 79:42, 81:49 };
+  return posMap[midi] || 38;
+}
+function normalizeDrumKey(k){
+  // MusicXML midi-unpitched 為 1–128;若落在 GM 打擊區間直接用,否則減 1 修正
+  if (k >= 35 && k <= 81) return k;
+  if (k - 1 >= 35 && k - 1 <= 81) return k - 1;
+  return 38;
+}
+
+/* ── 時間換算 ─────────────────────────────── */
+function bpm(){ return parseInt($("tempo").value, 10); }
+function wholeToSec(w){ return w * 240 / bpm(); }   // 1 全音符 = 4 拍
+function totalSec(){ return wholeToSec(totalWhole); }
+
+$("tempo").addEventListener("input", () => {
+  $("tempoVal").textContent = bpm();
+  if (playing) { // 播放中改速度:重新以目前位置起算
+    const cur = currentSec();
+    stopAudioOnly();
+    startAudioFrom(cur);
+  }
+  updateTimeLabel(playing ? currentSec() : pausedAtSec);
+});
+
+/* ── 移調 ─────────────────────────────────── */
+function updateTransposeLabel(){
+  $("transVal").textContent = transposeSemitones === 0
+    ? "原調"
+    : (transposeSemitones > 0 ? "+" : "") + transposeSemitones + " 半音";
+}
+async function applyTranspose(delta){
+  if (!lastXmlText) return;
+  const next = transposeSemitones + delta;
+  if (next < -12 || next > 12) return; // 超過一個八度沒有實用意義,避免調號離譜
+  transposeSemitones = next;
+  updateTransposeLabel();
+  const wasPlaying = playing;
+  const at = wasPlaying ? currentSec() : pausedAtSec;
+  stopPlayback();
+  setStatus("移調中…");
+  await renderScore(lastXmlText);
+  pausedAtSec = at;
+  updateTimeLabel(at);
+  setStatus(transposeSemitones === 0 ? "已還原原調" : "已移調 " + $("transVal").textContent);
+  if (wasPlaying) startPlayback(at);
+}
+$("transUp").addEventListener("click", () => applyTranspose(1));
+$("transDown").addEventListener("click", () => applyTranspose(-1));
+
+/* ── 播放控制 ─────────────────────────────── */
+$("playBtn").addEventListener("click", () => {
+  if (!events.length) return;
+  if (playing) { pausePlayback(); } else { startPlayback(pausedAtSec); }
+});
+$("stopBtn").addEventListener("click", stopPlayback);
+
+function ensureAudio(){
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    masterGain = audioCtx.createGain();
+    masterGain.gain.value = 0.9;
+    masterGain.connect(audioCtx.destination);
+  }
+  if (audioCtx.state === "suspended") audioCtx.resume();
+}
+
+function startPlayback(fromSec){
+  ensureAudio();
+  playing = true;
+  $("playBtn").textContent = "❚❚ 暫停";
+  startAudioFrom(fromSec || 0);
+  rafId = requestAnimationFrame(tick);
+}
+
+function startAudioFrom(fromSec){
+  startCtxTime = audioCtx.currentTime - fromSec;
+  scheduled = [];
+  for (const ev of events) {
+    const t = wholeToSec(ev.tWhole);
+    if (t < fromSec - 0.02) continue;
+    for (const n of ev.notes) {
+      if (n.drum) scheduleDrum(n.key, startCtxTime + t);
+      else scheduleNote(n.freq, startCtxTime + t, wholeToSec(n.durWhole));
+    }
+  }
+}
+
+function scheduleNote(freq, when, dur){
+  const osc = audioCtx.createOscillator();
+  const osc2 = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  const lp = audioCtx.createBiquadFilter();
+  osc.type = "triangle"; osc.frequency.value = freq;
+  osc2.type = "sine";    osc2.frequency.value = freq * 2; // 一點泛音
+  lp.type = "lowpass";   lp.frequency.value = Math.min(freq * 6, 8000);
+  const g2 = audioCtx.createGain(); g2.gain.value = 0.18;
+  const peak = 0.32, sustain = Math.max(dur * 0.9, 0.08);
+  g.gain.setValueAtTime(0, when);
+  g.gain.linearRampToValueAtTime(peak, when + 0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001, when + sustain + 0.25);
+  osc.connect(lp); osc2.connect(g2); g2.connect(lp);
+  lp.connect(g); g.connect(masterGain);
+  osc.start(when); osc2.start(when);
+  const stopAt = when + sustain + 0.3;
+  osc.stop(stopAt); osc2.stop(stopAt);
+  scheduled.push(osc, osc2);
+}
+
+/* ── 鼓音色引擎:原聲取樣 + 銅鈸合成 ───────── */
+const KIT_URL = "https://tonejs.github.io/audio/drum-samples/acoustic-kit/";
+const kitBuffers = {};   // name → AudioBuffer
+let kitLoading = null;
+
+function loadDrumKit(){
+  if (kitLoading) return kitLoading;
+  ensureAudio();
+  const files = ["kick","snare","hihat","tom1","tom2","tom3"];
+  setStatus("載入鼓音色中…");
+  kitLoading = Promise.all(files.map(async name => {
+    try {
+      const res = await fetch(KIT_URL + name + ".mp3");
+      const arr = await res.arrayBuffer();
+      kitBuffers[name] = await audioCtx.decodeAudioData(arr);
+    } catch(e){ /* 載入失敗時該鼓件退回合成音 */ }
+  })).then(() => setStatus("鼓音色就緒"));
+  return kitLoading;
+}
+
+function playSample(name, when, gain, rate){
+  const buf = kitBuffers[name];
+  if (!buf) return false;
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  if (rate) src.playbackRate.value = rate;
+  const g = audioCtx.createGain();
+  g.gain.value = gain;
+  src.connect(g); g.connect(masterGain);
+  src.start(when);
+  scheduled.push(src);
+  return true;
+}
+
+/* 金屬銅鈸合成:六方波泛音堆疊 + 帶通/高通,經典金屬音色法 */
+function synthCymbal(when, decay, hpFreq, gain){
+  const ratios = [2, 3, 4.16, 5.43, 6.79, 8.21];
+  const bp = audioCtx.createBiquadFilter();
+  bp.type = "bandpass"; bp.frequency.value = 10000;
+  const hp = audioCtx.createBiquadFilter();
+  hp.type = "highpass"; hp.frequency.value = hpFreq;
+  const g = audioCtx.createGain();
+  g.gain.setValueAtTime(gain, when);
+  g.gain.exponentialRampToValueAtTime(0.0001, when + decay);
+  bp.connect(hp); hp.connect(g); g.connect(masterGain);
+  for (const r of ratios) {
+    const o = audioCtx.createOscillator();
+    o.type = "square"; o.frequency.value = 130.81 * r;
+    o.connect(bp); o.start(when); o.stop(when + decay + 0.05);
+    scheduled.push(o);
+  }
+}
+
+function scheduleDrum(key, when){
+  switch (key) {
+    case 35: case 36: // Kick
+      if (!playSample("kick", when, 1.0)) synthKick(when); break;
+    case 38: case 40: // Snare
+      if (!playSample("snare", when, 0.95)) synthSnare(when, 0.95); break;
+    case 37:          // Side stick
+      if (!playSample("snare", when, 0.4, 1.6)) synthSnare(when, 0.4); break;
+    case 39:          // Clap → snare 替代
+      playSample("snare", when, 0.8) || synthSnare(when, 0.8); break;
+    case 42:          // Closed hi-hat
+      if (!playSample("hihat", when, 0.75)) synthCymbal(when, 0.06, 8000, 0.25); break;
+    case 44:          // Pedal hi-hat
+      if (!playSample("hihat", when, 0.45, 1.1)) synthCymbal(when, 0.05, 8000, 0.16); break;
+    case 46:          // Open hi-hat
+      synthCymbal(when, 0.45, 7000, 0.28); break;
+    case 41: case 43: // Floor toms
+      if (!playSample("tom3", when, 0.95)) synthTom(when, 90); break;
+    case 45: case 47: // Mid toms
+      if (!playSample("tom2", when, 0.95)) synthTom(when, 130); break;
+    case 48: case 50: // High toms
+      if (!playSample("tom1", when, 0.95)) synthTom(when, 175); break;
+    case 49: case 57: case 55: case 52: // Crash / splash / china
+      synthCymbal(when, 1.6, 5500, 0.4); break;
+    case 51: case 59: // Ride
+      synthCymbal(when, 0.9, 9000, 0.2); break;
+    case 53:          // Ride bell
+      synthCymbal(when, 0.5, 10500, 0.3); break;
+    default:
+      playSample("snare", when, 0.7) || synthSnare(when, 0.7);
+  }
+}
+
+/* 取樣載入失敗時的合成備援 */
+function synthKick(when){
+  const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+  o.type = "sine";
+  o.frequency.setValueAtTime(150, when);
+  o.frequency.exponentialRampToValueAtTime(45, when + 0.12);
+  g.gain.setValueAtTime(1.0, when);
+  g.gain.exponentialRampToValueAtTime(0.001, when + 0.4);
+  o.connect(g); g.connect(masterGain);
+  o.start(when); o.stop(when + 0.45); scheduled.push(o);
+}
+function synthSnare(when, vol){
+  const len = audioCtx.sampleRate * 0.2;
+  const buf = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = (Math.random()*2-1) * Math.pow(1-i/len, 2);
+  const src = audioCtx.createBufferSource(); src.buffer = buf;
+  const hp = audioCtx.createBiquadFilter(); hp.type="highpass"; hp.frequency.value=1400;
+  const g = audioCtx.createGain(); g.gain.value = vol;
+  src.connect(hp); hp.connect(g); g.connect(masterGain);
+  src.start(when); scheduled.push(src);
+  const o = audioCtx.createOscillator(), og = audioCtx.createGain();
+  o.type="triangle"; o.frequency.value=185;
+  og.gain.setValueAtTime(vol*0.5, when);
+  og.gain.exponentialRampToValueAtTime(0.001, when+0.1);
+  o.connect(og); og.connect(masterGain);
+  o.start(when); o.stop(when+0.12); scheduled.push(o);
+}
+function synthTom(when, freq){
+  const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+  o.type = "sine";
+  o.frequency.setValueAtTime(freq*1.5, when);
+  o.frequency.exponentialRampToValueAtTime(freq, when + 0.08);
+  g.gain.setValueAtTime(0.9, when);
+  g.gain.exponentialRampToValueAtTime(0.001, when + 0.35);
+  o.connect(g); g.connect(masterGain);
+  o.start(when); o.stop(when + 0.4); scheduled.push(o);
+}
+
+function currentSec(){ return audioCtx ? (audioCtx.currentTime - startCtxTime) : 0; }
+
+function pausePlayback(){
+  pausedAtSec = currentSec();
+  stopAudioOnly();
+  playing = false;
+  $("playBtn").textContent = "▶ 播放";
+  cancelAnimationFrame(rafId);
+}
+
+function stopAudioOnly(){
+  for (const node of scheduled) { try { node.stop(); } catch(e){} }
+  scheduled = [];
+}
+
+function stopPlayback(){
+  stopAudioOnly();
+  playing = false; pausedAtSec = 0;
+  $("playBtn").textContent = "▶ 播放";
+  cancelAnimationFrame(rafId);
+  resetScroll();
+  updateTimeLabel(0);
+  $("progressfill").style.width = "0%";
+}
+
+/* ── 捲動同步 ─────────────────────────────── */
+function playlineX(){ return $("stage").clientWidth * PLAYLINE_RATIO; }
+
+function xAtSec(sec){
+  const w = sec * bpm() / 240; // sec → whole
+  if (!events.length) return 0;
+  if (w <= events[0].tWhole) return events[0].x;
+  for (let i = 0; i < events.length; i++) {
+    const a = events[i];
+    const b = events[i+1] || { tWhole: totalWhole, x: endX };
+    if (w >= a.tWhole && w < b.tWhole) {
+      const f = (w - a.tWhole) / Math.max(b.tWhole - a.tWhole, 1e-6);
+      return a.x + (b.x - a.x) * f;
+    }
+  }
+  return endX;
+}
+
+function tick(){
+  const sec = currentSec();
+  if (sec >= totalSec()) { stopPlayback(); return; }
+  const x = xAtSec(sec);
+  $("scroller").style.transform = "translateX(" + (playlineX() - x) + "px)";
+  $("progressfill").style.width = (sec / totalSec() * 100).toFixed(2) + "%";
+  updateTimeLabel(sec);
+  rafId = requestAnimationFrame(tick);
+}
+
+function resetScroll(){
+  if (!events.length) return;
+  $("scroller").style.transform = "translateX(" + (playlineX() - events[0].x) + "px)";
+}
+
+function fmt(s){ s=Math.max(0,Math.floor(s)); return Math.floor(s/60)+":"+String(s%60).padStart(2,"0"); }
+function updateTimeLabel(sec){ $("timeLabel").textContent = fmt(sec) + " / " + fmt(totalSec()); }
+
+/* ── 錄影模式 ─────────────────────────────── */
+$("recBtn").addEventListener("click", () => {
+  stopPlayback();
+  document.body.classList.add("recording");
+  resetScroll();
+  // 倒數 3 秒後自動播放,留時間開啟 iOS 螢幕錄製
+  let n = 3;
+  const cd = $("countdown");
+  cd.style.display = "flex"; cd.textContent = n;
+  const iv = setInterval(() => {
+    n--;
+    if (n <= 0) {
+      clearInterval(iv);
+      cd.style.display = "none";
+      startPlayback(0);
+    } else { cd.textContent = n; }
+  }, 1000);
+});
+$("exitrec").addEventListener("click", () => {
+  document.body.classList.remove("recording");
+  stopPlayback();
+});
+
+/* ── 影片匯出 ─────────────────────────────── */
+let exporting = false, exportCancelled = false;
+$("exportBtn").addEventListener("click", () => {
+  if (!events.length || exporting) return;
+  $("formatOverlay").classList.add("show");
+});
+$("fmtCancel").addEventListener("click", () => $("formatOverlay").classList.remove("show"));
+$("fmtLandscape").addEventListener("click", () => {
+  $("formatOverlay").classList.remove("show");
+  exportVideo({ W: 1920, H: 1080, scoreH: 560, bitrate: 10000000 });
+});
+$("fmtPortrait").addEventListener("click", () => {
+  $("formatOverlay").classList.remove("show");
+  exportVideo({ W: 1080, H: 1920, scoreH: 480, bitrate: 10000000 });
+});
+$("exportCancel").addEventListener("click", () => { exportCancelled = true; });
+
+function pickMime(){
+  const cands = ["video/mp4;codecs=avc1","video/mp4","video/webm;codecs=vp9","video/webm"];
+  for (const m of cands)
+    if (window.MediaRecorder && MediaRecorder.isTypeSupported(m)) return m;
+  return "";
+}
+
+async function rasterizeScore(targetH){
+  const svg = $("score").querySelector("svg");
+  if (!svg) throw new Error("找不到樂譜");
+  const srcW = parseFloat(svg.getAttribute("width"))  || svg.clientWidth;
+  const srcH = parseFloat(svg.getAttribute("height")) || svg.clientHeight;
+  const clone = svg.cloneNode(true);
+  clone.setAttribute("xmlns","http://www.w3.org/2000/svg");
+  const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(clone)],{type:"image/svg+xml"}));
+  const img = new Image();
+  await new Promise((res,rej)=>{ img.onload=res; img.onerror=()=>rej(new Error("樂譜點陣化失敗")); img.src=url; });
+  const scale = targetH / srcH;
+  const fullW = Math.ceil(srcW * scale);
+  const TILE = 4000, tiles = [];
+  for (let x = 0; x < fullW; x += TILE) {
+    const w = Math.min(TILE, fullW - x);
+    const c = document.createElement("canvas");
+    c.width = w; c.height = targetH;
+    c.getContext("2d").drawImage(img, -x, 0, fullW, targetH);
+    tiles.push({ x, canvas: c });
+  }
+  URL.revokeObjectURL(url);
+  return { tiles, scale };
+}
+
+async function exportVideo(cfg){
+  if (!events.length || exporting) return;
+  exporting = true; exportCancelled = false;
+  stopPlayback();
+  ensureAudio();
+  if (kitLoading) await kitLoading;
+  $("exportOverlay").classList.add("show");
+  let aDest = null;
+  try {
+    const W = cfg.W, H = cfg.H, SCORE_H = cfg.scoreH;
+    const plX = W * PLAYLINE_RATIO, topY = (H - SCORE_H) / 2;
+    const { tiles, scale } = await rasterizeScore(SCORE_H);
+
+    const cv = document.createElement("canvas");
+    cv.width = W; cv.height = H;
+    const ctx = cv.getContext("2d");
+    const vStream = cv.captureStream(30);
+    aDest = audioCtx.createMediaStreamDestination();
+    masterGain.connect(aDest);
+    const stream = new MediaStream([
+      ...vStream.getVideoTracks(),
+      ...aDest.stream.getAudioTracks()
+    ]);
+    const mime = pickMime();
+    const rec = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: cfg.bitrate } : undefined);
+    const chunks = [];
+    rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+    const stopped = new Promise(res => rec.onstop = res);
+    rec.start(1000);
+
+    const LEAD = 1.0, TAIL = 1.5;
+    const t0 = audioCtx.currentTime + 0.1;
+    startCtxTime = t0 + LEAD;
+    scheduled = [];
+    for (const ev of events) {
+      const t = wholeToSec(ev.tWhole);
+      for (const n of ev.notes) {
+        if (n.drum) scheduleDrum(n.key, startCtxTime + t);
+        else scheduleNote(n.freq, startCtxTime + t, wholeToSec(n.durWhole));
+      }
+    }
+    const total = totalSec();
+
+    await new Promise(resolve => {
+      const draw = () => {
+        if (exportCancelled) { resolve(); return; }
+        const el = audioCtx.currentTime - t0;
+        const sec = Math.min(Math.max(el - LEAD, 0), total);
+        ctx.fillStyle = "#FFFDF6";
+        ctx.fillRect(0, 0, W, H);
+        const off = plX - xAtSec(sec) * scale;
+        for (const tl of tiles) {
+          const dx = off + tl.x;
+          if (dx < W && dx + tl.canvas.width > 0) ctx.drawImage(tl.canvas, dx, topY);
+        }
+        ctx.strokeStyle = "#B8860B"; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.moveTo(plX, H*0.08); ctx.lineTo(plX, H*0.92); ctx.stroke();
+        ctx.fillStyle = "#B8860B";
+        ctx.beginPath();
+        ctx.moveTo(plX-9, H*0.08-2); ctx.lineTo(plX+9, H*0.08-2); ctx.lineTo(plX, H*0.08+13);
+        ctx.closePath(); ctx.fill();
+        $("exportTime").textContent = fmt(sec) + " / " + fmt(total);
+        $("exportFill").style.width = (sec/total*100).toFixed(1) + "%";
+        if (el >= LEAD + total + TAIL) { resolve(); return; }
+        requestAnimationFrame(draw);
+      };
+      draw();
+    });
+
+    stopAudioOnly();
+    rec.stop();
+    await stopped;
+    if (!exportCancelled) {
+      const blob = new Blob(chunks, { type: mime || "video/webm" });
+      const ext = (mime && mime.indexOf("mp4") >= 0) ? "mp4" : "webm";
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "scrollscore-" + W + "x" + H + "." + ext;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(a.href), 30000);
+      setStatus("影片輸出完成(" + (blob.size/1048576).toFixed(1) + " MB)");
+    } else {
+      setStatus("已取消輸出");
+    }
+  } catch (err) {
+    setStatus("輸出失敗:" + (err.message || err));
+  }
+  if (aDest) { try { masterGain.disconnect(aDest); } catch(e){} }
+  stopAudioOnly();
+  $("exportOverlay").classList.remove("show");
+  exporting = false;
+}
+
+window.addEventListener("resize", () => { if (!playing) resetScroll(); });
+</script>
+</body>
+</html>
