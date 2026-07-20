@@ -289,7 +289,7 @@ function setStatus(msg){ statusEl.textContent = msg; }
 
 let osmd = null;
 let events = [];        // {tWhole, x, notes:[{freq,durWhole}], legato, pedalOn}
-let slurRanges = [], pedalRanges = [];
+let slurRanges = [], pedalRanges = [], repeatChordRanges = [];
 let calibrating = false, calibStartPerf = 0, calibTapIndex = 0;
 let calibrationMap = []; // [{tWhole, realSec}] 已排序,由 tap-along 或自動偵測建立
 let endX = 0, totalWhole = 0;
@@ -329,12 +329,13 @@ $("fileInput").addEventListener("change", async e => {
     }
     transposeSemitones = 0;
     updateTransposeLabel();
-    await renderScore(xmlText);
-    lastXmlText = xmlText;
     const parsed = parseXmlTimeline(xmlText);
     slurRanges = parsed.slurRanges;
     pedalRanges = parsed.pedalRanges;
-    setStatus("已載入:" + file.name + "(" + events.length + " 個節點)");
+    repeatChordRanges = parsed.repeatRanges;
+    await renderScore(xmlText);
+    lastXmlText = xmlText;
+    setStatus("已載入:" + file.name + "(" + events.length + " 個節點," + repeatChordRanges.length + " 組重複音型)");
     loadInstrumentSamples(currentInstrument());
   } catch (err) {
     setStatus("載入失敗:" + (err.message || err));
@@ -414,6 +415,20 @@ function parseXmlTimeline(xmlText){
     const outSlurs = [];
     const pedalStack = [];
     const outPedals = [];
+    const staffOnsets = {}; // staffNum -> [{tWhole, durWhole, pcs:Set}], 給重複音型偵測用
+
+    function pitchClassFromNote(noteEl){
+      const pitchEl = noteEl.getElementsByTagName("pitch")[0];
+      if (!pitchEl) return null;
+      const stepEl = pitchEl.getElementsByTagName("step")[0];
+      if (!stepEl) return null;
+      const stepMap = { C:0, D:2, E:4, F:5, G:7, A:9, B:11 };
+      let pc = stepMap[stepEl.textContent.trim()];
+      if (pc === undefined) return null;
+      const alterEl = pitchEl.getElementsByTagName("alter")[0];
+      if (alterEl) pc += parseFloat(alterEl.textContent);
+      return ((Math.round(pc) % 12) + 12) % 12;
+    }
 
     for (const measure of Array.from(bestPart.getElementsByTagName("measure"))) {
       for (const child of Array.from(measure.children)) {
@@ -455,15 +470,120 @@ function parseXmlTimeline(xmlText){
               }
             }
           }
+          // 記錄這個音符所屬的譜表(左右手),用來做重複音型偵測
+          const staffEl = child.getElementsByTagName("staff")[0];
+          const staffNum = staffEl ? parseInt(staffEl.textContent, 10) : 1;
+          const pc = pitchClassFromNote(child);
+          if (pc !== null) {
+            if (!staffOnsets[staffNum]) staffOnsets[staffNum] = [];
+            const list = staffOnsets[staffNum];
+            if (isChord && list.length) {
+              const last = list[list.length - 1];
+              last.pcs.add(pc);
+              last.durWhole = Math.max(last.durWhole, durWhole);
+            } else if (!isGrace) {
+              list.push({ tWhole: cursor, durWhole, pcs: new Set([pc]) });
+            }
+          }
           if (!isChord && !isGrace) cursor += durWhole;
         }
       }
     }
-    return { slurRanges: outSlurs, pedalRanges: outPedals };
+    let repeatRanges = [];
+    for (const staffNum of Object.keys(staffOnsets)) {
+      repeatRanges = repeatRanges.concat(detectRepeatingChordRanges(staffOnsets[staffNum]));
+    }
+    return { slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges };
   } catch (e) {
     console.error("讀取踏板/圓滑線資訊失敗:", e);
-    return { slurRanges: [], pedalRanges: [] };
+    return { slurRanges: [], pedalRanges: [], repeatRanges: [] };
   }
+}
+/* 偵測某一手(譜表)裡,音符是否精確循環重複(例如分解和弦C-E-G-C-E-G...),
+   偵測到就把整個重複範圍當一個和聲區塊,讓其他聲部的音符可以延長撐滿 */
+/* ── 和聲資料庫:三和絃/六和絃/七和絃/九十一十三和絃/掛留和絃,音程結構以根音=0起算 ── */
+const CHORD_FORMULAS = [
+  // 三和絃
+  { name: "大三和絃",        iv: [0,4,7] },
+  { name: "小三和絃",        iv: [0,3,7] },
+  { name: "減三和絃",        iv: [0,3,6] },
+  { name: "增三和絃",        iv: [0,4,8] },
+  { name: "掛留二和絃(sus2)", iv: [0,2,7] },
+  { name: "掛留四和絃(sus4)", iv: [0,5,7] },
+  // 六和絃
+  { name: "大六和絃",        iv: [0,4,7,9] },
+  { name: "小六和絃",        iv: [0,3,7,9] },
+  // 七和絃
+  { name: "大七和絃(maj7)",   iv: [0,4,7,11] },
+  { name: "屬七和絃(dom7)",   iv: [0,4,7,10] },
+  { name: "小七和絃(min7)",   iv: [0,3,7,10] },
+  { name: "小大七和絃(minMaj7)", iv: [0,3,7,11] },
+  { name: "半減七和絃(m7b5)", iv: [0,3,6,10] },
+  { name: "減七和絃(dim7)",   iv: [0,3,6,9] },
+  { name: "增大七和絃(augMaj7)", iv: [0,4,8,11] },
+  { name: "增屬七和絃(7#5)",  iv: [0,4,8,10] },
+  { name: "掛留七和絃(7sus4)", iv: [0,5,7,10] },
+  { name: "加九和絃(add9)",   iv: [0,2,4,7] },
+  // 九和絃
+  { name: "屬九和絃(dom9)",   iv: [0,2,4,7,10] },
+  { name: "大九和絃(maj9)",   iv: [0,2,4,7,11] },
+  { name: "小九和絃(min9)",   iv: [0,2,3,7,10] },
+  { name: "掛留九和絃(9sus4)", iv: [0,2,5,7,10] },
+  // 十一和絃(常見會省略三音)
+  { name: "屬十一和絃(dom11)", iv: [0,2,4,5,7,10] },
+  { name: "屬十一和絃(省三音)", iv: [0,2,5,7,10] },
+  { name: "小十一和絃(min11)", iv: [0,2,3,5,7,10] },
+  { name: "大十一和絃(maj11)", iv: [0,2,4,5,7,11] },
+  // 十三和絃(常見會省略十一音、五音)
+  { name: "屬十三和絃(dom13)", iv: [0,2,4,5,7,9,10] },
+  { name: "屬十三和絃(省略音)", iv: [0,2,4,7,9,10] },
+  { name: "大十三和絃(maj13)", iv: [0,2,4,7,9,11] },
+  { name: "小十三和絃(min13)", iv: [0,2,3,7,9,10] }
+];
+// 依大小分組,比對時只需要比對同大小的公式,加快速度
+const CHORD_BY_SIZE = {};
+for (const f of CHORD_FORMULAS) {
+  (CHORD_BY_SIZE[f.iv.length] = CHORD_BY_SIZE[f.iv.length] || []).push(f.iv.join(","));
+}
+/* 判斷一組音高集合(不分八度、不分排列順序,含轉位)是否符合任何已知和絃結構 */
+function isRecognizedChord(pcSet){
+  const pcs = Array.from(pcSet);
+  if (pcs.length < 3) return true; // 1~2個音還不足以判斷,先當作可以延伸,等累積更多再驗證
+  const formulas = CHORD_BY_SIZE[pcs.length];
+  if (!formulas) return false;
+  for (const root of pcs) {
+    const intervals = pcs.map(pc => ((pc - root) % 12 + 12) % 12).sort((a,b)=>a-b).join(",");
+    if (formulas.includes(intervals)) return true;
+  }
+  return false;
+}
+
+function detectRepeatingChordRanges(onsets, maxChordSize){
+  maxChordSize = maxChordSize || 7; // 最多到十三和絃(常省略音,約6~7個不同音)
+  const MIN_NOTES = 3; // 至少要有三和絃份量的音符,實際是否為和絃交給樂理驗證把關
+  const ranges = [];
+  const n = onsets.length;
+  let i = 0;
+  while (i < n) {
+    let set = new Set(onsets[i].pcs);
+    let j = i + 1;
+    let lastValidJ = isRecognizedChord(set) ? i : -1;
+    while (j < n) {
+      const union = new Set(set);
+      for (const pc of onsets[j].pcs) union.add(pc);
+      if (union.size > maxChordSize) break; // 音種類數超過十三和絃範圍,不可能是同一個和絃
+      set = union;
+      j++;
+      if (isRecognizedChord(set)) lastValidJ = j - 1; // 記錄目前為止,最後一次符合已知和絃結構的位置
+    }
+    if (lastValidJ >= i && (lastValidJ - i + 1) >= MIN_NOTES) {
+      ranges.push({ start: onsets[i].tWhole, end: onsets[lastValidJ].tWhole + onsets[lastValidJ].durWhole });
+      i = lastValidJ + 1;
+    } else {
+      i++;
+    }
+  }
+  return ranges;
 }
 function inRanges(t, ranges){
   for (const r of ranges) if (t >= r.start && t < r.end) return true;
@@ -510,12 +630,21 @@ function buildTimeline(){
     ev.legato = !ev.pedalOn && inRanges(ev.tWhole, slurRanges);
     // 記錄這個音符所屬和聲/圓滑線範圍的結束時間點,讓同一組和聲裡的音符都能撐滿整個和聲的長度
     const activeRanges = ev.pedalOn ? pedalRanges : (ev.legato ? slurRanges : null);
-    ev.harmonyEndWhole = null;
+    let rangeEnd = null;
     if (activeRanges) {
       for (const r of activeRanges) {
-        if (ev.tWhole >= r.start && ev.tWhole < r.end) { ev.harmonyEndWhole = r.end; break; }
+        if (ev.tWhole >= r.start && ev.tWhole < r.end) { rangeEnd = r.end; break; }
       }
     }
+    // 左手(或任一手)重複分解和弦音型偵測到的範圍,也當作和聲延伸的依據
+    for (const r of repeatChordRanges) {
+      if (ev.tWhole >= r.start && ev.tWhole < r.end) { rangeEnd = rangeEnd != null ? Math.max(rangeEnd, r.end) : r.end; break; }
+    }
+    // 同一時刻裡,只要有更長時值的音符(例如左手四拍和絃),其他較短的音符(例如右手旋律音)
+    // 就延長撐滿到那個最長時值的音符結束為止,不用判斷和聲、純粹看樂譜上寫的時值
+    const maxDurWhole = ev.notes.length ? Math.max(...ev.notes.map(n => n.durWhole)) : 0;
+    const coChordEnd = ev.tWhole + maxDurWhole;
+    ev.harmonyEndWhole = rangeEnd != null ? Math.max(rangeEnd, coChordEnd) : coChordEnd;
   }
   // 終點
   const lastEv = events[events.length-1];
