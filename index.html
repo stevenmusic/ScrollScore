@@ -477,7 +477,8 @@ function buildTimeline(){
         if (drumKey !== null) {
           notes.push({ drum: true, key: drumKey, durWhole });
         } else {
-          notes.push({ freq: n.Pitch.Frequency, durWhole });
+          const shiftedFreq = n.Pitch.Frequency * Math.pow(2, transposeSemitones / 12);
+          notes.push({ freq: shiftedFreq, durWhole });
         }
       }
     }
