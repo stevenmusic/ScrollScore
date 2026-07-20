@@ -177,6 +177,18 @@ input[type=file]{display:none}
   <button class="btn" id="stopBtn" disabled>■ 停止</button>
   <div class="spacer"></div>
   <div class="tempo-box">速度 <input type="range" id="tempo" min="40" max="220" value="100"><b id="tempoVal">100</b></div>
+  <button class="btn" id="settingsToggle" style="display:flex;align-items:center;gap:6px">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15a3 3 0 100-6 3 3 0 000 6z"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+    設定
+  </button>
+  <button class="btn" id="calibToggle" style="display:flex;align-items:center;gap:6px">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="14" rx="2"/><path d="M7 6l2.5 4M12 6l2.5 4M17 6l2.5 4M2 10h20"/></svg>
+    校準
+  </button>
+  <input type="file" id="fileInput" accept=".xml,.musicxml,.mxl">
+</header>
+
+<div id="settingsPanel" style="padding:10px 14px;border-bottom:1px solid var(--line);background:var(--panel);display:none;flex-wrap:wrap;gap:10px;align-items:center">
   <div class="tempo-box">移調 <button class="btn" id="transDown" style="padding:4px 10px" disabled>−</button><b id="transVal">原調</b><button class="btn" id="transUp" style="padding:4px 10px" disabled>＋</button></div>
   <div class="tempo-box">樂器
     <select id="instrument" style="background:var(--bg);color:var(--ivory);border:1px solid var(--gold);border-radius:8px;padding:5px 8px;font-family:inherit;font-size:13px;text-align:center;text-align-last:center">
@@ -192,8 +204,23 @@ input[type=file]{display:none}
   <div class="tempo-box"><label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="showTempoMarks" style="width:16px;height:16px">顯示速度記號</label></div>
   <button class="btn" id="recBtn" disabled>錄影模式</button>
   <button class="btn" id="exportBtn" disabled>⬇ 匯出影片</button>
-  <input type="file" id="fileInput" accept=".xml,.musicxml,.mxl">
-</header>
+</div>
+
+<div id="calibPanel" style="padding:8px 14px;border-bottom:1px solid var(--line);background:var(--panel);display:none;gap:10px;align-items:center;flex-wrap:wrap;font-size:13px;color:var(--muted)">
+  <b style="color:var(--gold)">影片校準</b>
+  <button class="btn" id="calibFileBtn">上傳彈奏錄音/影片</button>
+
+  <input type="file" id="calibFile" accept="audio/*,video/*">
+  <audio id="calibAudio" controls style="height:32px;max-width:200px;display:none"></audio>
+  <button class="btn" id="calibStartBtn" disabled>手動校準</button>
+  <button class="btn primary" id="calibTapBtn" disabled>Tap</button>
+  <button class="btn" id="calibUndoBtn" disabled>撤銷上一下</button>
+  <button class="btn" id="calibFinishBtn" disabled>完成校準</button>
+  <span>從第 <input type="number" id="calibRetapIndex" min="0" value="0" style="width:56px;background:var(--bg);color:var(--ivory);border:1px solid var(--line);border-radius:6px;padding:2px 4px"> 個節點重點</span>
+  <button class="btn" id="calibRetapBtn" disabled>繼續點擊</button>
+  <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="useCalibration" disabled style="width:16px;height:16px">使用校準時間播放</label>
+  <span id="calibStatus">尚未校準</span>
+</div>
 
 <div id="stage">
   <div id="scoreBg"></div>
@@ -247,6 +274,8 @@ function setStatus(msg){ statusEl.textContent = msg; }
 let osmd = null;
 let events = [];        // {tWhole, x, notes:[{freq,durWhole}], legato, pedalOn}
 let slurRanges = [], pedalRanges = [];
+let calibrating = false, calibStartPerf = 0, calibTapIndex = 0;
+let calibrationMap = []; // [{tWhole, realSec}] 已排序,由 tap-along 或自動偵測建立
 let endX = 0, totalWhole = 0;
 let audioCtx = null, masterGain = null;
 let playing = false, startCtxTime = 0, pausedAtSec = 0;
@@ -258,6 +287,15 @@ const PLAYLINE_RATIO = 0.25;
 
 /* ── 載入檔案 ──────────────────────────────── */
 $("loadBtn").addEventListener("click", () => $("fileInput").click());
+
+$("settingsToggle").addEventListener("click", () => {
+  const p = $("settingsPanel");
+  p.style.display = (p.style.display === "none") ? "flex" : "none";
+});
+$("calibToggle").addEventListener("click", () => {
+  const p = $("calibPanel");
+  p.style.display = (p.style.display === "none") ? "flex" : "none";
+});
 $("fileInput").addEventListener("change", async e => {
   const file = e.target.files[0];
   if (!file) return;
@@ -336,6 +374,7 @@ async function renderScore(xmlText){
   $("exportBtn").disabled = false;
   $("transUp").disabled = false;
   $("transDown").disabled = false;
+  $("calibStartBtn").disabled = false;
   updateTimeLabel(0);
 }
 
@@ -532,7 +571,194 @@ function normalizeDrumKey(k){
 /* ── 時間換算 ─────────────────────────────── */
 function bpm(){ return parseInt($("tempo").value, 10); }
 function wholeToSec(w){ return w * 240 / bpm(); }   // 1 全音符 = 4 拍
-function totalSec(){ return wholeToSec(totalWhole); }
+function totalSec(){
+  if ($("useCalibration").checked && calibrationMap.length >= 2) return calibrationMap[calibrationMap.length-1].realSec;
+  return wholeToSec(totalWhole);
+}
+
+/* ── 校準時間換算(tap-along / 自動拍點偵測共用) ── */
+function calibToSec(w){
+  const m = calibrationMap;
+  if (m.length < 2) return wholeToSec(w);
+  if (w <= m[0].tWhole) {
+    const slope = (m[1].realSec - m[0].realSec) / Math.max(m[1].tWhole - m[0].tWhole, 1e-6);
+    return m[0].realSec + (w - m[0].tWhole) * slope;
+  }
+  for (let i = 0; i < m.length - 1; i++) {
+    const a = m[i], b = m[i+1];
+    if (w >= a.tWhole && w <= b.tWhole) {
+      const f = (w - a.tWhole) / Math.max(b.tWhole - a.tWhole, 1e-6);
+      return a.realSec + (b.realSec - a.realSec) * f;
+    }
+  }
+  const last = m[m.length-1], prev = m[m.length-2];
+  const slope = (last.realSec - prev.realSec) / Math.max(last.tWhole - prev.tWhole, 1e-6);
+  return last.realSec + (w - last.tWhole) * slope;
+}
+function calibSecToWhole(sec){
+  const m = calibrationMap;
+  if (m.length < 2) return sec * bpm() / 240;
+  if (sec <= m[0].realSec) {
+    const slope = (m[1].tWhole - m[0].tWhole) / Math.max(m[1].realSec - m[0].realSec, 1e-6);
+    return m[0].tWhole + (sec - m[0].realSec) * slope;
+  }
+  for (let i = 0; i < m.length - 1; i++) {
+    const a = m[i], b = m[i+1];
+    if (sec >= a.realSec && sec <= b.realSec) {
+      const f = (sec - a.realSec) / Math.max(b.realSec - a.realSec, 1e-6);
+      return a.tWhole + (b.tWhole - a.tWhole) * f;
+    }
+  }
+  const last = m[m.length-1], prev = m[m.length-2];
+  const slope = (last.tWhole - prev.tWhole) / Math.max(last.realSec - prev.realSec, 1e-6);
+  return last.tWhole + (sec - last.realSec) * slope;
+}
+function useCalib(){ return $("useCalibration").checked && calibrationMap.length >= 2; }
+
+/* ── 校準用的「現在時間」:有上傳錄音就跟著錄音播放位置走,否則用碼表 ── */
+function nowRealSec(){
+  const a = $("calibAudio");
+  if (a && a.src) return a.currentTime;
+  return (performance.now() - calibStartPerf) / 1000;
+}
+
+/* ── 音頭(onset)偵測:抓音量包絡線突然上升的瞬間,不做音高辨識 ── */
+function mixDownChannels(buf){
+  const len = buf.length;
+  const out = new Float32Array(len);
+  for (let c = 0; c < buf.numberOfChannels; c++) {
+    const ch = buf.getChannelData(c);
+    for (let i = 0; i < len; i++) out[i] += ch[i] / buf.numberOfChannels;
+  }
+  return out;
+}
+function detectOnsets(buf){
+  const data = buf.numberOfChannels > 1 ? mixDownChannels(buf) : buf.getChannelData(0);
+  const sr = buf.sampleRate;
+  const hop = Math.round(sr * 0.01);
+  const win = Math.round(sr * 0.03);
+  const frames = Math.max(0, Math.floor((data.length - win) / hop));
+  const energy = new Float32Array(frames);
+  for (let i = 0; i < frames; i++) {
+    let sum = 0;
+    const start = i * hop;
+    for (let j = 0; j < win; j++) { const v = data[start + j]; sum += v * v; }
+    energy[i] = Math.sqrt(sum / win);
+  }
+  const flux = new Float32Array(frames);
+  for (let i = 1; i < frames; i++) flux[i] = Math.max(0, energy[i] - energy[i-1]);
+  const onsets = [];
+  const minGapFrames = Math.max(1, Math.round(0.08 * sr / hop));
+  let lastOnsetFrame = -minGapFrames;
+  const localWin = 20;
+  for (let i = 2; i < frames - 1; i++) {
+    const lo = Math.max(0, i - localWin), hi = Math.min(frames, i + localWin);
+    let sum = 0; for (let k = lo; k < hi; k++) sum += flux[k];
+    const localAvg = sum / (hi - lo);
+    const isPeak = flux[i] > flux[i-1] && flux[i] >= flux[i+1];
+    if (isPeak && flux[i] > localAvg * 1.6 + 0.001 && (i - lastOnsetFrame) >= minGapFrames) {
+      onsets.push(i * hop / sr);
+      lastOnsetFrame = i;
+    }
+  }
+  return onsets;
+}
+
+/* ── 校準 UI 事件 ── */
+$("calibFileBtn").addEventListener("click", () => $("calibFile").click());
+$("calibFile").addEventListener("change", async e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  if (!events.length) { setStatus("請先載入樂譜再校準"); e.target.value = ""; return; }
+  setStatus("分析錄音拍點中…");
+  try {
+    ensureAudio();
+    const arr = await file.arrayBuffer();
+    const audioBuf = await audioCtx.decodeAudioData(arr);
+    const onsets = detectOnsets(audioBuf);
+    calibrationMap = [];
+    const n = Math.min(onsets.length, events.length);
+    for (let i = 0; i < n; i++) calibrationMap.push({ tWhole: events[i].tWhole, realSec: onsets[i] });
+    calibTapIndex = n;
+    $("useCalibration").disabled = calibrationMap.length < 2;
+    $("calibRetapBtn").disabled = false;
+    const audioEl = $("calibAudio");
+    audioEl.src = URL.createObjectURL(file);
+    audioEl.style.display = "inline-block";
+    updateCalibStatus();
+    setStatus("自動偵測到 " + onsets.length + " 個拍點,樂譜共 " + events.length + " 個節點" +
+      (onsets.length !== events.length ? "(數量不同,請用下面「從第N個節點重點」修正對不齊的段落)" : "(數量吻合)"));
+  } catch (err) {
+    setStatus("錄音分析失敗:" + (err.message || err) + ",請改用手動 Tap 校準");
+  }
+});
+
+function updateCalibStatus(){
+  $("calibStatus").textContent = "已記錄 " + calibrationMap.length + " / " + events.length + " 個節點";
+}
+
+$("calibStartBtn").addEventListener("click", () => {
+  if (!events.length) return;
+  calibrating = true;
+  calibTapIndex = 0;
+  calibrationMap = [];
+  calibStartPerf = performance.now();
+  stopPlayback();
+  resetScroll();
+  $("calibTapBtn").disabled = false;
+  $("calibUndoBtn").disabled = false;
+  $("calibFinishBtn").disabled = false;
+  updateCalibStatus();
+  setStatus("手動校準模式:請跟著你的錄音/影片節奏點擊 Tap");
+});
+
+$("calibTapBtn").addEventListener("click", () => {
+  if (!calibrating || calibTapIndex >= events.length) return;
+  const realSec = nowRealSec();
+  const ev = events[calibTapIndex];
+  calibrationMap.push({ tWhole: ev.tWhole, realSec });
+  $("scroller").style.transform = "translateX(" + (playlineX() - ev.x) + "px)";
+  calibTapIndex++;
+  updateCalibStatus();
+  if (calibTapIndex >= events.length) finishCalibration();
+});
+
+$("calibUndoBtn").addEventListener("click", () => {
+  if (!calibrationMap.length) return;
+  calibrationMap.pop();
+  calibTapIndex = Math.max(0, calibTapIndex - 1);
+  updateCalibStatus();
+  const ev = events[calibTapIndex];
+  if (ev) $("scroller").style.transform = "translateX(" + (playlineX() - ev.x) + "px)";
+});
+
+$("calibFinishBtn").addEventListener("click", finishCalibration);
+function finishCalibration(){
+  calibrating = false;
+  if (calibrationMap.length >= 2) {
+    $("useCalibration").disabled = false;
+    setStatus("校準完成,共 " + calibrationMap.length + " 個節點,可開啟「使用校準時間播放」");
+  } else {
+    setStatus("校準點太少(至少需要2個),請重新校準");
+  }
+}
+
+$("calibRetapBtn").addEventListener("click", () => {
+  const idx = parseInt($("calibRetapIndex").value, 10);
+  if (isNaN(idx) || idx < 0 || idx >= events.length) return;
+  const cutoffWhole = events[idx].tWhole;
+  calibrationMap = calibrationMap.filter(p => p.tWhole < cutoffWhole);
+  calibTapIndex = idx;
+  calibrating = true;
+  calibStartPerf = performance.now();
+  $("calibTapBtn").disabled = false;
+  $("calibUndoBtn").disabled = false;
+  $("calibFinishBtn").disabled = false;
+  updateCalibStatus();
+  const ev = events[idx];
+  $("scroller").style.transform = "translateX(" + (playlineX() - ev.x) + "px)";
+  setStatus("從第 " + idx + " 個節點繼續點擊校準");
+});
 
 $("tempo").addEventListener("input", () => {
   $("tempoVal").textContent = bpm();
@@ -613,14 +839,16 @@ function startPlayback(fromSec){
 function startAudioFrom(fromSec){
   startCtxTime = audioCtx.currentTime - fromSec;
   scheduled = [];
+  const calib = useCalib();
   let errCount = 0, lastErr = null;
   for (const ev of events) {
-    const t = wholeToSec(ev.tWhole);
+    const t = calib ? calibToSec(ev.tWhole) : wholeToSec(ev.tWhole);
     if (t < fromSec - 0.02) continue;
     for (const n of ev.notes) {
       try {
+        const durSec = calib ? Math.max(calibToSec(ev.tWhole + n.durWhole) - t, 0.05) : wholeToSec(n.durWhole);
         if (n.drum) scheduleDrum(n.key, startCtxTime + t);
-        else scheduleNote(n.freq, startCtxTime + t, wholeToSec(n.durWhole), ev.legato, ev.pedalOn);
+        else scheduleNote(n.freq, startCtxTime + t, durSec, ev.legato, ev.pedalOn);
       } catch (e) {
         errCount++; lastErr = e;
         console.error("排程音符失敗:", e);
@@ -994,7 +1222,7 @@ function stopPlayback(){
 function playlineX(){ return $("stage").clientWidth * PLAYLINE_RATIO; }
 
 function xAtSec(sec){
-  const w = sec * bpm() / 240; // sec → whole
+  const w = useCalib() ? calibSecToWhole(sec) : sec * bpm() / 240; // sec → whole
   if (!events.length) return 0;
   if (w <= events[0].tWhole) return events[0].x;
   for (let i = 0; i < events.length; i++) {
@@ -1131,11 +1359,13 @@ async function exportVideo(cfg){
     const t0 = audioCtx.currentTime + 0.1;
     startCtxTime = t0 + LEAD;
     scheduled = [];
+    const calib = useCalib();
     for (const ev of events) {
-      const t = wholeToSec(ev.tWhole);
+      const t = calib ? calibToSec(ev.tWhole) : wholeToSec(ev.tWhole);
       for (const n of ev.notes) {
+        const durSec = calib ? Math.max(calibToSec(ev.tWhole + n.durWhole) - t, 0.05) : wholeToSec(n.durWhole);
         if (n.drum) scheduleDrum(n.key, startCtxTime + t);
-        else scheduleNote(n.freq, startCtxTime + t, wholeToSec(n.durWhole), ev.legato, ev.pedalOn);
+        else scheduleNote(n.freq, startCtxTime + t, durSec, ev.legato, ev.pedalOn);
       }
     }
     const total = totalSec();
