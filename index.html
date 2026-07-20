@@ -200,6 +200,7 @@ input[type=file]{display:none}
     </select>
   </div>
   <div class="tempo-box"><label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="legatoPedal" checked style="width:16px;height:16px">圓滑/踏板效果</label></div>
+
   <div class="tempo-box">背景透明度 <input type="range" id="scoreBgOpacity" min="0" max="100" value="0"><b id="scoreBgOpacityVal">0</b></div>
   <div class="tempo-box"><label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="showTempoMarks" style="width:16px;height:16px">顯示速度記號</label></div>
   <button class="btn" id="recBtn" disabled>錄影模式</button>
@@ -220,6 +221,21 @@ input[type=file]{display:none}
   <button class="btn" id="calibRetapBtn" disabled>繼續點擊</button>
   <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="useCalibration" disabled style="width:16px;height:16px">使用校準時間播放</label>
   <span id="calibStatus">尚未校準</span>
+</div>
+
+<div id="combinePanel" style="padding:8px 14px;border-bottom:1px solid var(--line);background:var(--panel);display:none;gap:10px;align-items:center;flex-wrap:wrap;font-size:13px;color:var(--muted)">
+  <b style="color:var(--gold)">樂譜+影片合成</b>
+  <span>沿用上面「上傳彈奏錄音/影片」的檔案(需要是影片檔,不是純音訊)</span>
+  <video id="combineVideo" style="display:none"></video>
+  <span>橫條高度 <input type="range" id="stripHeightPct" min="10" max="40" value="18"><b id="stripHeightVal">18</b>%</span>
+  <span>橫條位置
+    <select id="stripPosition" style="background:var(--bg);color:var(--ivory);border:1px solid var(--gold);border-radius:8px;padding:4px 8px;font-family:inherit;font-size:13px">
+      <option value="top">上方</option>
+      <option value="bottom">下方</option>
+    </select>
+  </span>
+  <button class="btn primary" id="combineExportBtn" disabled>輸出合成影片</button>
+  <span id="combineStatus"></span>
 </div>
 
 <div id="stage">
@@ -294,7 +310,10 @@ $("settingsToggle").addEventListener("click", () => {
 });
 $("calibToggle").addEventListener("click", () => {
   const p = $("calibPanel");
-  p.style.display = (p.style.display === "none") ? "flex" : "none";
+  const c = $("combinePanel");
+  const show = p.style.display === "none";
+  p.style.display = show ? "flex" : "none";
+  c.style.display = show ? "flex" : "none";
 });
 $("fileInput").addEventListener("change", async e => {
   const file = e.target.files[0];
@@ -485,11 +504,18 @@ function buildTimeline(){
     events.push({ tWhole, x, notes });
     cursor.next();
   }
-  // 踏板範圍:優先用樂譜裡明確的踏板記號;沒有的話自動用低音變化+不協和音偵測
-  const effectivePedalRanges = pedalRanges.length ? pedalRanges : computeAutoPedalRanges(events);
+  // 踏板範圍:只用樂譜裡明確的踏板記號(拍長猜測準確率太低,已移除)
   for (const ev of events) {
-    ev.pedalOn = inRanges(ev.tWhole, effectivePedalRanges);
+    ev.pedalOn = inRanges(ev.tWhole, pedalRanges);
     ev.legato = !ev.pedalOn && inRanges(ev.tWhole, slurRanges);
+    // 記錄這個音符所屬和聲/圓滑線範圍的結束時間點,讓同一組和聲裡的音符都能撐滿整個和聲的長度
+    const activeRanges = ev.pedalOn ? pedalRanges : (ev.legato ? slurRanges : null);
+    ev.harmonyEndWhole = null;
+    if (activeRanges) {
+      for (const r of activeRanges) {
+        if (ev.tWhole >= r.start && ev.tWhole < r.end) { ev.harmonyEndWhole = r.end; break; }
+      }
+    }
   }
   // 終點
   const lastEv = events[events.length-1];
@@ -498,48 +524,6 @@ function buildTimeline(){
   totalWhole = (lastEv ? lastEv.tWhole : 0) + lastDur;
   endX = lastX + 120;
   cursor.hide();
-}
-
-/* ── 自動踏板:低音變化為主,不協和音偵測為輔 ── */
-function computeAutoPedalRanges(evts){
-  const ranges = [];
-  let pedalStart = null, currentBass = null, harmonySet = new Set();
-  for (const ev of evts) {
-    const midis = ev.notes.filter(n => !n.drum && n.freq).map(n => Math.round(freqToMidi(n.freq)));
-    if (!midis.length) continue; // 休止符/純鼓組不影響踏板判斷
-    const bass = Math.min(...midis);
-    if (currentBass === null) {
-      currentBass = bass; pedalStart = ev.tWhole;
-      harmonySet = new Set(midis.map(m => ((m % 12) + 12) % 12));
-      continue;
-    }
-    let changePedal = bass !== currentBass;
-    if (!changePedal) {
-      // 低音沒變,檢查新音符是否跟目前和聲明顯衝突(小二度/三全音)
-      outer:
-      for (const m of midis) {
-        const pc = ((m % 12) + 12) % 12;
-        for (const hpc of harmonySet) {
-          const interval = Math.abs(pc - hpc) % 12;
-          const iv = Math.min(interval, 12 - interval);
-          if (iv === 1 || iv === 6) { changePedal = true; break outer; }
-        }
-      }
-    }
-    if (changePedal) {
-      ranges.push({ start: pedalStart, end: ev.tWhole });
-      pedalStart = ev.tWhole;
-      currentBass = bass;
-      harmonySet = new Set(midis.map(m => ((m % 12) + 12) % 12));
-    } else {
-      midis.forEach(m => harmonySet.add(((m % 12) + 12) % 12));
-    }
-  }
-  if (pedalStart !== null) {
-    const lastT = evts.length ? evts[evts.length - 1].tWhole + 1 : pedalStart + 1;
-    ranges.push({ start: pedalStart, end: lastT });
-  }
-  return ranges;
 }
 
 /* ── 鼓譜偵測 ─────────────────────────────── */
@@ -686,6 +670,14 @@ $("calibFile").addEventListener("change", async e => {
     const audioEl = $("calibAudio");
     audioEl.src = URL.createObjectURL(file);
     audioEl.style.display = "inline-block";
+    if (file.type.startsWith("video/")) {
+      $("combineVideo").src = URL.createObjectURL(file);
+      $("combineExportBtn").disabled = false;
+      $("combineStatus").textContent = "";
+    } else {
+      $("combineExportBtn").disabled = true;
+      $("combineStatus").textContent = "(這是音訊檔,合成影片需要影片檔)";
+    }
     updateCalibStatus();
     setStatus("自動偵測到 " + onsets.length + " 個拍點,樂譜共 " + events.length + " 個節點" +
       (onsets.length !== events.length ? "(數量不同,請用下面「從第N個節點重點」修正對不齊的段落)" : "(數量吻合)"));
@@ -812,6 +804,7 @@ $("showTempoMarks").addEventListener("change", async () => {
   if (wasPlaying) startPlayback(at);
 });
 
+
 /* ── 播放控制 ─────────────────────────────── */
 $("playBtn").addEventListener("click", () => {
   if (!events.length) return;
@@ -845,11 +838,15 @@ function startAudioFrom(fromSec){
   for (const ev of events) {
     const t = calib ? calibToSec(ev.tWhole) : wholeToSec(ev.tWhole);
     if (t < fromSec - 0.02) continue;
+    const chordAnchors = {};
+    const harmonyEndSec = ev.harmonyEndWhole != null
+      ? startCtxTime + (calib ? calibToSec(ev.harmonyEndWhole) : wholeToSec(ev.harmonyEndWhole))
+      : null;
     for (const n of ev.notes) {
       try {
         const durSec = calib ? Math.max(calibToSec(ev.tWhole + n.durWhole) - t, 0.05) : wholeToSec(n.durWhole);
         if (n.drum) scheduleDrum(n.key, startCtxTime + t);
-        else scheduleNote(n.freq, startCtxTime + t, durSec, ev.legato, ev.pedalOn);
+        else scheduleNote(n.freq, startCtxTime + t, durSec, ev.legato, ev.pedalOn, chordAnchors, harmonyEndSec);
       } catch (e) {
         errCount++; lastErr = e;
         console.error("排程音符失敗:", e);
@@ -863,8 +860,9 @@ function currentInstrument(){ return $("instrument").value; }
 
 /* ── 真實樂器取樣(取代合成音色) ─────────────── */
 const SAMPLE_BASE = "https://nbrosowsky.github.io/tonejs-instruments/samples/";
+const PIANO_BASE = "https://tonejs.github.io/audio/salamander/"; // Tone.js 官方託管的完整版 Salamander 鋼琴取樣,音質/延音都比一般鏡像版本好
 const REAL_INSTRUMENTS = {
-  piano:    { folder: "piano",           minOct: 1, maxOct: 7 },
+  piano:    { folder: "piano",           minOct: 0, maxOct: 8, base: PIANO_BASE },
   strings:  { folder: "violin",          minOct: 2, maxOct: 7 },
   flute:    { folder: "flute",           minOct: 3, maxOct: 7 },
   guitar:   { folder: "guitar-acoustic", minOct: 2, maxOct: 6 },
@@ -884,7 +882,7 @@ function loadInstrumentSamples(instKey){
   for (let oct = cfg.minOct; oct <= cfg.maxOct; oct++) {
     for (const [letter, idx] of notes) {
       const midi = (oct + 1) * 12 + idx;
-      const url = SAMPLE_BASE + cfg.folder + "/" + letter + oct + ".mp3";
+      const url = cfg.base ? (cfg.base + letter + oct + ".mp3") : (SAMPLE_BASE + cfg.folder + "/" + letter + oct + ".mp3");
       jobs.push(
         fetch(url).then(r => { if (!r.ok) throw new Error("404"); return r.arrayBuffer(); })
           .then(arr => audioCtx.decodeAudioData(arr))
@@ -904,26 +902,64 @@ function loadInstrumentSamples(instKey){
 function freqToMidi(freq){ return 69 + 12 * Math.log2(freq / 440); }
 
 /* 找最接近的取樣,用 playbackRate 補足音高差(標準取樣器做法) */
-function playSampledInstrument(instKey, freq, when, dur, legato, pedal){
-  const list = instrumentBuffers[instKey];
-  if (!list || !list.length) return false;
-  const targetMidi = freqToMidi(freq);
+function nearestSample(list, targetMidi){
   let best = list[0], bestDist = Infinity;
   for (const s of list) {
     const dist = Math.abs(s.midi - targetMidi);
     if (dist < bestDist) { bestDist = dist; best = s; }
+  }
+  return best;
+}
+function playSampledInstrument(instKey, freq, when, dur, legato, pedal, chordAnchors, harmonyEndSec){
+  const list = instrumentBuffers[instKey];
+  if (!list || !list.length) return false;
+  const targetMidi = freqToMidi(freq);
+  const pitchClass = ((Math.round(targetMidi) % 12) + 12) % 12;
+  let best;
+  // 同一組和絃裡,同音名(差整數個八度)的音優先共用同一份錄音,讓八度關係更精確;
+  // 但如果共用會讓變速幅度過大(音色明顯失真、聽起來像機器人),就放棄共用,改用各自最近的錄音
+  const SHARE_SHIFT_LIMIT = 4; // 半音,超過這個幅度共用弊大於利
+  if (chordAnchors && chordAnchors[pitchClass] && Math.abs(targetMidi - chordAnchors[pitchClass].midi) <= SHARE_SHIFT_LIMIT) {
+    best = chordAnchors[pitchClass];
+  } else {
+    best = nearestSample(list, targetMidi);
+    if (chordAnchors && !chordAnchors[pitchClass]) chordAnchors[pitchClass] = best;
   }
   const rate = Math.pow(2, (targetMidi - best.midi) / 12);
   const src = audioCtx.createBufferSource();
   src.buffer = best.buffer;
   src.playbackRate.value = rate;
   const g = audioCtx.createGain();
-  const sustain = Math.max(dur, 0.1);
-  let tail = 0.4;
-  if (pedal) tail = 1.1;        // 踏板:讓共鳴拖長,音符彼此重疊
-  else if (legato) tail = 0.6;  // 圓滑線:小幅重疊,模擬連奏
-  g.gain.setValueAtTime(0.6, when);
-  g.gain.setValueAtTime(0.6, when + sustain * 0.6);
+  let sustain, tail, holdRatio = 0.6, peakGain = 0.6;
+  if (harmonyEndSec != null) {
+    // 撐滿整個和聲/圓滑線範圍的實際長度,而不是只加一段固定的尾音
+    sustain = Math.max(harmonyEndSec - when, dur, 0.1);
+    if (pedal) {
+      // 踏板踩著時飽滿延續,但放開的瞬間阻尼器動作其實很快(約0.15秒),
+      // 不能拖太長,否則前一個和聲會糊進下一個和聲裡
+      tail = 0.18;
+      holdRatio = 0.9;
+      peakGain = 0.66;
+    } else {
+      tail = 0.3;
+    }
+  } else {
+    sustain = Math.max(dur, 0.1);
+    tail = 0.4;
+    if (pedal) { tail = 0.18; holdRatio = 0.9; peakGain = 0.66; }
+    else if (legato) tail = 0.6;
+  }
+  // 取樣本身錄音長度可能比需要的延音短,加上尾段循環撐住聲音
+  const neededSec = (sustain + tail) * rate; // 換算成取樣原始時間軸(playbackRate影響消耗速度)
+  const bufDur = best.buffer.duration;
+  if (bufDur < neededSec && bufDur > 0.3) {
+    src.loop = true;
+    const loopLen = Math.min(0.6, bufDur * 0.3);
+    src.loopStart = Math.max(0, bufDur - loopLen);
+    src.loopEnd = bufDur;
+  }
+  g.gain.setValueAtTime(peakGain, when);
+  g.gain.setValueAtTime(peakGain, when + sustain * holdRatio);
   g.gain.exponentialRampToValueAtTime(0.0001, when + sustain + tail);
   src.connect(g); g.connect(masterGain);
   src.start(when);
@@ -933,23 +969,23 @@ function playSampledInstrument(instKey, freq, when, dur, legato, pedal){
   return true;
 }
 
-function scheduleNote(freq, when, dur, legato, pedal){
-  if (!$("legatoPedal").checked) { legato = false; pedal = false; }
+function scheduleNote(freq, when, dur, legato, pedal, chordAnchors, harmonyEndSec){
+  if (!$("legatoPedal").checked) { legato = false; pedal = false; harmonyEndSec = null; }
   const inst = currentInstrument();
-  if (REAL_INSTRUMENTS[inst] && playSampledInstrument(inst, freq, when, dur, legato, pedal)) return;
+  if (REAL_INSTRUMENTS[inst] && playSampledInstrument(inst, freq, when, dur, legato, pedal, chordAnchors, harmonyEndSec)) return;
   // 真實取樣尚未載入完成或缺失時,退回合成音色,絕不會沒有聲音
   switch (inst) {
     case "strings":  scheduleStrings(freq, when, dur); break;
     case "flute":    scheduleFlute(freq, when, dur); break;
     case "guitar":   scheduleGuitar(freq, when, dur); break;
     case "clarinet": scheduleClarinet(freq, when, dur); break;
-    default:         schedulePiano(freq, when, dur, legato, pedal);
+    default:         schedulePiano(freq, when, dur, legato, pedal, harmonyEndSec);
   }
 }
 
 $("instrument").addEventListener("change", () => { ensureAudio(); loadInstrumentSamples(currentInstrument()); });
 
-function schedulePiano(freq, when, dur, legato, pedal){
+function schedulePiano(freq, when, dur, legato, pedal, harmonyEndSec){
   const osc = audioCtx.createOscillator();
   const osc2 = audioCtx.createOscillator();
   const g = audioCtx.createGain();
@@ -959,12 +995,19 @@ function schedulePiano(freq, when, dur, legato, pedal){
   lp.type = "lowpass";   lp.frequency.value = Math.min(freq * 6, 8000);
   const g2 = audioCtx.createGain(); g2.gain.value = 0.18;
   const peak = 0.32;
-  let sustain = Math.max(dur * 0.9, 0.08);
-  let releaseTail = 0.25;
-  if (pedal) { sustain = Math.max(dur * 1.3, 0.08); releaseTail = 0.9; }
-  else if (legato) { sustain = Math.max(dur * 1.15, 0.08); releaseTail = 0.35; }
+  let sustain, releaseTail;
+  if (harmonyEndSec != null) {
+    sustain = Math.max(harmonyEndSec - when, dur * 0.9, 0.08);
+    releaseTail = pedal ? 0.18 : 0.3; // 踏板放開瞬間阻尼器動作快,不能拖太長否則混濁
+  } else {
+    sustain = Math.max(dur * 0.9, 0.08);
+    releaseTail = 0.25;
+    if (pedal) { sustain = Math.max(dur * 1.3, 0.08); releaseTail = 0.18; }
+    else if (legato) { sustain = Math.max(dur * 1.15, 0.08); releaseTail = 0.35; }
+  }
   g.gain.setValueAtTime(0, when);
   g.gain.linearRampToValueAtTime(peak, when + 0.012);
+  g.gain.setValueAtTime(peak, when + Math.max(sustain, 0.02)); // 保持住音量,彈滿時值,不要提早衰減
   g.gain.exponentialRampToValueAtTime(0.0001, when + sustain + releaseTail);
   osc.connect(lp); osc2.connect(g2); g2.connect(lp);
   lp.connect(g); g.connect(masterGain);
@@ -1004,6 +1047,7 @@ function scheduleFlute(freq, when, dur){
   const attack = Math.min(0.06, sustain * 0.4);
   g.gain.setValueAtTime(0, when);
   g.gain.linearRampToValueAtTime(0.34, when + attack);
+  g.gain.setValueAtTime(0.34, when + Math.max(sustain, attack + 0.01));
   g.gain.exponentialRampToValueAtTime(0.0001, when + sustain + 0.2);
   const o = audioCtx.createOscillator();
   o.type = "sine"; o.frequency.value = freq;
@@ -1326,6 +1370,91 @@ async function rasterizeScore(targetH){
   return { tiles, scale };
 }
 
+$("stripHeightPct").addEventListener("input", () => {
+  $("stripHeightVal").textContent = $("stripHeightPct").value;
+});
+
+$("combineExportBtn").addEventListener("click", () => exportCombinedWithVideo());
+
+async function exportCombinedWithVideo(){
+  if (!events.length || exporting) return;
+  const video = $("combineVideo");
+  if (!video.src) { setStatus("請先在上面上傳彈奏影片"); return; }
+  exporting = true; exportCancelled = false;
+  stopPlayback();
+  ensureAudio();
+  $("combineStatus").textContent = "準備中…";
+  let mediaStream = null;
+  try {
+    await new Promise((res, rej) => {
+      if (video.readyState >= 1) return res();
+      video.onloadedmetadata = res;
+      video.onerror = () => rej(new Error("影片載入失敗"));
+    });
+    const W = video.videoWidth, H = video.videoHeight;
+    if (!W || !H) throw new Error("讀不到影片尺寸");
+    const stripH = Math.round(H * (parseFloat($("stripHeightPct").value) / 100));
+    const stripY = $("stripPosition").value === "top" ? 0 : (H - stripH);
+    const plX = W * PLAYLINE_RATIO;
+    const { tiles, scale } = await rasterizeScore(stripH);
+
+    const cv = document.createElement("canvas");
+    cv.width = W; cv.height = H;
+    const ctx = cv.getContext("2d");
+    const vStream = cv.captureStream(30);
+
+    // 直接從影片本身擷取真實音軌,不用我們的合成音色
+    mediaStream = video.captureStream ? video.captureStream() : video.mozCaptureStream();
+    const audioTracks = mediaStream.getAudioTracks();
+    const outStream = new MediaStream([...vStream.getVideoTracks(), ...audioTracks]);
+
+    const mime = pickMime();
+    const rec = new MediaRecorder(outStream, mime ? { mimeType: mime, videoBitsPerSecond: 8_000_000 } : undefined);
+    const chunks = [];
+    rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+    const stopped = new Promise(res => rec.onstop = res);
+
+    video.currentTime = 0;
+    await video.play();
+    rec.start(1000);
+
+    await new Promise(resolve => {
+      const draw = () => {
+        if (exportCancelled || video.ended || video.paused) { resolve(); return; }
+        const sec = video.currentTime;
+        ctx.drawImage(video, 0, 0, W, H);
+        // 樂譜橫條底色(讓譜面清楚可讀)
+        ctx.fillStyle = "#0C0A07";
+        ctx.fillRect(0, stripY, W, stripH);
+        const off = plX - xAtSec(sec) * scale;
+        for (const tl of tiles) {
+          const dx = off + tl.x;
+          if (dx < W && dx + tl.canvas.width > 0) ctx.drawImage(tl.canvas, dx, stripY);
+        }
+        ctx.strokeStyle = "#B8860B"; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.moveTo(plX, stripY + stripH*0.05); ctx.lineTo(plX, stripY + stripH*0.95); ctx.stroke();
+        $("combineStatus").textContent = fmt(sec) + " / " + fmt(video.duration);
+        requestAnimationFrame(draw);
+      };
+      draw();
+    });
+
+    rec.stop();
+    video.pause();
+    await stopped;
+    const blob = new Blob(chunks, { type: mime || "video/webm" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "scrollscore-combined.webm"; a.click();
+    $("combineStatus").textContent = "完成,已下載";
+  } catch (err) {
+    console.error(err);
+    $("combineStatus").textContent = "合成失敗:" + (err.message || err);
+  } finally {
+    exporting = false;
+  }
+}
+
 async function exportVideo(cfg){
   if (!events.length || exporting) return;
   exporting = true; exportCancelled = false;
@@ -1363,10 +1492,14 @@ async function exportVideo(cfg){
     const calib = useCalib();
     for (const ev of events) {
       const t = calib ? calibToSec(ev.tWhole) : wholeToSec(ev.tWhole);
+      const chordAnchors = {};
+      const harmonyEndSec = ev.harmonyEndWhole != null
+        ? startCtxTime + (calib ? calibToSec(ev.harmonyEndWhole) : wholeToSec(ev.harmonyEndWhole))
+        : null;
       for (const n of ev.notes) {
         const durSec = calib ? Math.max(calibToSec(ev.tWhole + n.durWhole) - t, 0.05) : wholeToSec(n.durWhole);
         if (n.drum) scheduleDrum(n.key, startCtxTime + t);
-        else scheduleNote(n.freq, startCtxTime + t, durSec, ev.legato, ev.pedalOn);
+        else scheduleNote(n.freq, startCtxTime + t, durSec, ev.legato, ev.pedalOn, chordAnchors, harmonyEndSec);
       }
     }
     const total = totalSec();
