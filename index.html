@@ -2023,7 +2023,7 @@ async function exportVideo(cfg){
     const stopped = new Promise(res => rec.onstop = res);
     rec.start(1000);
 
-    const LEAD = 1.0, TAIL = 1.5;
+    const LEAD = 0.4, TAIL = 0.6;
     const t0 = audioCtx.currentTime + 0.1;
     startCtxTime = t0 + LEAD;
     scheduled = [];
