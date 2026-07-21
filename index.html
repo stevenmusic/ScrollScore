@@ -1255,9 +1255,8 @@ function getActiveNotesAt(sec, calib){
     if (t > sec) break;
     for (const n of ev.notes) {
       if (n.drum || !n.freq) continue;
-      const endSec = ev.harmonyEndWhole != null
-        ? (calib ? calibToSec(ev.harmonyEndWhole) : wholeToSec(ev.harmonyEndWhole))
-        : (calib ? calibToSec(ev.tWhole + n.durWhole) : wholeToSec(ev.tWhole + n.durWhole));
+      // 鍵盤只反映樂譜寫的拍子時值,不要被踏板/和聲延音影響(那是音響效果,不是手指還按著琴鍵)
+      const endSec = calib ? calibToSec(ev.tWhole + n.durWhole) : wholeToSec(ev.tWhole + n.durWhole);
       if (sec >= t && sec < endSec) {
         const midi = Math.round(freqToMidi(n.freq));
         map.set(midi, n.staff || 1);
