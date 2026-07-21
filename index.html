@@ -191,9 +191,11 @@ input[type=file]{display:none}
   <div class="tempo-box">樂器
     <select id="instrument" style="background:var(--bg);color:var(--ivory);border:1px solid var(--gold);border-radius:8px;padding:5px 8px;font-family:inherit;font-size:13px;text-align:center;text-align-last:center">
       <option value="piano">鋼琴</option>
-      <option value="strings">弦樂</option>
+      <option value="strings">小提琴</option>
+      <option value="cello">大提琴</option>
       <option value="flute">長笛</option>
-      <option value="guitar">木吉他</option>
+      <option value="guitar">木吉他(民謠)</option>
+      <option value="guitarnylon">古典吉他(尼龍弦)</option>
       <option value="clarinet">單簧管</option>
     </select>
   </div>
@@ -1249,8 +1251,10 @@ const PIANO_BASE = "https://tonejs.github.io/audio/salamander/"; // Tone.js 官�
 const REAL_INSTRUMENTS = {
   piano:    { folder: "piano",           minOct: 0, maxOct: 8, base: PIANO_BASE },
   strings:  { folder: "violin",          minOct: 2, maxOct: 7 },
+  cello:    { folder: "cello",           minOct: 1, maxOct: 5 },
   flute:    { folder: "flute",           minOct: 3, maxOct: 7 },
   guitar:   { folder: "guitar-acoustic", minOct: 2, maxOct: 6 },
+  guitarnylon: { folder: "guitar-nylon", minOct: 2, maxOct: 6 },
   clarinet: { folder: "clarinet",        minOct: 2, maxOct: 6 }
 };
 const instrumentBuffers = {};   // instKey -> [{midi, buffer}]
@@ -1552,8 +1556,10 @@ function scheduleNote(freq, when, dur, legato, pedal, chordAnchors, harmonyEndSe
   // 真實取樣尚未載入完成或缺失時,退回合成音色,絕不會沒有聲音
   switch (inst) {
     case "strings":  scheduleStrings(freq, when, dur); break;
+    case "cello":    scheduleStrings(freq, when, dur); break;
     case "flute":    scheduleFlute(freq, when, dur); break;
     case "guitar":   scheduleGuitar(freq, when, dur); break;
+    case "guitarnylon": scheduleGuitar(freq, when, dur); break;
     case "clarinet": scheduleClarinet(freq, when, dur); break;
     default:         schedulePiano(freq, when, dur, legato, pedal, harmonyEndSec, artic);
   }
