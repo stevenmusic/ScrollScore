@@ -147,8 +147,10 @@ input[type=file]{display:none}
 #formatOverlay.show{display:flex}
 #formatOverlay .box{
   text-align:center;padding:26px 28px;border:1px solid var(--gold);
-  border-radius:14px;background:var(--panel);width:300px;
+  border-radius:14px;background:var(--panel);width:min(300px, 86vw);
+  max-height:86vh;overflow-y:auto;box-sizing:border-box;
 }
+.fmt-step{display:flex;flex-direction:column;align-items:stretch}
 #formatOverlay .title{
   font-family:"Noto Serif TC",serif;font-size:19px;color:var(--gold);
   letter-spacing:.1em;margin-bottom:18px;
@@ -181,10 +183,6 @@ input[type=file]{display:none}
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15a3 3 0 100-6 3 3 0 000 6z"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
     設定
   </button>
-  <button class="btn" id="calibToggle" style="display:flex;align-items:center;gap:6px">
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="14" rx="2"/><path d="M7 6l2.5 4M12 6l2.5 4M17 6l2.5 4M2 10h20"/></svg>
-    校準
-  </button>
   <input type="file" id="fileInput" accept=".xml,.musicxml,.mxl">
 </header>
 
@@ -207,26 +205,19 @@ input[type=file]{display:none}
   <button class="btn" id="exportBtn" disabled>⬇ 匯出影片</button>
 </div>
 
-<div id="calibPanel" style="padding:8px 14px;border-bottom:1px solid var(--line);background:var(--panel);display:none;gap:10px;align-items:center;flex-wrap:wrap;font-size:13px;color:var(--muted)">
-  <b style="color:var(--gold)">影片校準</b>
-  <button class="btn" id="calibFileBtn">上傳彈奏錄音/影片</button>
-
+<div style="display:none">
+  <button id="calibFileBtn"></button>
   <input type="file" id="calibFile" accept="audio/*,video/*">
-  <audio id="calibAudio" controls style="height:32px;max-width:200px;display:none"></audio>
-  <button class="btn" id="calibStartBtn" disabled>手動校準</button>
-  <button class="btn primary" id="calibTapBtn" disabled>Tap</button>
-  <button class="btn" id="calibUndoBtn" disabled>撤銷上一下</button>
-  <button class="btn" id="calibFinishBtn" disabled>完成校準</button>
-  <span>從第 <input type="number" id="calibRetapIndex" min="0" value="0" style="width:56px;background:var(--bg);color:var(--ivory);border:1px solid var(--line);border-radius:6px;padding:2px 4px"> 個節點重點</span>
-  <button class="btn" id="calibRetapBtn" disabled>繼續點擊</button>
-  <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="useCalibration" disabled style="width:16px;height:16px">使用校準時間播放</label>
-  <span id="calibStatus">尚未校準</span>
-</div>
-
-<div id="combinePanel" style="padding:8px 14px;border-bottom:1px solid var(--line);background:var(--panel);display:none;gap:10px;align-items:center;flex-wrap:wrap;font-size:13px;color:var(--muted)">
-  <b style="color:var(--gold)">樂譜+影片合成</b>
-  <span>沿用上面「上傳彈奏錄音/影片」的檔案(需要是影片檔,不是純音訊),匯出時在「⬇ 匯出影片」選「樂譜+影片」</span>
-  <video id="combineVideo" style="display:none"></video>
+  <audio id="calibAudio"></audio>
+  <button id="calibStartBtn"></button>
+  <button id="calibTapBtn"></button>
+  <button id="calibUndoBtn"></button>
+  <button id="calibFinishBtn"></button>
+  <input type="number" id="calibRetapIndex" value="0">
+  <button id="calibRetapBtn"></button>
+  <input type="checkbox" id="useCalibration">
+  <span id="calibStatus"></span>
+  <video id="combineVideo"></video>
   <span id="combineStatus"></span>
 </div>
 
@@ -245,22 +236,22 @@ input[type=file]{display:none}
   <div id="formatOverlay">
     <div class="box">
       <div class="title" id="fmtTitle">選擇匯出類型</div>
-      <div id="fmtStepType">
+      <div id="fmtStepType" class="fmt-step">
         <button class="fmt" id="fmtTypeScore">
           <span><b>純樂譜</b><br><small>滿版1920×1080 或 1080×1920</small></span>
         </button>
-        <button class="fmt" id="fmtTypeCombine">
-          <span><b>樂譜+影片</b><br><small>疊在你上傳的彈奏影片上,高度依樂譜自然高度</small></span>
+        <button class="fmt" id="fmtTypeWithKeyboard">
+          <span><b>樂譜+鍵盤</b><br><small>畫面下方加上鋼琴鍵盤高亮顯示</small></span>
         </button>
         <button class="btn" id="fmtCancel">取消</button>
       </div>
-      <div id="fmtStepAlign" style="display:none">
+      <div id="fmtStepAlign" class="fmt-step" style="display:none">
         <button class="fmt" id="alignTop"><span><b>樂譜靠上</b></span></button>
         <button class="fmt" id="alignCenter"><span><b>樂譜靠中</b></span></button>
         <button class="fmt" id="alignBottom"><span><b>樂譜靠下</b></span></button>
         <button class="btn" id="fmtBackFromAlign">返回</button>
       </div>
-      <div id="fmtStepFormat" style="display:none">
+      <div id="fmtStepFormat" class="fmt-step" style="display:none">
         <button class="fmt" id="fmtLandscape">
           <span class="ratio ratio-l"></span>
           <span><b>橫式 1920 × 1080</b><br><small>YouTube 影片</small></span>
@@ -358,13 +349,6 @@ $("loadBtn").addEventListener("click", () => $("fileInput").click());
 $("settingsToggle").addEventListener("click", () => {
   const p = $("settingsPanel");
   p.style.display = (p.style.display === "none") ? "flex" : "none";
-});
-$("calibToggle").addEventListener("click", () => {
-  const p = $("calibPanel");
-  const c = $("combinePanel");
-  const show = p.style.display === "none";
-  p.style.display = show ? "flex" : "none";
-  c.style.display = show ? "flex" : "none";
 });
 $("fileInput").addEventListener("change", async e => {
   const file = e.target.files[0];
@@ -1928,6 +1912,7 @@ function scheduleFrame(fn, fps){
   setTimeout(fn, 1000 / fps);
 }
 let chosenAlign = "center";
+let chosenIncludeKeyboard = false;
 
 function showFmtStep(step){
   $("fmtStepType").style.display = step === "type" ? "flex" : "none";
@@ -1941,15 +1926,8 @@ $("exportBtn").addEventListener("click", () => {
 });
 $("fmtCancel").addEventListener("click", () => $("formatOverlay").classList.remove("show"));
 
-$("fmtTypeScore").addEventListener("click", () => showFmtStep("align"));
-$("fmtTypeCombine").addEventListener("click", () => {
-  $("formatOverlay").classList.remove("show");
-  if (!$("combineVideo").src) {
-    setStatus("請先在「校準」面板上傳彈奏影片,再匯出「樂譜+影片」");
-    return;
-  }
-  exportCombinedWithVideo();
-});
+$("fmtTypeScore").addEventListener("click", () => { chosenIncludeKeyboard = false; showFmtStep("align"); });
+$("fmtTypeWithKeyboard").addEventListener("click", () => { chosenIncludeKeyboard = true; showFmtStep("align"); });
 
 $("fmtBackFromAlign").addEventListener("click", () => showFmtStep("type"));
 $("alignTop").addEventListener("click", () => { chosenAlign = "top"; showFmtStep("format"); });
@@ -1959,11 +1937,11 @@ $("alignBottom").addEventListener("click", () => { chosenAlign = "bottom"; showF
 $("fmtBackFromFormat").addEventListener("click", () => showFmtStep("align"));
 $("fmtLandscape").addEventListener("click", () => {
   $("formatOverlay").classList.remove("show");
-  exportVideo({ W: 1920, H: 1080, scoreH: 560, align: chosenAlign, bitrate: 10000000, fps: exportFps });
+  exportVideo({ W: 1920, H: 1080, scoreH: 560, align: chosenAlign, bitrate: 10000000, fps: exportFps, includeKeyboard: chosenIncludeKeyboard });
 });
 $("fmtPortrait").addEventListener("click", () => {
   $("formatOverlay").classList.remove("show");
-  exportVideo({ W: 1080, H: 1920, scoreH: 480, align: chosenAlign, bitrate: 10000000, fps: exportFps });
+  exportVideo({ W: 1080, H: 1920, scoreH: 480, align: chosenAlign, bitrate: 10000000, fps: exportFps, includeKeyboard: chosenIncludeKeyboard });
 });
 $("exportCancel").addEventListener("click", () => { exportCancelled = true; });
 
@@ -2090,11 +2068,11 @@ async function exportVideo(cfg){
   let aDest = null;
   try {
     const W = cfg.W, H = cfg.H, SCORE_H = cfg.scoreH;
-    const kbH = H * 0.12; // 鍵盤保留高度
+    const kbH = cfg.includeKeyboard ? H * 0.12 : 0; // 鍵盤保留高度(沒選鍵盤就不留空間)
     const margin = H * 0.05;
     const topY = cfg.align === "top" ? margin
       : cfg.align === "bottom" ? (H - SCORE_H - margin - kbH)
-      : (H - SCORE_H - kbH) / 2; // center(預設),稍微往上挪讓出鍵盤空間
+      : (H - SCORE_H - kbH) / 2; // center(預設),有鍵盤時稍微往上挪讓出空間
     const plX = W * PLAYLINE_RATIO;
     const { tiles, scale } = await rasterizeScore(SCORE_H);
 
@@ -2153,8 +2131,10 @@ async function exportVideo(cfg){
         ctx.beginPath();
         ctx.moveTo(plX-9, H*0.08-2); ctx.lineTo(plX+9, H*0.08-2); ctx.lineTo(plX, H*0.08+13);
         ctx.closePath(); ctx.fill();
-        const active = getActiveNotesAt(sec + KB_LOOKAHEAD_SEC, calib);
-        drawKeyboard(ctx, 0, H - kbH, W, kbH, active);
+        if (cfg.includeKeyboard) {
+          const active = getActiveNotesAt(sec + KB_LOOKAHEAD_SEC, calib);
+          drawKeyboard(ctx, 0, H - kbH, W, kbH, active);
+        }
         $("exportTime").textContent = fmt(sec) + " / " + fmt(total);
         $("exportFill").style.width = (sec/total*100).toFixed(1) + "%";
         if (el >= LEAD + total + TAIL) { resolve(); return; }
