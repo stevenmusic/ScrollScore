@@ -2013,6 +2013,7 @@ async function exportCombinedWithVideo(){
   const video = $("combineVideo");
   if (!video.src) { setStatus("請先在上面上傳彈奏影片"); return; }
   exporting = true; exportCancelled = false;
+  await acquireWakeLock();
   stopPlayback();
   ensureAudio();
   $("combineStatus").textContent = "準備中…";
@@ -2086,13 +2087,29 @@ async function exportCombinedWithVideo(){
     console.error(err);
     $("combineStatus").textContent = "合成失敗:" + (err.message || err);
   } finally {
+    releaseWakeLock();
     exporting = false;
   }
 }
 
+/* 匯出過程主動要求螢幕保持喚醒,不要只靠文字提醒使用者自己注意 */
+let wakeLockRef = null;
+async function acquireWakeLock(){
+  try {
+    if ("wakeLock" in navigator) wakeLockRef = await navigator.wakeLock.request("screen");
+  } catch (e) { console.error("wakeLock 要求失敗:", e); }
+}
+async function releaseWakeLock(){
+  try { if (wakeLockRef) { await wakeLockRef.release(); wakeLockRef = null; } } catch (e) {}
+}
+document.addEventListener("visibilitychange", async () => {
+  if (exporting && document.visibilityState === "visible" && !wakeLockRef) await acquireWakeLock();
+});
+
 async function exportVideo(cfg){
   if (!events.length || exporting) return;
   exporting = true; exportCancelled = false;
+  await acquireWakeLock();
   stopPlayback();
   ensureAudio();
   if (kitLoading) await kitLoading;
@@ -2195,6 +2212,7 @@ async function exportVideo(cfg){
   }
   if (aDest) { try { masterGain.disconnect(aDest); } catch(e){} }
   stopAudioOnly();
+  releaseWakeLock();
   $("exportOverlay").classList.remove("show");
   exporting = false;
 }
