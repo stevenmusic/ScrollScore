@@ -1240,12 +1240,10 @@ rebuildKeyboardRange(); // 初始建立(此時還沒有樂譜,會用預設88鍵)
 
 function drawKeyboard(ctx, x, y, w, h, activeMap){
   const whiteW = w / KB_WHITE_KEYS.length;
+  const blackH = h * 0.6, blackW = whiteW * 0.62;
 
-  // 底板陰影,讓整個鍵盤看起來有深度
-  const baseGrad = ctx.createLinearGradient(0, y, 0, y + h);
-  baseGrad.addColorStop(0, "#050403");
-  baseGrad.addColorStop(1, "#0C0A07");
-  ctx.fillStyle = baseGrad;
+  // 底板
+  ctx.fillStyle = "#0C0A07";
   ctx.fillRect(x, y, w, h);
 
   const rr = (cx, cy, cw, ch, r) => {
@@ -1253,39 +1251,43 @@ function drawKeyboard(ctx, x, y, w, h, activeMap){
     else { ctx.beginPath(); ctx.rect(cx, cy, cw, ch); }
   };
 
-  // 白鍵:漸層 + 立體邊緣 + 按下時的光暈(觸鍵瞬間更亮,之後轉為持續的普通高亮)
+  // 閒置狀態的漸層只需要建立一次(不管有幾個琴鍵都共用同一個,不用每個鍵各建一份)
+  const whiteIdleGrad = ctx.createLinearGradient(0, y, 0, y + h);
+  whiteIdleGrad.addColorStop(0, "#FFFDF6");
+  whiteIdleGrad.addColorStop(0.85, "#DDD6C4");
+  whiteIdleGrad.addColorStop(1, "#DDD6C4");
+  const blackIdleGrad = ctx.createLinearGradient(0, y, 0, y + blackH);
+  blackIdleGrad.addColorStop(0, "#3a3a3a");
+  blackIdleGrad.addColorStop(1, "#0a0a0a");
+
+  // 白鍵
   for (let i = 0; i < KB_WHITE_KEYS.length; i++) {
     const m = KB_WHITE_KEYS[i];
     const kx = x + i * whiteW;
     const kw = whiteW - 1;
     const info = activeMap.get(m);
-    const staff = info && info.staff;
-    const attack = info && info.attack;
-    let baseColor = staff === 2 ? ["#5FE0CE", "#22887A"] : staff === 1 ? ["#FFDA7A", "#C4901A"] : ["#FFFDF6", "#DDD6C4"];
-    if (attack) baseColor = staff === 2 ? ["#B6FFF4", "#3FBFAE"] : ["#FFF3CC", "#F2B94B"];
-    const g = ctx.createLinearGradient(kx, y, kx, y + h);
-    g.addColorStop(0, baseColor[0]);
-    g.addColorStop(0.85, baseColor[1]);
-    g.addColorStop(1, baseColor[1]);
-    if (staff) {
-      ctx.save();
-      ctx.shadowColor = staff === 2 ? "rgba(63,191,174,0.85)" : "rgba(242,185,75,0.85)";
-      ctx.shadowBlur = attack ? 24 : 14;
-    }
     rr(kx, y, kw, h, [3, 3, 6, 6]);
-    ctx.fillStyle = g;
-    ctx.fill();
-    if (staff) ctx.restore();
-    // 鍵縫陰影
-    ctx.strokeStyle = "rgba(0,0,0,0.35)"; ctx.lineWidth = 1;
-    rr(kx, y, kw, h, [3, 3, 6, 6]); ctx.stroke();
-    // 頂端高光細線,增加立體感
+    if (info) {
+      const litColor = info.staff === 2
+        ? (info.attack ? "#B6FFF4" : "#3FBFAE")
+        : (info.attack ? "#FFF3CC" : "#F2B94B");
+      ctx.fillStyle = litColor;
+      ctx.fill();
+      ctx.strokeStyle = info.staff === 2 ? "#0F5F56" : "#8A6410";
+      ctx.lineWidth = info.attack ? 3 : 2;
+      rr(kx, y, kw, h, [3, 3, 6, 6]); ctx.stroke();
+    } else {
+      ctx.fillStyle = whiteIdleGrad;
+      ctx.fill();
+      ctx.strokeStyle = "rgba(0,0,0,0.35)"; ctx.lineWidth = 1;
+      rr(kx, y, kw, h, [3, 3, 6, 6]); ctx.stroke();
+    }
+    // 頂端高光細線,增加立體感(單一線條,便宜)
     ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(kx + 2, y + 1); ctx.lineTo(kx + kw - 2, y + 1); ctx.stroke();
   }
 
-  // 黑鍵:漸層 + 陰影,疊在白鍵上方
-  const blackH = h * 0.6, blackW = whiteW * 0.62;
+  // 黑鍵
   for (let m = KB_LOW; m <= KB_HIGH; m++) {
     if (!isBlackKey(m)) continue;
     let leftWhite = m - 1;
@@ -1294,29 +1296,23 @@ function drawKeyboard(ctx, x, y, w, h, activeMap){
     if (li === undefined) continue;
     const kx = x + (li + 1) * whiteW - blackW / 2;
     const info = activeMap.get(m);
-    const staff = info && info.staff;
-    const attack = info && info.attack;
-    let baseColor = staff === 2 ? ["#3FBFAE", "#0F5F56"] : staff === 1 ? ["#F2B94B", "#8A6410"] : ["#3a3a3a", "#0a0a0a"];
-    if (attack) baseColor = staff === 2 ? ["#8FFFF0", "#22887A"] : staff === 1 ? ["#FFE39A", "#C4901A"] : baseColor;
     // 黑鍵投影到白鍵上
     ctx.fillStyle = "rgba(0,0,0,0.45)";
     ctx.fillRect(kx - 1, y + blackH, blackW + 2, 6);
-
-    const g = ctx.createLinearGradient(kx, y, kx, y + blackH);
-    g.addColorStop(0, baseColor[0]);
-    g.addColorStop(1, baseColor[1]);
-    if (staff) {
-      ctx.save();
-      ctx.shadowColor = staff === 2 ? "rgba(63,191,174,0.9)" : "rgba(242,185,75,0.9)";
-      ctx.shadowBlur = 12;
-    }
     rr(kx, y, blackW, blackH, [2, 2, 4, 4]);
-    ctx.fillStyle = g;
-    ctx.fill();
-    if (staff) ctx.restore();
-    // 黑鍵頂端光澤
-    ctx.fillStyle = "rgba(255,255,255,0.18)";
-    ctx.fillRect(kx + blackW * 0.15, y + 2, blackW * 0.3, blackH * 0.35);
+    if (info) {
+      const litColor = info.staff === 2
+        ? (info.attack ? "#8FFFF0" : "#22887A")
+        : (info.attack ? "#FFE39A" : "#C4901A");
+      ctx.fillStyle = litColor;
+      ctx.fill();
+    } else {
+      ctx.fillStyle = blackIdleGrad;
+      ctx.fill();
+      // 黑鍵頂端光澤(只在閒置狀態畫,亮起時不需要)
+      ctx.fillStyle = "rgba(255,255,255,0.18)";
+      ctx.fillRect(kx + blackW * 0.15, y + 2, blackW * 0.3, blackH * 0.35);
+    }
   }
 }
 
