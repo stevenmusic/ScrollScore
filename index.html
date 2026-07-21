@@ -1323,22 +1323,42 @@ function drawKeyboard(ctx, x, y, w, h, activeMap){
 /* 找出某個時間點正在發聲的音符(midi -> staff),供鍵盤高亮使用 */
 const KB_MIN_VISUAL_SEC = 0.09; // 最短可視時間,避免極快的音符剛好卡在兩次畫面更新中間而完全沒被畫出來
 const KB_ATTACK_SEC = 0.11; // 觸鍵瞬間的閃亮時間,讓連續同音看得出來是分開彈的
+let kbScanCursor = 0, kbScanLastSec = -1;
 function getActiveNotesAt(sec, calib){
+  if (sec < kbScanLastSec - 0.5) kbScanCursor = 0; // 倒退播放(重新開始/跳轉),重置游標
+  kbScanLastSec = sec;
   const map = new Map();
-  for (const ev of events) {
+  const noteEndSec = (ev, n, t0) => {
+    const rollT = (n.rollIndex || 0) * ARP_ROLL_GAP;
+    const writtenEnd = calib ? calibToSec(ev.tWhole + n.durWhole) : wholeToSec(ev.tWhole + n.durWhole);
+    return Math.max(writtenEnd + rollT, t0 + rollT + KB_MIN_VISUAL_SEC);
+  };
+  // 游標只往前推進,跳過已經完全結束(連最短可視時間都過了)的事件,
+  // 避免每一幀都要從頭掃過整首樂曲,曲子越長、播到越後面才不會越算越久
+  while (kbScanCursor < events.length) {
+    const ev = events[kbScanCursor];
+    const t0 = calib ? calibToSec(ev.tWhole) : wholeToSec(ev.tWhole);
+    if (t0 >= sec) break;
+    let allExpired = true;
+    for (const n of ev.notes) {
+      if (n.drum || !n.freq) continue;
+      if (noteEndSec(ev, n, t0) > sec) { allExpired = false; break; }
+    }
+    if (!allExpired) break;
+    kbScanCursor++;
+  }
+  for (let i = kbScanCursor; i < events.length; i++) {
+    const ev = events[i];
     const t0 = calib ? calibToSec(ev.tWhole) : wholeToSec(ev.tWhole);
     if (t0 > sec) break;
     for (const n of ev.notes) {
       if (n.drum || !n.freq) continue;
       const rollT = (n.rollIndex || 0) * ARP_ROLL_GAP;
       const t = t0 + rollT;
-      // 鍵盤只反映樂譜寫的拍子時值,不要被踏板/和聲延音影響(那是音響效果,不是手指還按著琴鍵)
-      const writtenEnd = calib ? calibToSec(ev.tWhole + n.durWhole) : wholeToSec(ev.tWhole + n.durWhole);
-      const endSec = Math.max(writtenEnd + rollT, t + KB_MIN_VISUAL_SEC);
+      const endSec = noteEndSec(ev, n, t0);
       if (sec >= t && sec < endSec) {
         const midi = Math.round(freqToMidi(n.freq));
         const isAttack = (sec - t) < KB_ATTACK_SEC;
-        // 同一個音同時被多個音符命中時(理論上少見),只要有任何一個處於觸鍵瞬間就優先顯示閃光
         const existing = map.get(midi);
         if (!existing || (isAttack && !existing.attack)) {
           map.set(midi, { staff: n.staff || 1, attack: isAttack });
