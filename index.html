@@ -2048,7 +2048,7 @@ async function exportCombinedWithVideo(){
 
     video.currentTime = 0;
     await video.play();
-    rec.start(1000);
+    rec.start(); // 不分段錄製,避免Safari在分段檔案上把總長度資訊寫壞
 
     // 影片畫面裁切:從影片垂直中央裁出跟樂譜同高的一段,維持原始比例不變形
     const srcY = Math.max(0, (H - scoreH) / 2);
@@ -2123,7 +2123,7 @@ async function exportVideo(cfg){
     const chunks = [];
     rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
     const stopped = new Promise(res => rec.onstop = res);
-    rec.start(1000);
+    rec.start(); // 不分段錄製,避免Safari在分段檔案上把總長度資訊寫壞
 
     const LEAD = 0.4, TAIL = 0.6;
     const t0 = audioCtx.currentTime + 0.1;
