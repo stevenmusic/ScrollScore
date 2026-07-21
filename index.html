@@ -816,11 +816,10 @@ function buildTimeline(){
     if (arpDir && notes.length > 1) {
       const pitched = notes.filter(n => !n.drum && n.freq);
       pitched.sort((a, b) => arpDir === "down" ? b.freq - a.freq : a.freq - b.freq);
-      // 以拍點為中心對稱分佈:偶數個音一半在拍點前、一半在拍點後;
-      // 奇數個音則中間那個剛好落在拍點上。這樣不會整組音都擠在拍點同一側,
-      // 才不會蓋掉前一個拍點或這一拍本身的旋律音
+      // 最後一個音(依方向決定是最高或最低音)準時落在拍點上,前面幾個音壓縮在拍點前一個很短的區間內,
+      // 第一個音只會非常靠近拍點(不會展開太開),這樣才不會蓋到前一個拍點的旋律音
       const n = pitched.length;
-      pitched.forEach((note, i) => { note.rollIndex = i - (n - 1) / 2; });
+      pitched.forEach((note, i) => { note.rollIndex = i - (n - 1); });
       arpCount = n;
       arpGapBeforeWhole = tWhole - (events.length ? events[events.length - 1].tWhole : tWhole);
     }
