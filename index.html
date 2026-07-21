@@ -202,6 +202,14 @@ input[type=file]{display:none}
 
   <div class="tempo-box"><label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="legatoPedal" checked style="width:16px;height:16px">圓滑/踏板效果</label></div>
   <div class="tempo-box">背景透明度 <input type="range" id="scoreBgOpacity" min="0" max="100" value="0"><b id="scoreBgOpacityVal">0</b></div>
+  <div class="tempo-box">匯出畫面更新率
+    <select id="exportFpsSelect" style="background:var(--bg);color:var(--ivory);border:1px solid var(--gold);border-radius:8px;padding:5px 8px;font-family:inherit;font-size:13px">
+      <option value="30">30 fps</option>
+      <option value="60" selected>60 fps</option>
+      <option value="120">120 fps</option>
+      <option value="144">144 fps</option>
+    </select>
+  </div>
   <div class="tempo-box"><label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="showTempoMarks" style="width:16px;height:16px">顯示速度記號</label></div>
   <button class="btn" id="recBtn" disabled>錄影模式</button>
   <button class="btn" id="exportBtn" disabled>⬇ 匯出影片</button>
@@ -283,6 +291,7 @@ input[type=file]{display:none}
     </div>
   </div>
 </div>
+<canvas id="keyboardCanvas" style="display:block;width:100%;height:90px;background:#0C0A07"></canvas>
 
 <footer>
   <span id="status">尚未載入樂譜</span>
@@ -300,6 +309,7 @@ let osmd = null;
 let events = [];        // {tWhole, x, notes:[{freq,durWhole}], legato, pedalOn}
 let slurRanges = [], pedalRanges = [], repeatChordRanges = [];
 let articMap = {};
+let noteStaffMap = {};
 let calibrating = false, calibStartPerf = 0, calibTapIndex = 0;
 let calibrationMap = []; // [{tWhole, realSec}] 已排序,由 tap-along 或自動偵測建立
 let endX = 0, totalWhole = 0;
@@ -344,6 +354,7 @@ $("fileInput").addEventListener("change", async e => {
     pedalRanges = parsed.pedalRanges;
     repeatChordRanges = parsed.repeatRanges;
     articMap = parsed.articMap;
+    noteStaffMap = parsed.noteStaffMap;
     await renderScore(xmlText);
     lastXmlText = xmlText;
     setStatus("已載入:" + file.name + "(" + events.length + " 個節點," + repeatChordRanges.length + " 組重複音型)");
@@ -497,7 +508,7 @@ function parseXmlTimeline(xmlText){
       const c = p.getElementsByTagName("note").length;
       if (c > bestCount) { bestCount = c; bestPart = p; }
     }
-    if (!bestPart) return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {} };
+    if (!bestPart) return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, noteStaffMap: {} };
 
     let divisions = 1, cursor = 0;
     const slurStarts = {};
@@ -506,6 +517,22 @@ function parseXmlTimeline(xmlText){
     const outPedals = [];
     const staffOnsets = {}; // staffNum -> [{tWhole, durWhole, pcs:Set}], 給重複音型偵測用
     const articMap = {}; // tWhole(定點字串) -> {accent,strongAccent,staccato,staccatissimo,tenuto,detachedLegato,spiccato,softAccent,fermata}
+    const noteStaffMap = {}; // "tWhole_midi" -> staffNum,給鍵盤左右手上色用(用原始未移調的音高當key)
+
+    function midiFromNote(noteEl){
+      const pitchEl = noteEl.getElementsByTagName("pitch")[0];
+      if (!pitchEl) return null;
+      const stepEl = pitchEl.getElementsByTagName("step")[0];
+      const octaveEl = pitchEl.getElementsByTagName("octave")[0];
+      if (!stepEl || !octaveEl) return null;
+      const stepMap = { C:0, D:2, E:4, F:5, G:7, A:9, B:11 };
+      let base = stepMap[stepEl.textContent.trim()];
+      if (base === undefined) return null;
+      const alterEl = pitchEl.getElementsByTagName("alter")[0];
+      if (alterEl) base += parseFloat(alterEl.textContent);
+      const oct = parseInt(octaveEl.textContent, 10);
+      return (oct + 1) * 12 + base;
+    }
 
     function pitchClassFromNote(noteEl){
       const pitchEl = noteEl.getElementsByTagName("pitch")[0];
@@ -579,9 +606,11 @@ function parseXmlTimeline(xmlText){
               articMap[key] = Object.assign(existing, flags);
             }
           }
-          // 記錄這個音符所屬的譜表(左右手),用來做重複音型偵測
+          // 記錄這個音符所屬的譜表(左右手),用來做重複音型偵測跟鍵盤上色
           const staffEl = child.getElementsByTagName("staff")[0];
           const staffNum = staffEl ? parseInt(staffEl.textContent, 10) : 1;
+          const noteMidi = midiFromNote(child);
+          if (noteMidi !== null) noteStaffMap[cursor.toFixed(6) + "_" + noteMidi] = staffNum;
           const pc = pitchClassFromNote(child);
           if (pc !== null) {
             if (!staffOnsets[staffNum]) staffOnsets[staffNum] = [];
@@ -602,10 +631,10 @@ function parseXmlTimeline(xmlText){
     for (const staffNum of Object.keys(staffOnsets)) {
       repeatRanges = repeatRanges.concat(detectRepeatingChordRanges(staffOnsets[staffNum]));
     }
-    return { slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges, articMap };
+    return { slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges, articMap, noteStaffMap };
   } catch (e) {
     console.error("讀取踏板/圓滑線資訊失敗:", e);
-    return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {} };
+    return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, noteStaffMap: {} };
   }
 }
 /* 偵測某一手(譜表)裡,音符是否精確循環重複(例如分解和弦C-E-G-C-E-G...),
@@ -749,7 +778,9 @@ function buildTimeline(){
         if (drumKey !== null) {
           notes.push({ drum: true, key: drumKey, durWhole });
         } else {
-          notes.push({ freq: n.Pitch.Frequency, durWhole });
+          const origMidi = Math.round(freqToMidi(n.Pitch.Frequency)) - transposeSemitones;
+          const staff = noteStaffMap[tWhole.toFixed(6) + "_" + origMidi] || 1;
+          notes.push({ freq: n.Pitch.Frequency, durWhole, staff });
         }
       }
     }
@@ -1161,6 +1192,74 @@ function loadInstrumentSamples(instKey){
 
 function freqToMidi(freq){ return 69 + 12 * Math.log2(freq / 440); }
 
+/* ── 鋼琴鍵盤視覺化:88鍵,依左右手譜表上不同顏色 ── */
+const KB_LOW = 21, KB_HIGH = 108; // A0 ~ C8
+function isBlackKey(midi){ return [1,3,6,8,10].includes(((midi%12)+12)%12); }
+const KB_WHITE_KEYS = (() => { const a=[]; for (let m=KB_LOW;m<=KB_HIGH;m++) if(!isBlackKey(m)) a.push(m); return a; })();
+const KB_WHITE_IDX = (() => { const o={}; KB_WHITE_KEYS.forEach((m,i)=>o[m]=i); return o; })();
+
+function drawKeyboard(ctx, x, y, w, h, activeMap){
+  const whiteW = w / KB_WHITE_KEYS.length;
+  for (let i = 0; i < KB_WHITE_KEYS.length; i++) {
+    const m = KB_WHITE_KEYS[i];
+    const kx = x + i * whiteW;
+    const staff = activeMap.get(m);
+    ctx.fillStyle = staff === 2 ? "#3FBFAE" : staff === 1 ? "#F2B94B" : "#FFFDF6";
+    ctx.fillRect(kx, y, whiteW - 1, h);
+    ctx.strokeStyle = "#2a2a2a"; ctx.lineWidth = 1;
+    ctx.strokeRect(kx, y, whiteW - 1, h);
+  }
+  const blackH = h * 0.6, blackW = whiteW * 0.62;
+  for (let m = KB_LOW; m <= KB_HIGH; m++) {
+    if (!isBlackKey(m)) continue;
+    let leftWhite = m - 1;
+    while (isBlackKey(leftWhite)) leftWhite--;
+    const li = KB_WHITE_IDX[leftWhite];
+    if (li === undefined) continue;
+    const kx = x + (li + 1) * whiteW - blackW / 2;
+    const staff = activeMap.get(m);
+    ctx.fillStyle = staff === 2 ? "#278F82" : staff === 1 ? "#C4901A" : "#161616";
+    ctx.fillRect(kx, y, blackW, blackH);
+  }
+}
+
+/* 找出某個時間點正在發聲的音符(midi -> staff),供鍵盤高亮使用 */
+function getActiveNotesAt(sec, calib){
+  const map = new Map();
+  for (const ev of events) {
+    const t = calib ? calibToSec(ev.tWhole) : wholeToSec(ev.tWhole);
+    if (t > sec) break;
+    for (const n of ev.notes) {
+      if (n.drum || !n.freq) continue;
+      const endSec = ev.harmonyEndWhole != null
+        ? (calib ? calibToSec(ev.harmonyEndWhole) : wholeToSec(ev.harmonyEndWhole))
+        : (calib ? calibToSec(ev.tWhole + n.durWhole) : wholeToSec(ev.tWhole + n.durWhole));
+      if (sec >= t && sec < endSec) {
+        const midi = Math.round(freqToMidi(n.freq));
+        map.set(midi, n.staff || 1);
+      }
+    }
+  }
+  return map;
+}
+
+function resizeKeyboardCanvas(){
+  const cv = $("keyboardCanvas");
+  if (!cv) return;
+  const rect = cv.getBoundingClientRect();
+  cv.width = Math.round(rect.width);
+  cv.height = Math.round(rect.height);
+}
+function drawKeyboardLive(sec){
+  const cv = $("keyboardCanvas");
+  if (!cv || !cv.width) return;
+  const ctx = cv.getContext("2d");
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  const active = events.length ? getActiveNotesAt(sec, useCalib()) : new Map();
+  drawKeyboard(ctx, 0, 0, cv.width, cv.height, active);
+}
+window.addEventListener("resize", () => { resizeKeyboardCanvas(); drawKeyboardLive(playing ? currentSec() : pausedAtSec); });
+
 /* 找最接近的取樣,用 playbackRate 補足音高差(標準取樣器做法) */
 function nearestSample(list, targetMidi){
   let best = list[0], bestDist = Infinity;
@@ -1539,6 +1638,7 @@ function stopPlayback(){
   resetScroll();
   updateTimeLabel(0);
   $("progressfill").style.width = "0%";
+  drawKeyboardLive(0);
 }
 
 /* ── 捲動同步 ─────────────────────────────── */
@@ -1566,6 +1666,7 @@ function tick(){
   $("scroller").style.transform = "translateX(" + (playlineX() - x) + "px)";
   $("progressfill").style.width = (sec / totalSec() * 100).toFixed(2) + "%";
   updateTimeLabel(sec);
+  drawKeyboardLive(sec);
   rafId = requestAnimationFrame(tick);
 }
 
@@ -1602,6 +1703,15 @@ $("exitrec").addEventListener("click", () => {
 
 /* ── 影片匯出 ─────────────────────────────── */
 let exporting = false, exportCancelled = false;
+let exportFps = 60;
+$("exportFpsSelect").addEventListener("change", () => { exportFps = parseInt($("exportFpsSelect").value, 10); });
+
+/* requestAnimationFrame 的實際頻率被螢幕更新率(通常60Hz)限制住,
+   要求120/144fps時改用計時器強制排程,但實際能不能真的跑到那個速率還是要看裝置/瀏覽器支援 */
+function scheduleFrame(fn, fps){
+  if (fps <= 60) { requestAnimationFrame(fn); return; }
+  setTimeout(fn, 1000 / fps);
+}
 let chosenAlign = "center";
 
 function showFmtStep(step){
@@ -1634,11 +1744,11 @@ $("alignBottom").addEventListener("click", () => { chosenAlign = "bottom"; showF
 $("fmtBackFromFormat").addEventListener("click", () => showFmtStep("align"));
 $("fmtLandscape").addEventListener("click", () => {
   $("formatOverlay").classList.remove("show");
-  exportVideo({ W: 1920, H: 1080, scoreH: 560, align: chosenAlign, bitrate: 10000000 });
+  exportVideo({ W: 1920, H: 1080, scoreH: 560, align: chosenAlign, bitrate: 10000000, fps: exportFps });
 });
 $("fmtPortrait").addEventListener("click", () => {
   $("formatOverlay").classList.remove("show");
-  exportVideo({ W: 1080, H: 1920, scoreH: 480, align: chosenAlign, bitrate: 10000000 });
+  exportVideo({ W: 1080, H: 1920, scoreH: 480, align: chosenAlign, bitrate: 10000000, fps: exportFps });
 });
 $("exportCancel").addEventListener("click", () => { exportCancelled = true; });
 
@@ -1691,13 +1801,14 @@ async function exportCombinedWithVideo(){
     const W = video.videoWidth, H = video.videoHeight;
     if (!W || !H) throw new Error("讀不到影片尺寸");
     const scoreH = 260; // 依樂譜自然高度輸出,不再跟影片高度算百分比
+    const kbH = 130;    // 鍵盤保留高度
     const plX = W * PLAYLINE_RATIO;
     const { tiles, scale } = await rasterizeScore(scoreH);
 
     const cv = document.createElement("canvas");
-    cv.width = W; cv.height = scoreH;
+    cv.width = W; cv.height = scoreH + kbH;
     const ctx = cv.getContext("2d");
-    const vStream = cv.captureStream(30);
+    const vStream = cv.captureStream(exportFps);
 
     // 直接從影片本身擷取真實音軌,不用我們的合成音色
     mediaStream = video.captureStream ? video.captureStream() : video.mozCaptureStream();
@@ -1716,6 +1827,7 @@ async function exportCombinedWithVideo(){
 
     // 影片畫面裁切:從影片垂直中央裁出跟樂譜同高的一段,維持原始比例不變形
     const srcY = Math.max(0, (H - scoreH) / 2);
+    const calib = useCalib();
 
     await new Promise(resolve => {
       const draw = () => {
@@ -1729,8 +1841,10 @@ async function exportCombinedWithVideo(){
         }
         ctx.strokeStyle = "#B8860B"; ctx.lineWidth = 3;
         ctx.beginPath(); ctx.moveTo(plX, scoreH*0.05); ctx.lineTo(plX, scoreH*0.95); ctx.stroke();
+        const active = getActiveNotesAt(sec, calib);
+        drawKeyboard(ctx, 0, scoreH, W, kbH, active);
         $("combineStatus").textContent = fmt(sec) + " / " + fmt(video.duration);
-        requestAnimationFrame(draw);
+        scheduleFrame(draw, exportFps);
       };
       draw();
     });
@@ -1761,17 +1875,18 @@ async function exportVideo(cfg){
   let aDest = null;
   try {
     const W = cfg.W, H = cfg.H, SCORE_H = cfg.scoreH;
+    const kbH = H * 0.12; // 鍵盤保留高度
     const margin = H * 0.05;
     const topY = cfg.align === "top" ? margin
-      : cfg.align === "bottom" ? (H - SCORE_H - margin)
-      : (H - SCORE_H) / 2; // center(預設)
+      : cfg.align === "bottom" ? (H - SCORE_H - margin - kbH)
+      : (H - SCORE_H - kbH) / 2; // center(預設),稍微往上挪讓出鍵盤空間
     const plX = W * PLAYLINE_RATIO;
     const { tiles, scale } = await rasterizeScore(SCORE_H);
 
     const cv = document.createElement("canvas");
     cv.width = W; cv.height = H;
     const ctx = cv.getContext("2d");
-    const vStream = cv.captureStream(30);
+    const vStream = cv.captureStream(cfg.fps || 30);
     aDest = audioCtx.createMediaStreamDestination();
     masterGain.connect(aDest);
     const stream = new MediaStream([
@@ -1822,10 +1937,12 @@ async function exportVideo(cfg){
         ctx.beginPath();
         ctx.moveTo(plX-9, H*0.08-2); ctx.lineTo(plX+9, H*0.08-2); ctx.lineTo(plX, H*0.08+13);
         ctx.closePath(); ctx.fill();
+        const active = getActiveNotesAt(sec, calib);
+        drawKeyboard(ctx, 0, H - kbH, W, kbH, active);
         $("exportTime").textContent = fmt(sec) + " / " + fmt(total);
         $("exportFill").style.width = (sec/total*100).toFixed(1) + "%";
         if (el >= LEAD + total + TAIL) { resolve(); return; }
-        requestAnimationFrame(draw);
+        scheduleFrame(draw, cfg.fps || 30);
       };
       draw();
     });
@@ -1855,6 +1972,8 @@ async function exportVideo(cfg){
 }
 
 window.addEventListener("resize", () => { if (!playing) resetScroll(); });
+resizeKeyboardCanvas();
+drawKeyboardLive(0);
 </script>
 </body>
 </html>
