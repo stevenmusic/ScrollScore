@@ -313,7 +313,12 @@ let scheduled = [];     // 已排程的 audio nodes,停止時關閉
 let lastXmlText = null;
 let transposeSemitones = 0;
 const PLAYLINE_RATIO = 0.25;
-const ARP_ROLL_GAP = 0.045; // 琶音滾奏,每個音之間錯開的秒數
+/* 琶音滾奏間隔:跟著目前速度等比例調整(太慢的歌固定間隔會顯得脫節,太快的歌固定間隔會佔掉太多拍子),
+   但設上下限避免極端速度時滾奏變得不自然 */
+function arpGapSec(){
+  const quarterSec = 60 / bpm(); // 一拍(四分音符)的實際秒數
+  return Math.min(0.06, Math.max(0.02, quarterSec * 0.12));
+}
 
 /* ── 載入檔案 ──────────────────────────────── */
 $("loadBtn").addEventListener("click", () => $("fileInput").click());
@@ -790,10 +795,11 @@ function buildTimeline(){
     if (arpDir && notes.length > 1) {
       const pitched = notes.filter(n => !n.drum && n.freq);
       pitched.sort((a, b) => arpDir === "down" ? b.freq - a.freq : a.freq - b.freq);
-      // 最後一個音(依方向決定是最高或最低音)剛好落在拍點上,前面的音都在拍點之前彈完,
-      // 這樣拍點本身保持乾淨,不會蓋掉緊接在拍點上的旋律音
+      // 以拍點為中心對稱分佈:偶數個音一半在拍點前、一半在拍點後;
+      // 奇數個音則中間那個剛好落在拍點上。這樣不會整組音都擠在拍點同一側,
+      // 才不會蓋掉前一個拍點或這一拍本身的旋律音
       const n = pitched.length;
-      pitched.forEach((note, i) => { note.rollIndex = i - (n - 1); });
+      pitched.forEach((note, i) => { note.rollIndex = i - (n - 1) / 2; });
     }
     events.push({ tWhole, x, notes });
     cursor.next();
@@ -1146,7 +1152,7 @@ function startAudioFrom(fromSec){
       : null;
     for (const n of ev.notes) {
       try {
-        const rollT = (n.rollIndex || 0) * ARP_ROLL_GAP;
+        const rollT = (n.rollIndex || 0) * arpGapSec();
         const durSec = calib ? Math.max(calibToSec(ev.tWhole + n.durWhole) - t, 0.05) : wholeToSec(n.durWhole);
         if (n.drum) scheduleDrum(n.key, startCtxTime + t + rollT);
         else scheduleNote(n.freq, startCtxTime + t + rollT, durSec, ev.legato, ev.pedalOn, chordAnchors, harmonyEndSec, ev.artic);
@@ -1320,7 +1326,7 @@ function getActiveNotesAt(sec, calib){
   kbScanLastSec = sec;
   const map = new Map();
   const noteEndSec = (ev, n, t0) => {
-    const rollT = (n.rollIndex || 0) * ARP_ROLL_GAP;
+    const rollT = (n.rollIndex || 0) * arpGapSec();
     const writtenEnd = calib ? calibToSec(ev.tWhole + n.durWhole) : wholeToSec(ev.tWhole + n.durWhole);
     return Math.max(writtenEnd + rollT, t0 + rollT + KB_MIN_VISUAL_SEC);
   };
@@ -1344,7 +1350,7 @@ function getActiveNotesAt(sec, calib){
     if (t0 > sec) break;
     for (const n of ev.notes) {
       if (n.drum || !n.freq) continue;
-      const rollT = (n.rollIndex || 0) * ARP_ROLL_GAP;
+      const rollT = (n.rollIndex || 0) * arpGapSec();
       const t = t0 + rollT;
       const endSec = noteEndSec(ev, n, t0);
       if (sec >= t && sec < endSec) {
@@ -2029,7 +2035,7 @@ async function exportVideo(cfg){
         ? startCtxTime + (calib ? calibToSec(ev.harmonyEndWhole) : wholeToSec(ev.harmonyEndWhole))
         : null;
       for (const n of ev.notes) {
-        const rollT = (n.rollIndex || 0) * ARP_ROLL_GAP;
+        const rollT = (n.rollIndex || 0) * arpGapSec();
         const durSec = calib ? Math.max(calibToSec(ev.tWhole + n.durWhole) - t, 0.05) : wholeToSec(n.durWhole);
         if (n.drum) scheduleDrum(n.key, startCtxTime + t + rollT);
         else scheduleNote(n.freq, startCtxTime + t + rollT, durSec, ev.legato, ev.pedalOn, chordAnchors, harmonyEndSec, ev.artic);
