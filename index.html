@@ -325,18 +325,13 @@ const ARP_SAFETY_SEC = 0.012; // 留一點點餘裕,避免剛好貼齊
 function computeArpEffectiveGap(ev, t0, calib){
   const baseGap = arpGapSec();
   if (!ev.arpCount || ev.arpCount < 2) return baseGap;
-  const halfSpan = (ev.arpCount - 1) / 2;
-  if (halfSpan <= 0) return baseGap;
+  const span = ev.arpCount - 1; // 全部音符都壓在拍點之前,最早的音符在拍點前 span 個間隔
+  if (span <= 0) return baseGap;
   const prevSec = ev.arpGapBeforeWhole != null
     ? (calib ? calibToSec(ev.tWhole - ev.arpGapBeforeWhole) : wholeToSec(ev.tWhole - ev.arpGapBeforeWhole))
     : -Infinity;
-  const nextSec = (ev.arpGapAfterWhole != null && isFinite(ev.arpGapAfterWhole))
-    ? (calib ? calibToSec(ev.tWhole + ev.arpGapAfterWhole) : wholeToSec(ev.tWhole + ev.arpGapAfterWhole))
-    : Infinity;
   const maxBefore = t0 - prevSec - ARP_SAFETY_SEC;
-  const maxAfter = nextSec - t0 - ARP_SAFETY_SEC;
-  const allowedHalfSpan = Math.max(0, Math.min(maxBefore, maxAfter));
-  const maxGapAllowed = allowedHalfSpan / halfSpan;
+  const maxGapAllowed = maxBefore / span;
   return Math.max(0, Math.min(baseGap, maxGapAllowed));
 }
 
