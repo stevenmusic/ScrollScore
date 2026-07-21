@@ -200,6 +200,7 @@ input[type=file]{display:none}
     </select>
   </div>
 
+  <div class="tempo-box"><label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="legatoPedal" checked style="width:16px;height:16px">圓滑/踏板效果</label></div>
   <div class="tempo-box">背景透明度 <input type="range" id="scoreBgOpacity" min="0" max="100" value="0"><b id="scoreBgOpacityVal">0</b></div>
   <div class="tempo-box"><label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="showTempoMarks" style="width:16px;height:16px">顯示速度記號</label></div>
   <button class="btn" id="recBtn" disabled>錄影模式</button>
@@ -1239,7 +1240,7 @@ function playSampledInstrument(instKey, freq, when, dur, legato, pedal, chordAnc
 }
 
 function scheduleNote(freq, when, dur, legato, pedal, chordAnchors, harmonyEndSec, artic){
-  legato = false; pedal = false; harmonyEndSec = null; // 圓滑/踏板效果已移除,音符一律使用自己原本的時值
+  if (!$("legatoPedal").checked) { legato = false; pedal = false; harmonyEndSec = null; }
   const inst = currentInstrument();
   if (REAL_INSTRUMENTS[inst] && playSampledInstrument(inst, freq, when, dur, legato, pedal, chordAnchors, harmonyEndSec, artic)) return;
   // 真實取樣尚未載入完成或缺失時,退回合成音色,絕不會沒有聲音
