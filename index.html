@@ -2150,8 +2150,9 @@ async function exportVideo(cfg){
     rec.start(3000); // 每3秒分段一次:避免資料完全不釋放而累積過多記憶體,又不會像每秒切一次那麼頻繁
 
     const LEAD = 0.4, TAIL = 0.6;
+    const AUDIO_DELAY_SEC = 0.15; // 音訊比畫面晚一點點開始,抵銷畫面渲染延遲造成的「音樂比較快」的感覺,可依實測調整
     const t0 = audioCtx.currentTime + 0.1;
-    startCtxTime = t0 + LEAD;
+    startCtxTime = t0 + LEAD + AUDIO_DELAY_SEC;
     scheduled = [];
     const calib = useCalib();
     for (const ev of events) {
