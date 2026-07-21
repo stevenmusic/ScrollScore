@@ -225,16 +225,8 @@ input[type=file]{display:none}
 
 <div id="combinePanel" style="padding:8px 14px;border-bottom:1px solid var(--line);background:var(--panel);display:none;gap:10px;align-items:center;flex-wrap:wrap;font-size:13px;color:var(--muted)">
   <b style="color:var(--gold)">樂譜+影片合成</b>
-  <span>沿用上面「上傳彈奏錄音/影片」的檔案(需要是影片檔,不是純音訊)</span>
+  <span>沿用上面「上傳彈奏錄音/影片」的檔案(需要是影片檔,不是純音訊),匯出時在「⬇ 匯出影片」選「樂譜+影片」</span>
   <video id="combineVideo" style="display:none"></video>
-  <span>橫條高度 <input type="range" id="stripHeightPct" min="10" max="40" value="18"><b id="stripHeightVal">18</b>%</span>
-  <span>橫條位置
-    <select id="stripPosition" style="background:var(--bg);color:var(--ivory);border:1px solid var(--gold);border-radius:8px;padding:4px 8px;font-family:inherit;font-size:13px">
-      <option value="top">上方</option>
-      <option value="bottom">下方</option>
-    </select>
-  </span>
-  <button class="btn primary" id="combineExportBtn" disabled>輸出合成影片</button>
   <span id="combineStatus"></span>
 </div>
 
@@ -252,16 +244,33 @@ input[type=file]{display:none}
   <button id="exitrec" title="離開錄影模式">✕</button>
   <div id="formatOverlay">
     <div class="box">
-      <div class="title">選擇影片格式</div>
-      <button class="fmt" id="fmtLandscape">
-        <span class="ratio ratio-l"></span>
-        <span><b>橫式 1920 × 1080</b><br><small>YouTube 影片</small></span>
-      </button>
-      <button class="fmt" id="fmtPortrait">
-        <span class="ratio ratio-p"></span>
-        <span><b>直式 1080 × 1920</b><br><small>Shorts / Reels / TikTok</small></span>
-      </button>
-      <button class="btn" id="fmtCancel">取消</button>
+      <div class="title" id="fmtTitle">選擇匯出類型</div>
+      <div id="fmtStepType">
+        <button class="fmt" id="fmtTypeScore">
+          <span><b>純樂譜</b><br><small>滿版1920×1080 或 1080×1920</small></span>
+        </button>
+        <button class="fmt" id="fmtTypeCombine">
+          <span><b>樂譜+影片</b><br><small>疊在你上傳的彈奏影片上,高度依樂譜自然高度</small></span>
+        </button>
+        <button class="btn" id="fmtCancel">取消</button>
+      </div>
+      <div id="fmtStepAlign" style="display:none">
+        <button class="fmt" id="alignTop"><span><b>樂譜靠上</b></span></button>
+        <button class="fmt" id="alignCenter"><span><b>樂譜靠中</b></span></button>
+        <button class="fmt" id="alignBottom"><span><b>樂譜靠下</b></span></button>
+        <button class="btn" id="fmtBackFromAlign">返回</button>
+      </div>
+      <div id="fmtStepFormat" style="display:none">
+        <button class="fmt" id="fmtLandscape">
+          <span class="ratio ratio-l"></span>
+          <span><b>橫式 1920 × 1080</b><br><small>YouTube 影片</small></span>
+        </button>
+        <button class="fmt" id="fmtPortrait">
+          <span class="ratio ratio-p"></span>
+          <span><b>直式 1080 × 1920</b><br><small>Shorts / Reels / TikTok</small></span>
+        </button>
+        <button class="btn" id="fmtBackFromFormat">返回</button>
+      </div>
     </div>
   </div>
   <div id="exportOverlay">
@@ -925,10 +934,8 @@ $("calibFile").addEventListener("change", async e => {
     audioEl.style.display = "inline-block";
     if (file.type.startsWith("video/")) {
       $("combineVideo").src = URL.createObjectURL(file);
-      $("combineExportBtn").disabled = false;
-      $("combineStatus").textContent = "";
+      $("combineStatus").textContent = "影片已就緒,匯出時可選「樂譜+影片」";
     } else {
-      $("combineExportBtn").disabled = true;
       $("combineStatus").textContent = "(這是音訊檔,合成影片需要影片檔)";
     }
     updateCalibStatus();
@@ -1595,18 +1602,43 @@ $("exitrec").addEventListener("click", () => {
 
 /* ── 影片匯出 ─────────────────────────────── */
 let exporting = false, exportCancelled = false;
+let chosenAlign = "center";
+
+function showFmtStep(step){
+  $("fmtStepType").style.display = step === "type" ? "flex" : "none";
+  $("fmtStepAlign").style.display = step === "align" ? "flex" : "none";
+  $("fmtStepFormat").style.display = step === "format" ? "flex" : "none";
+}
 $("exportBtn").addEventListener("click", () => {
   if (!events.length || exporting) return;
+  showFmtStep("type");
   $("formatOverlay").classList.add("show");
 });
 $("fmtCancel").addEventListener("click", () => $("formatOverlay").classList.remove("show"));
+
+$("fmtTypeScore").addEventListener("click", () => showFmtStep("align"));
+$("fmtTypeCombine").addEventListener("click", () => {
+  $("formatOverlay").classList.remove("show");
+  if (!$("combineVideo").src) {
+    setStatus("請先在「校準」面板上傳彈奏影片,再匯出「樂譜+影片」");
+    return;
+  }
+  exportCombinedWithVideo();
+});
+
+$("fmtBackFromAlign").addEventListener("click", () => showFmtStep("type"));
+$("alignTop").addEventListener("click", () => { chosenAlign = "top"; showFmtStep("format"); });
+$("alignCenter").addEventListener("click", () => { chosenAlign = "center"; showFmtStep("format"); });
+$("alignBottom").addEventListener("click", () => { chosenAlign = "bottom"; showFmtStep("format"); });
+
+$("fmtBackFromFormat").addEventListener("click", () => showFmtStep("align"));
 $("fmtLandscape").addEventListener("click", () => {
   $("formatOverlay").classList.remove("show");
-  exportVideo({ W: 1920, H: 1080, scoreH: 560, bitrate: 10000000 });
+  exportVideo({ W: 1920, H: 1080, scoreH: 560, align: chosenAlign, bitrate: 10000000 });
 });
 $("fmtPortrait").addEventListener("click", () => {
   $("formatOverlay").classList.remove("show");
-  exportVideo({ W: 1080, H: 1920, scoreH: 480, bitrate: 10000000 });
+  exportVideo({ W: 1080, H: 1920, scoreH: 480, align: chosenAlign, bitrate: 10000000 });
 });
 $("exportCancel").addEventListener("click", () => { exportCancelled = true; });
 
@@ -1641,12 +1673,6 @@ async function rasterizeScore(targetH){
   return { tiles, scale };
 }
 
-$("stripHeightPct").addEventListener("input", () => {
-  $("stripHeightVal").textContent = $("stripHeightPct").value;
-});
-
-$("combineExportBtn").addEventListener("click", () => exportCombinedWithVideo());
-
 async function exportCombinedWithVideo(){
   if (!events.length || exporting) return;
   const video = $("combineVideo");
@@ -1664,13 +1690,12 @@ async function exportCombinedWithVideo(){
     });
     const W = video.videoWidth, H = video.videoHeight;
     if (!W || !H) throw new Error("讀不到影片尺寸");
-    const stripH = Math.round(H * (parseFloat($("stripHeightPct").value) / 100));
-    const stripY = $("stripPosition").value === "top" ? 0 : (H - stripH);
+    const scoreH = 260; // 依樂譜自然高度輸出,不再跟影片高度算百分比
     const plX = W * PLAYLINE_RATIO;
-    const { tiles, scale } = await rasterizeScore(stripH);
+    const { tiles, scale } = await rasterizeScore(scoreH);
 
     const cv = document.createElement("canvas");
-    cv.width = W; cv.height = H;
+    cv.width = W; cv.height = scoreH;
     const ctx = cv.getContext("2d");
     const vStream = cv.captureStream(30);
 
@@ -1689,21 +1714,21 @@ async function exportCombinedWithVideo(){
     await video.play();
     rec.start(1000);
 
+    // 影片畫面裁切:從影片垂直中央裁出跟樂譜同高的一段,維持原始比例不變形
+    const srcY = Math.max(0, (H - scoreH) / 2);
+
     await new Promise(resolve => {
       const draw = () => {
         if (exportCancelled || video.ended || video.paused) { resolve(); return; }
         const sec = video.currentTime;
-        ctx.drawImage(video, 0, 0, W, H);
-        // 樂譜橫條底色(讓譜面清楚可讀)
-        ctx.fillStyle = "#0C0A07";
-        ctx.fillRect(0, stripY, W, stripH);
+        ctx.drawImage(video, 0, srcY, W, scoreH, 0, 0, W, scoreH);
         const off = plX - xAtSec(sec) * scale;
         for (const tl of tiles) {
           const dx = off + tl.x;
-          if (dx < W && dx + tl.canvas.width > 0) ctx.drawImage(tl.canvas, dx, stripY);
+          if (dx < W && dx + tl.canvas.width > 0) ctx.drawImage(tl.canvas, dx, 0);
         }
         ctx.strokeStyle = "#B8860B"; ctx.lineWidth = 3;
-        ctx.beginPath(); ctx.moveTo(plX, stripY + stripH*0.05); ctx.lineTo(plX, stripY + stripH*0.95); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(plX, scoreH*0.05); ctx.lineTo(plX, scoreH*0.95); ctx.stroke();
         $("combineStatus").textContent = fmt(sec) + " / " + fmt(video.duration);
         requestAnimationFrame(draw);
       };
@@ -1736,7 +1761,11 @@ async function exportVideo(cfg){
   let aDest = null;
   try {
     const W = cfg.W, H = cfg.H, SCORE_H = cfg.scoreH;
-    const plX = W * PLAYLINE_RATIO, topY = (H - SCORE_H) / 2;
+    const margin = H * 0.05;
+    const topY = cfg.align === "top" ? margin
+      : cfg.align === "bottom" ? (H - SCORE_H - margin)
+      : (H - SCORE_H) / 2; // center(預設)
+    const plX = W * PLAYLINE_RATIO;
     const { tiles, scale } = await rasterizeScore(SCORE_H);
 
     const cv = document.createElement("canvas");
@@ -1780,7 +1809,7 @@ async function exportVideo(cfg){
         if (exportCancelled) { resolve(); return; }
         const el = audioCtx.currentTime - t0;
         const sec = Math.min(Math.max(el - LEAD, 0), total);
-        ctx.fillStyle = "#00FF00"; // 純綠幕色,方便在剪輯軟體做色度去背(瀏覽器錄影無法真正輸出透明背景)
+        ctx.fillStyle = "#0C0A07";
         ctx.fillRect(0, 0, W, H);
         const off = plX - xAtSec(sec) * scale;
         for (const tl of tiles) {
