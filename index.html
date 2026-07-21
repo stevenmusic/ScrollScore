@@ -1376,12 +1376,13 @@ function resizeKeyboardCanvas(){
   cv.width = Math.round(rect.width);
   cv.height = Math.round(rect.height);
 }
+const KB_LOOKAHEAD_SEC = 0.06; // 鍵盤提前量,補償視覺感知上的延遲感
 function drawKeyboardLive(sec){
   const cv = $("keyboardCanvas");
   if (!cv || !cv.width) return;
   const ctx = cv.getContext("2d");
   ctx.clearRect(0, 0, cv.width, cv.height);
-  const active = events.length ? getActiveNotesAt(sec, useCalib()) : new Map();
+  const active = events.length ? getActiveNotesAt(sec + KB_LOOKAHEAD_SEC, useCalib()) : new Map();
   drawKeyboard(ctx, 0, 0, cv.width, cv.height, active);
 }
 window.addEventListener("resize", () => { resizeKeyboardCanvas(); drawKeyboardLive(playing ? currentSec() : pausedAtSec); });
@@ -1967,7 +1968,7 @@ async function exportCombinedWithVideo(){
         }
         ctx.strokeStyle = "#B8860B"; ctx.lineWidth = 3;
         ctx.beginPath(); ctx.moveTo(plX, scoreH*0.05); ctx.lineTo(plX, scoreH*0.95); ctx.stroke();
-        const active = getActiveNotesAt(sec, calib);
+        const active = getActiveNotesAt(sec + KB_LOOKAHEAD_SEC, calib);
         drawKeyboard(ctx, 0, scoreH, W, kbH, active);
         $("combineStatus").textContent = fmt(sec) + " / " + fmt(video.duration);
         scheduleFrame(draw, exportFps);
@@ -2064,7 +2065,7 @@ async function exportVideo(cfg){
         ctx.beginPath();
         ctx.moveTo(plX-9, H*0.08-2); ctx.lineTo(plX+9, H*0.08-2); ctx.lineTo(plX, H*0.08+13);
         ctx.closePath(); ctx.fill();
-        const active = getActiveNotesAt(sec, calib);
+        const active = getActiveNotesAt(sec + KB_LOOKAHEAD_SEC, calib);
         drawKeyboard(ctx, 0, H - kbH, W, kbH, active);
         $("exportTime").textContent = fmt(sec) + " / " + fmt(total);
         $("exportFill").style.width = (sec/total*100).toFixed(1) + "%";
