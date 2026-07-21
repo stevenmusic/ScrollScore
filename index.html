@@ -1809,7 +1809,7 @@ async function exportVideo(cfg){
         if (exportCancelled) { resolve(); return; }
         const el = audioCtx.currentTime - t0;
         const sec = Math.min(Math.max(el - LEAD, 0), total);
-        ctx.fillStyle = "#0C0A07";
+        ctx.fillStyle = "#FFFDF6";
         ctx.fillRect(0, 0, W, H);
         const off = plX - xAtSec(sec) * scale;
         for (const tl of tiles) {
