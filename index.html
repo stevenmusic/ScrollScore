@@ -1976,11 +1976,11 @@ $("alignBottom").addEventListener("click", () => { chosenAlign = "bottom"; showF
 $("fmtBackFromFormat").addEventListener("click", () => showFmtStep("align"));
 $("fmtLandscape").addEventListener("click", () => {
   $("formatOverlay").classList.remove("show");
-  exportVideo({ W: 1920, H: 1080, scoreH: 560, align: chosenAlign, bitrate: 10000000, fps: exportFps, includeKeyboard: chosenIncludeKeyboard });
+  exportVideo({ W: 1920, H: 1080, scoreH: 560, align: chosenAlign, bitrate: 5000000, fps: exportFps, includeKeyboard: chosenIncludeKeyboard });
 });
 $("fmtPortrait").addEventListener("click", () => {
   $("formatOverlay").classList.remove("show");
-  exportVideo({ W: 1080, H: 1920, scoreH: 480, align: chosenAlign, bitrate: 10000000, fps: exportFps, includeKeyboard: chosenIncludeKeyboard });
+  exportVideo({ W: 1080, H: 1920, scoreH: 480, align: chosenAlign, bitrate: 5000000, fps: exportFps, includeKeyboard: chosenIncludeKeyboard });
 });
 $("exportCancel").addEventListener("click", () => { exportCancelled = true; });
 
@@ -2049,14 +2049,14 @@ async function exportCombinedWithVideo(){
     const outStream = new MediaStream([...vStream.getVideoTracks(), ...audioTracks]);
 
     const mime = pickMime();
-    const rec = new MediaRecorder(outStream, mime ? { mimeType: mime, videoBitsPerSecond: 8_000_000 } : undefined);
+    const rec = new MediaRecorder(outStream, mime ? { mimeType: mime, videoBitsPerSecond: 4_000_000 } : undefined);
     const chunks = [];
     rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
     const stopped = new Promise(res => rec.onstop = res);
 
     video.currentTime = 0;
     await video.play();
-    rec.start(); // 不分段錄製,避免Safari在分段檔案上把總長度資訊寫壞
+    rec.start(3000); // 每3秒分段一次:避免資料完全不釋放而累積過多記憶體,又不會像每秒切一次那麼頻繁
 
     // 影片畫面裁切:從影片垂直中央裁出跟樂譜同高的一段,維持原始比例不變形
     const srcY = Math.max(0, (H - scoreH) / 2);
@@ -2147,7 +2147,7 @@ async function exportVideo(cfg){
     const chunks = [];
     rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
     const stopped = new Promise(res => rec.onstop = res);
-    rec.start(); // 不分段錄製,避免Safari在分段檔案上把總長度資訊寫壞
+    rec.start(3000); // 每3秒分段一次:避免資料完全不釋放而累積過多記憶體,又不會像每秒切一次那麼頻繁
 
     const LEAD = 0.4, TAIL = 0.6;
     const t0 = audioCtx.currentTime + 0.1;
