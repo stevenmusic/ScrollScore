@@ -486,6 +486,7 @@ async function renderScore(xmlText){
   osmd.render();
 
   buildTimeline();
+  rebuildKeyboardRange();
   if (events.some(ev => ev.notes.some(n => n.drum))) loadDrumKit();
   resetScroll();
   $("playBtn").disabled = false;
@@ -1192,11 +1193,34 @@ function loadInstrumentSamples(instKey){
 
 function freqToMidi(freq){ return 69 + 12 * Math.log2(freq / 440); }
 
-/* ── 鋼琴鍵盤視覺化:88鍵,依左右手譜表上不同顏色 ── */
-const KB_LOW = 21, KB_HIGH = 108; // A0 ~ C8
+/* ── 鋼琴鍵盤視覺化:依樂譜實際音域動態決定範圍,左右手不同顏色 ── */
 function isBlackKey(midi){ return [1,3,6,8,10].includes(((midi%12)+12)%12); }
-const KB_WHITE_KEYS = (() => { const a=[]; for (let m=KB_LOW;m<=KB_HIGH;m++) if(!isBlackKey(m)) a.push(m); return a; })();
-const KB_WHITE_IDX = (() => { const o={}; KB_WHITE_KEYS.forEach((m,i)=>o[m]=i); return o; })();
+let KB_LOW = 21, KB_HIGH = 108; // 預設A0~C8,載入樂譜後會依實際音域重新計算
+let KB_WHITE_KEYS = [], KB_WHITE_IDX = {};
+function rebuildKeyboardRange(){
+  let lowest = Infinity, highest = -Infinity;
+  for (const ev of events) {
+    for (const n of ev.notes) {
+      if (n.drum || !n.freq) continue;
+      const m = Math.round(freqToMidi(n.freq));
+      if (m < lowest) lowest = m;
+      if (m > highest) highest = m;
+    }
+  }
+  if (!isFinite(lowest) || !isFinite(highest)) {
+    KB_LOW = 21; KB_HIGH = 108; // 沒有音符資料時,退回完整88鍵
+  } else {
+    // 兩端都取範圍外最靠近的C(最低音所在八度的C,最高音上面那個八度的C)
+    KB_LOW = Math.floor(lowest / 12) * 12;
+    KB_HIGH = Math.ceil(highest / 12) * 12;
+    if (KB_HIGH <= KB_LOW) KB_HIGH = KB_LOW + 12; // 保險,至少留一個八度
+  }
+  KB_WHITE_KEYS = [];
+  for (let m = KB_LOW; m <= KB_HIGH; m++) if (!isBlackKey(m)) KB_WHITE_KEYS.push(m);
+  KB_WHITE_IDX = {};
+  KB_WHITE_KEYS.forEach((m, i) => KB_WHITE_IDX[m] = i);
+}
+rebuildKeyboardRange(); // 初始建立(此時還沒有樂譜,會用預設88鍵)
 
 function drawKeyboard(ctx, x, y, w, h, activeMap){
   const whiteW = w / KB_WHITE_KEYS.length;
