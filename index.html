@@ -311,7 +311,7 @@ function findNearestEntry(entries, t, epsilon){
   if (Math.abs(entries[bestIdx].t - t) <= epsilon) return entries[bestIdx].v;
   return undefined;
 }
-let noteStaffMap = {};
+let noteStaffByMidi = {};
 let arpMap = {};
 let calibrating = false, calibStartPerf = 0, calibTapIndex = 0;
 let calibrationMap = []; // [{tWhole, realSec}] 已排序,由 tap-along 或自動偵測建立
@@ -371,7 +371,8 @@ $("fileInput").addEventListener("change", async e => {
     pedalRanges = parsed.pedalRanges;
     repeatChordRanges = parsed.repeatRanges;
     articMap = parsed.articMap;
-    noteStaffMap = parsed.noteStaffMap;
+    noteStaffByMidi = parsed.noteStaffByMidi;
+    for (const midiKey in noteStaffByMidi) noteStaffByMidi[midiKey].sort((a, b) => a.t - b.t);
     arpMap = parsed.arpMap;
     articEntries = buildSortedEntries(articMap);
     arpEntries = buildSortedEntries(arpMap);
@@ -562,7 +563,7 @@ function parseXmlTimeline(xmlText){
         timeSig = { beats, beatType, isCompound };
       }
     }
-    if (!bestPart) return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, noteStaffMap: {}, arpMap: {}, soundTempo, timeSig };
+    if (!bestPart) return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, noteStaffByMidi: {}, arpMap: {}, soundTempo, timeSig };
 
     let divisions = 1, cursor = 0, lastStaff = 1;
     const slurStarts = {};
@@ -570,9 +571,9 @@ function parseXmlTimeline(xmlText){
     const pedalStack = [];
     const outPedals = [];
     const staffOnsets = {}; // staffNum -> [{tWhole, durWhole, pcs:Set}], 給重複音型偵測用
+    const noteStaffByMidi = {}; // midi -> [{t:tWhole, v:staffNum}], 用容錯比對找左右手歸屬,避免飄移誤判
     const articMap = {}; // tWhole(定點字串) -> {accent,strongAccent,staccato,staccatissimo,tenuto,detachedLegato,spiccato,softAccent,fermata}
     const arpMap = {}; // tWhole(定點字串) -> "up"/"down",分解和弦(琶音)標記
-    const noteStaffMap = {}; // "tWhole_midi" -> staffNum,給鍵盤左右手上色用(用原始未移調的音高當key)
 
     function midiFromNote(noteEl){
       const pitchEl = noteEl.getElementsByTagName("pitch")[0];
@@ -684,7 +685,10 @@ function parseXmlTimeline(xmlText){
           // 記錄這個音符所屬的譜表(左右手),用來做重複音型偵測跟鍵盤上色
           const staffNum = staffNumEarly;
           const noteMidi = midiFromNote(child);
-          if (noteMidi !== null) noteStaffMap[cursor.toFixed(6) + "_" + noteMidi] = staffNum;
+          if (noteMidi !== null) {
+            if (!noteStaffByMidi[noteMidi]) noteStaffByMidi[noteMidi] = [];
+            noteStaffByMidi[noteMidi].push({ t: cursor, v: staffNum });
+          }
           const pc = pitchClassFromNote(child);
           if (pc !== null) {
             if (!staffOnsets[staffNum]) staffOnsets[staffNum] = [];
@@ -705,10 +709,10 @@ function parseXmlTimeline(xmlText){
     for (const staffNum of Object.keys(staffOnsets)) {
       repeatRanges = repeatRanges.concat(detectRepeatingChordRanges(staffOnsets[staffNum]));
     }
-    return { slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges, articMap, noteStaffMap, arpMap, soundTempo, timeSig };
+    return { slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges, articMap, noteStaffByMidi, arpMap, soundTempo, timeSig };
   } catch (e) {
     console.error("讀取踏板/圓滑線資訊失敗:", e);
-    return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, noteStaffMap: {}, arpMap: {}, soundTempo: null, timeSig: null };
+    return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, noteStaffByMidi: {}, arpMap: {}, soundTempo: null, timeSig: null };
   }
 }
 /* 偵測某一手(譜表)裡,音符是否精確循環重複(例如分解和弦C-E-G-C-E-G...),
@@ -853,7 +857,8 @@ function buildTimeline(){
           notes.push({ drum: true, key: drumKey, durWhole });
         } else {
           const origMidi = Math.round(freqToMidi(n.Pitch.Frequency)) - transposeSemitones;
-          const staff = noteStaffMap[tWhole.toFixed(6) + "_" + origMidi] || 1;
+          const staffBucket = noteStaffByMidi[origMidi];
+          const staff = (staffBucket && findNearestEntry(staffBucket, tWhole, MARK_MATCH_EPSILON)) || 1;
           notes.push({ freq: n.Pitch.Frequency, durWhole, staff });
         }
       }
