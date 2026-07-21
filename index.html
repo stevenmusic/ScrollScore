@@ -301,6 +301,23 @@ let osmd = null;
 let events = [];        // {tWhole, x, notes:[{freq,durWhole}], legato, pedalOn}
 let slurRanges = [], pedalRanges = [], repeatChordRanges = [];
 let articMap = {};
+let articEntries = [], arpEntries = [];
+const MARK_MATCH_EPSILON = 0.01; // 全音符單位,容許兩套游標系統之間的小飄移
+function buildSortedEntries(map){
+  return Object.keys(map).map(k => ({ t: parseFloat(k), v: map[k] })).sort((a, b) => a.t - b.t);
+}
+function findNearestEntry(entries, t, epsilon){
+  if (!entries.length) return undefined;
+  let lo = 0, hi = entries.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (entries[mid].t < t) lo = mid + 1; else hi = mid;
+  }
+  let bestIdx = lo;
+  if (lo > 0 && Math.abs(entries[lo - 1].t - t) < Math.abs(entries[lo].t - t)) bestIdx = lo - 1;
+  if (Math.abs(entries[bestIdx].t - t) <= epsilon) return entries[bestIdx].v;
+  return undefined;
+}
 let noteStaffMap = {};
 let arpMap = {};
 let calibrating = false, calibStartPerf = 0, calibTapIndex = 0;
@@ -370,6 +387,8 @@ $("fileInput").addEventListener("change", async e => {
     articMap = parsed.articMap;
     noteStaffMap = parsed.noteStaffMap;
     arpMap = parsed.arpMap;
+    articEntries = buildSortedEntries(articMap);
+    arpEntries = buildSortedEntries(arpMap);
     let tempoNote = "";
     if (parsed.soundTempo && parsed.soundTempo > 0) {
       const t = Math.round(Math.min(400, Math.max(40, parsed.soundTempo)));
@@ -625,6 +644,10 @@ function parseXmlTimeline(xmlText){
           const isGrace = !!child.getElementsByTagName("grace")[0];
           const durEl = child.getElementsByTagName("duration")[0];
           const durWhole = durEl ? (parseFloat(durEl.textContent) / divisions) / 4 : 0;
+          // 譜表(左右手)判斷提前到這裡,琶音標記要用到,分辨同一時間點左右手彈相同音高但只有一手標記的情況
+          const staffElEarly = child.getElementsByTagName("staff")[0];
+          const staffNumEarly = staffElEarly ? parseInt(staffElEarly.textContent, 10) : lastStaff;
+          lastStaff = staffNumEarly;
           const notations = child.getElementsByTagName("notations")[0];
           if (notations) {
             for (const s of Array.from(notations.getElementsByTagName("slur"))) {
@@ -655,15 +678,21 @@ function parseXmlTimeline(xmlText){
               const existing = articMap[key] || {};
               articMap[key] = Object.assign(existing, flags);
             }
-            // 分解和弦(琶音)記號:資料上是同時按下的和絃,加了這個波浪線記號代表要滾奏,不是同時彈
+            // 分解和弦(琶音)記號:MusicXML是逐音符標記的,同一個和絃裡可能只有部分音符要滾奏,
+            // 其他音符(例如同時按住的持續音)不標記、應該正常發聲,所以要記錄「哪些確切音高」有標記,
+            // 不能只記錄「這個時間點有琶音」就把整組音全部滾奏
             const arpEl = notations.getElementsByTagName("arpeggiate")[0];
-            if (arpEl) arpMap[cursor.toFixed(6)] = arpEl.getAttribute("direction") || "up";
+            if (arpEl) {
+              const noteMidiForArp = midiFromNote(child);
+              if (noteMidiForArp !== null) {
+                const key = cursor.toFixed(6);
+                if (!arpMap[key]) arpMap[key] = { direction: arpEl.getAttribute("direction") || "up", midis: new Set() };
+                arpMap[key].midis.add(Math.round(noteMidiForArp) + "_" + staffNumEarly);
+              }
+            }
           }
           // 記錄這個音符所屬的譜表(左右手),用來做重複音型偵測跟鍵盤上色
-          // MusicXML允許同一聲部裡後面的音符省略<staff>,沿用前一個音符的譜表,不能都當作預設1
-          const staffEl = child.getElementsByTagName("staff")[0];
-          const staffNum = staffEl ? parseInt(staffEl.textContent, 10) : lastStaff;
-          lastStaff = staffNum;
+          const staffNum = staffNumEarly;
           const noteMidi = midiFromNote(child);
           if (noteMidi !== null) noteStaffMap[cursor.toFixed(6) + "_" + noteMidi] = staffNum;
           const pc = pitchClassFromNote(child);
@@ -839,17 +868,24 @@ function buildTimeline(){
         }
       }
     }
-    const arpDir = arpMap[tWhole.toFixed(6)];
+    const arpInfo = findNearestEntry(arpEntries, tWhole, MARK_MATCH_EPSILON);
     let arpCount = 0, arpGapBeforeWhole = null;
-    if (arpDir && notes.length > 1) {
-      const pitched = notes.filter(n => !n.drum && n.freq);
-      pitched.sort((a, b) => arpDir === "down" ? b.freq - a.freq : a.freq - b.freq);
-      // 最後一個音(依方向決定是最高或最低音)準時落在拍點上,前面幾個音壓縮在拍點前一個很短的區間內,
-      // 第一個音只會非常靠近拍點(不會展開太開),這樣才不會蓋到前一個拍點的旋律音
-      const n = pitched.length;
-      pitched.forEach((note, i) => { note.rollIndex = i - (n - 1); });
-      arpCount = n;
-      arpGapBeforeWhole = tWhole - (events.length ? events[events.length - 1].tWhole : tWhole);
+    if (arpInfo && notes.length > 1) {
+      // 只挑出「確切被標記琶音」的音符,同時間點裡沒被標記的音符(例如同時按住的持續音)維持正常發聲,不跟著滾奏
+      const pitched = notes.filter(n => {
+        if (n.drum || !n.freq) return false;
+        const origMidi = Math.round(freqToMidi(n.freq)) - transposeSemitones;
+        return arpInfo.midis.has(origMidi + "_" + (n.staff || 1));
+      });
+      if (pitched.length > 1) {
+        pitched.sort((a, b) => arpInfo.direction === "down" ? b.freq - a.freq : a.freq - b.freq);
+        // 最後一個音(依方向決定是最高或最低音)準時落在拍點上,前面幾個音壓縮在拍點前一個很短的區間內,
+        // 第一個音只會非常靠近拍點(不會展開太開),這樣才不會蓋到前一個拍點的旋律音
+        const n = pitched.length;
+        pitched.forEach((note, i) => { note.rollIndex = i - (n - 1); });
+        arpCount = n;
+        arpGapBeforeWhole = tWhole - (events.length ? events[events.length - 1].tWhole : tWhole);
+      }
     }
     events.push({ tWhole, x, notes, arpCount, arpGapBeforeWhole, arpGapAfterWhole: null });
     cursor.next();
@@ -881,7 +917,7 @@ function buildTimeline(){
     const maxDurWhole = ev.notes.length ? Math.max(...ev.notes.map(n => n.durWhole)) : 0;
     const coChordEnd = ev.tWhole + maxDurWhole;
     ev.harmonyEndWhole = rangeEnd != null ? Math.max(rangeEnd, coChordEnd) : coChordEnd;
-    ev.artic = articMap[ev.tWhole.toFixed(6)] || null;
+    ev.artic = findNearestEntry(articEntries, ev.tWhole, MARK_MATCH_EPSILON) || null;
   }
   // 終點
   const lastEv = events[events.length-1];
