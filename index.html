@@ -202,14 +202,6 @@ input[type=file]{display:none}
 
   <div class="tempo-box"><label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="legatoPedal" checked style="width:16px;height:16px">圓滑/踏板效果</label></div>
   <div class="tempo-box">背景透明度 <input type="range" id="scoreBgOpacity" min="0" max="100" value="0"><b id="scoreBgOpacityVal">0</b></div>
-  <div class="tempo-box">匯出畫面更新率
-    <select id="exportFpsSelect" style="background:var(--bg);color:var(--ivory);border:1px solid var(--gold);border-radius:8px;padding:5px 8px;font-family:inherit;font-size:13px">
-      <option value="30">30 fps</option>
-      <option value="60" selected>60 fps</option>
-      <option value="120">120 fps</option>
-      <option value="144">144 fps</option>
-    </select>
-  </div>
   <div class="tempo-box"><label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="showTempoMarks" style="width:16px;height:16px">顯示速度記號</label></div>
   <button class="btn" id="recBtn" disabled>錄影模式</button>
   <button class="btn" id="exportBtn" disabled>⬇ 匯出影片</button>
@@ -798,7 +790,10 @@ function buildTimeline(){
     if (arpDir && notes.length > 1) {
       const pitched = notes.filter(n => !n.drum && n.freq);
       pitched.sort((a, b) => arpDir === "down" ? b.freq - a.freq : a.freq - b.freq);
-      pitched.forEach((n, i) => { n.rollIndex = i; });
+      // 最後一個音(依方向決定是最高或最低音)剛好落在拍點上,前面的音都在拍點之前彈完,
+      // 這樣拍點本身保持乾淨,不會蓋掉緊接在拍點上的旋律音
+      const n = pitched.length;
+      pitched.forEach((note, i) => { note.rollIndex = i - (n - 1); });
     }
     events.push({ tWhole, x, notes });
     cursor.next();
@@ -1826,8 +1821,7 @@ $("exitrec").addEventListener("click", () => {
 
 /* ── 影片匯出 ─────────────────────────────── */
 let exporting = false, exportCancelled = false;
-let exportFps = 60;
-$("exportFpsSelect").addEventListener("change", () => { exportFps = parseInt($("exportFpsSelect").value, 10); });
+const exportFps = 60; // 固定60fps,60沒有卡頓問題,不再提供選項
 
 /* requestAnimationFrame 的實際頻率被螢幕更新率(通常60Hz)限制住,
    要求120/144fps時改用計時器強制排程,但實際能不能真的跑到那個速率還是要看裝置/瀏覽器支援 */
