@@ -199,7 +199,6 @@ input[type=file]{display:none}
       <option value="clarinet">單簧管</option>
     </select>
   </div>
-  <div class="tempo-box"><label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="legatoPedal" checked style="width:16px;height:16px">圓滑/踏板效果</label></div>
 
   <div class="tempo-box">背景透明度 <input type="range" id="scoreBgOpacity" min="0" max="100" value="0"><b id="scoreBgOpacityVal">0</b></div>
   <div class="tempo-box"><label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="showTempoMarks" style="width:16px;height:16px">顯示速度記號</label></div>
@@ -290,6 +289,7 @@ function setStatus(msg){ statusEl.textContent = msg; }
 let osmd = null;
 let events = [];        // {tWhole, x, notes:[{freq,durWhole}], legato, pedalOn}
 let slurRanges = [], pedalRanges = [], repeatChordRanges = [];
+let articMap = {};
 let calibrating = false, calibStartPerf = 0, calibTapIndex = 0;
 let calibrationMap = []; // [{tWhole, realSec}] 已排序,由 tap-along 或自動偵測建立
 let endX = 0, totalWhole = 0;
@@ -333,6 +333,7 @@ $("fileInput").addEventListener("change", async e => {
     slurRanges = parsed.slurRanges;
     pedalRanges = parsed.pedalRanges;
     repeatChordRanges = parsed.repeatRanges;
+    articMap = parsed.articMap;
     await renderScore(xmlText);
     lastXmlText = xmlText;
     setStatus("已載入:" + file.name + "(" + events.length + " 個節點," + repeatChordRanges.length + " 組重複音型)");
@@ -360,6 +361,86 @@ async function extractMXL(file){
   return zip.file(rootPath).async("text");
 }
 
+/* ── 移調:直接改寫 MusicXML 的音高/調號資料,依照樂理正確選擇升記號或降記號 ── */
+const LETTER_BASE = { C:0, D:2, E:4, F:5, G:7, A:9, B:11 };
+const LETTERS = ["C","D","E","F","G","A","B"];
+const SHARP_ORDER = ["F","C","G","D","A","E","B"]; // 升記號依序出現的順序(F#,C#,G#...)
+const FLAT_ORDER  = ["B","E","A","D","G","C","F"]; // 降記號依序出現的順序(Bb,Eb,Ab...)
+
+function transposeMusicXML(xmlText, semitones){
+  if (!semitones) return xmlText;
+  const doc = new DOMParser().parseFromString(xmlText, "text/xml");
+
+  // 讀取原調(用第一個 key/fifths,找不到就當C大調/A小調)
+  let origFifths = 0;
+  const keyEls = doc.getElementsByTagName("key");
+  if (keyEls.length) {
+    const f = keyEls[0].getElementsByTagName("fifths")[0];
+    if (f) origFifths = parseInt(f.textContent, 10) || 0;
+  }
+
+  // 半音移調 -> 五度圈位移量(標準換算:每個半音對應到五度圈上的固定位置,7為五度的半音數,取最接近0的等音選擇)
+  const rawShift = (((7 * semitones) % 12) + 12) % 12;
+  const fifthsShift = rawShift > 6 ? rawShift - 12 : rawShift;
+  let newFifths = origFifths + fifthsShift;
+  while (newFifths > 7) newFifths -= 12;  // 等音代換,避免超過7個升降記號的極端調
+  while (newFifths < -7) newFifths += 12;
+
+  // 音程移調(generic interval):連同音名字母一起移調,而不是移調後在新調裡重找拼法。
+  // 這樣「這個音相對自己音名字母是升還是降」的關係會被保留下來——
+  // 例如和聲小調升高的導音(F升高成F#),移調後還是「升高」的狀態,
+  // 不會因為新調是降記號調就被誤判成該用降記號拼寫。
+  const letterShift = (((fifthsShift * 4) % 7) + 7) % 7;
+
+  // 重新拼寫每一個音符
+  for (const p of Array.from(doc.getElementsByTagName("pitch"))) {
+    const stepEl = p.getElementsByTagName("step")[0];
+    const octaveEl = p.getElementsByTagName("octave")[0];
+    if (!stepEl || !octaveEl) continue;
+    const alterEl = p.getElementsByTagName("alter")[0];
+    const origStep = stepEl.textContent.trim();
+    const origOctave = parseInt(octaveEl.textContent, 10);
+    const origAlter = alterEl ? parseFloat(alterEl.textContent) : 0;
+    const origLetterIdx = LETTERS.indexOf(origStep);
+    if (origLetterIdx < 0 || isNaN(origOctave)) continue;
+
+    const origMidi = (origOctave + 1) * 12 + LETTER_BASE[origStep] + origAlter;
+    const targetMidi = origMidi + semitones;
+
+    const totalLetterSteps = origLetterIdx + letterShift;
+    const newLetterIdx = totalLetterSteps % 7;
+    const letterOctaveCarry = Math.floor(totalLetterSteps / 7);
+    const newLetter = LETTERS[newLetterIdx];
+    const octaveBase = Math.floor(semitones / 12); // 整個八度的位移量,跟字母進位是兩件事,要分開算
+    const newOctaveGuess = origOctave + letterOctaveCarry + octaveBase;
+    const naturalNewMidi = (newOctaveGuess + 1) * 12 + LETTER_BASE[newLetter];
+    let newAlter = targetMidi - naturalNewMidi;
+    let newOctave = newOctaveGuess;
+    // 正常情況下 newAlter 應該落在小範圍內(單升降或重升降);
+    // 萬一超出合理範圍,代表八度算錯了,用八度校正(理論上不會發生,保險而已)
+    while (newAlter > 6) { newAlter -= 12; newOctave += 1; }
+    while (newAlter < -6) { newAlter += 12; newOctave -= 1; }
+
+    stepEl.textContent = newLetter;
+    octaveEl.textContent = String(newOctave);
+    if (newAlter === 0) {
+      if (alterEl) alterEl.parentNode.removeChild(alterEl);
+    } else if (alterEl) {
+      alterEl.textContent = String(newAlter);
+    } else {
+      const newAlterEl = doc.createElement("alter");
+      newAlterEl.textContent = String(newAlter);
+      p.insertBefore(newAlterEl, stepEl.nextSibling);
+    }
+  }
+  // 更新調號標記
+  for (const k of Array.from(keyEls)) {
+    const f = k.getElementsByTagName("fifths")[0];
+    if (f) f.textContent = String(newFifths);
+  }
+  return new XMLSerializer().serializeToString(doc);
+}
+
 /* ── 渲染 + 建立時間軸 ─────────────────────── */
 async function renderScore(xmlText){
   $("empty").style.display = "none";
@@ -374,14 +455,12 @@ async function renderScore(xmlText){
     drawMetronomeMarks: $("showTempoMarks").checked,
     followCursor: false
   });
-  osmd.TransposeCalculator = new opensheetmusicdisplay.TransposeCalculator();
   osmd.EngravingRules.RenderSingleHorizontalStaffline = true;
   osmd.EngravingRules.PageTopMargin = 1;
   osmd.EngravingRules.PageBottomMargin = 1;
 
-  await osmd.load(xmlText);
-  osmd.Sheet.Transpose = transposeSemitones;
-  osmd.updateGraphic();
+  const finalXml = transposeSemitones ? transposeMusicXML(xmlText, transposeSemitones) : xmlText;
+  await osmd.load(finalXml);
   osmd.zoom = 0.9;
   osmd.render();
 
@@ -408,7 +487,7 @@ function parseXmlTimeline(xmlText){
       const c = p.getElementsByTagName("note").length;
       if (c > bestCount) { bestCount = c; bestPart = p; }
     }
-    if (!bestPart) return { slurRanges: [], pedalRanges: [] };
+    if (!bestPart) return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {} };
 
     let divisions = 1, cursor = 0;
     const slurStarts = {};
@@ -416,6 +495,7 @@ function parseXmlTimeline(xmlText){
     const pedalStack = [];
     const outPedals = [];
     const staffOnsets = {}; // staffNum -> [{tWhole, durWhole, pcs:Set}], 給重複音型偵測用
+    const articMap = {}; // tWhole(定點字串) -> {accent,strongAccent,staccato,staccatissimo,tenuto,detachedLegato,spiccato,softAccent,fermata}
 
     function pitchClassFromNote(noteEl){
       const pitchEl = noteEl.getElementsByTagName("pitch")[0];
@@ -469,6 +549,25 @@ function parseXmlTimeline(xmlText){
                 delete slurStarts[num];
               }
             }
+            // 演奏記號(articulation):重音、斷奏、保持音等,直接讀樂譜上明確標示的記號
+            const artEl = notations.getElementsByTagName("articulations")[0];
+            const flags = {};
+            if (artEl) {
+              if (artEl.getElementsByTagName("accent")[0]) flags.accent = true;
+              if (artEl.getElementsByTagName("strong-accent")[0]) flags.strongAccent = true;
+              if (artEl.getElementsByTagName("staccato")[0]) flags.staccato = true;
+              if (artEl.getElementsByTagName("staccatissimo")[0]) flags.staccatissimo = true;
+              if (artEl.getElementsByTagName("tenuto")[0]) flags.tenuto = true;
+              if (artEl.getElementsByTagName("detached-legato")[0]) flags.detachedLegato = true;
+              if (artEl.getElementsByTagName("spiccato")[0]) flags.spiccato = true;
+              if (artEl.getElementsByTagName("soft-accent")[0]) flags.softAccent = true;
+            }
+            if (notations.getElementsByTagName("fermata")[0]) flags.fermata = true;
+            if (Object.keys(flags).length) {
+              const key = cursor.toFixed(6);
+              const existing = articMap[key] || {};
+              articMap[key] = Object.assign(existing, flags);
+            }
           }
           // 記錄這個音符所屬的譜表(左右手),用來做重複音型偵測
           const staffEl = child.getElementsByTagName("staff")[0];
@@ -493,10 +592,10 @@ function parseXmlTimeline(xmlText){
     for (const staffNum of Object.keys(staffOnsets)) {
       repeatRanges = repeatRanges.concat(detectRepeatingChordRanges(staffOnsets[staffNum]));
     }
-    return { slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges };
+    return { slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges, articMap };
   } catch (e) {
     console.error("讀取踏板/圓滑線資訊失敗:", e);
-    return { slurRanges: [], pedalRanges: [], repeatRanges: [] };
+    return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {} };
   }
 }
 /* 偵測某一手(譜表)裡,音符是否精確循環重複(例如分解和弦C-E-G-C-E-G...),
@@ -640,8 +739,7 @@ function buildTimeline(){
         if (drumKey !== null) {
           notes.push({ drum: true, key: drumKey, durWhole });
         } else {
-          const shiftedFreq = n.Pitch.Frequency * Math.pow(2, transposeSemitones / 12);
-          notes.push({ freq: shiftedFreq, durWhole });
+          notes.push({ freq: n.Pitch.Frequency, durWhole });
         }
       }
     }
@@ -669,6 +767,7 @@ function buildTimeline(){
     const maxDurWhole = ev.notes.length ? Math.max(...ev.notes.map(n => n.durWhole)) : 0;
     const coChordEnd = ev.tWhole + maxDurWhole;
     ev.harmonyEndWhole = rangeEnd != null ? Math.max(rangeEnd, coChordEnd) : coChordEnd;
+    ev.artic = articMap[ev.tWhole.toFixed(6)] || null;
   }
   // 終點
   const lastEv = events[events.length-1];
@@ -999,7 +1098,7 @@ function startAudioFrom(fromSec){
       try {
         const durSec = calib ? Math.max(calibToSec(ev.tWhole + n.durWhole) - t, 0.05) : wholeToSec(n.durWhole);
         if (n.drum) scheduleDrum(n.key, startCtxTime + t);
-        else scheduleNote(n.freq, startCtxTime + t, durSec, ev.legato, ev.pedalOn, chordAnchors, harmonyEndSec);
+        else scheduleNote(n.freq, startCtxTime + t, durSec, ev.legato, ev.pedalOn, chordAnchors, harmonyEndSec, ev.artic);
       } catch (e) {
         errCount++; lastErr = e;
         console.error("排程音符失敗:", e);
@@ -1063,7 +1162,23 @@ function nearestSample(list, targetMidi){
   }
   return best;
 }
-function playSampledInstrument(instKey, freq, when, dur, legato, pedal, chordAnchors, harmonyEndSec){
+/* ── 演奏記號(articulation)套用:重音類調整音量,斷奏類/保持音/延長記號調整時值 ── */
+function applyArticulation(sustain, peakGain, dur, artic){
+  if (!artic) return { sustain, peakGain };
+  let s = sustain, g = peakGain;
+  if (artic.staccatissimo) s = dur * 0.25;       // 極斷奏:非常短
+  else if (artic.spiccato) s = dur * 0.3;        // 跳弓/輕巧斷音:很短
+  else if (artic.staccato) s = dur * 0.5;        // 斷奏:縮短到約一半
+  else if (artic.detachedLegato) s = dur * 0.75; // 半斷音(斷奏+保持音的折衷):稍微縮短
+  if (artic.tenuto) s = Math.max(s, dur * 0.98); // 保持音:確保彈滿全部時值,不被縮短
+  if (artic.fermata) s = s * 1.8;                // 延長記號:明顯拉長
+  if (artic.strongAccent) g = g * 1.5;           // 強音記號(marcato):音量大幅加強
+  else if (artic.accent) g = g * 1.3;            // 重音:音量加強
+  else if (artic.softAccent) g = g * 1.15;       // 次強音:小幅加強
+  return { sustain: s, peakGain: g };
+}
+
+function playSampledInstrument(instKey, freq, when, dur, legato, pedal, chordAnchors, harmonyEndSec, artic){
   const list = instrumentBuffers[instKey];
   if (!list || !list.length) return false;
   const targetMidi = freqToMidi(freq);
@@ -1102,6 +1217,7 @@ function playSampledInstrument(instKey, freq, when, dur, legato, pedal, chordAnc
     if (pedal) { tail = 0.18; holdRatio = 0.9; peakGain = 0.66; }
     else if (legato) tail = 0.6;
   }
+  ({ sustain, peakGain } = applyArticulation(sustain, peakGain, dur, artic));
   // 取樣本身錄音長度可能比需要的延音短,加上尾段循環撐住聲音
   const neededSec = (sustain + tail) * rate; // 換算成取樣原始時間軸(playbackRate影響消耗速度)
   const bufDur = best.buffer.duration;
@@ -1122,23 +1238,23 @@ function playSampledInstrument(instKey, freq, when, dur, legato, pedal, chordAnc
   return true;
 }
 
-function scheduleNote(freq, when, dur, legato, pedal, chordAnchors, harmonyEndSec){
-  if (!$("legatoPedal").checked) { legato = false; pedal = false; harmonyEndSec = null; }
+function scheduleNote(freq, when, dur, legato, pedal, chordAnchors, harmonyEndSec, artic){
+  legato = false; pedal = false; harmonyEndSec = null; // 圓滑/踏板效果已移除,音符一律使用自己原本的時值
   const inst = currentInstrument();
-  if (REAL_INSTRUMENTS[inst] && playSampledInstrument(inst, freq, when, dur, legato, pedal, chordAnchors, harmonyEndSec)) return;
+  if (REAL_INSTRUMENTS[inst] && playSampledInstrument(inst, freq, when, dur, legato, pedal, chordAnchors, harmonyEndSec, artic)) return;
   // 真實取樣尚未載入完成或缺失時,退回合成音色,絕不會沒有聲音
   switch (inst) {
     case "strings":  scheduleStrings(freq, when, dur); break;
     case "flute":    scheduleFlute(freq, when, dur); break;
     case "guitar":   scheduleGuitar(freq, when, dur); break;
     case "clarinet": scheduleClarinet(freq, when, dur); break;
-    default:         schedulePiano(freq, when, dur, legato, pedal, harmonyEndSec);
+    default:         schedulePiano(freq, when, dur, legato, pedal, harmonyEndSec, artic);
   }
 }
 
 $("instrument").addEventListener("change", () => { ensureAudio(); loadInstrumentSamples(currentInstrument()); });
 
-function schedulePiano(freq, when, dur, legato, pedal, harmonyEndSec){
+function schedulePiano(freq, when, dur, legato, pedal, harmonyEndSec, artic){
   const osc = audioCtx.createOscillator();
   const osc2 = audioCtx.createOscillator();
   const g = audioCtx.createGain();
@@ -1147,7 +1263,7 @@ function schedulePiano(freq, when, dur, legato, pedal, harmonyEndSec){
   osc2.type = "sine";    osc2.frequency.value = freq * 2; // 一點泛音
   lp.type = "lowpass";   lp.frequency.value = Math.min(freq * 6, 8000);
   const g2 = audioCtx.createGain(); g2.gain.value = 0.18;
-  const peak = 0.32;
+  let peak = 0.32;
   let sustain, releaseTail;
   if (harmonyEndSec != null) {
     sustain = Math.max(harmonyEndSec - when, dur * 0.9, 0.08);
@@ -1158,6 +1274,7 @@ function schedulePiano(freq, when, dur, legato, pedal, harmonyEndSec){
     if (pedal) { sustain = Math.max(dur * 1.3, 0.08); releaseTail = 0.18; }
     else if (legato) { sustain = Math.max(dur * 1.15, 0.08); releaseTail = 0.35; }
   }
+  ({ sustain, peakGain: peak } = applyArticulation(sustain, peak, dur, artic));
   g.gain.setValueAtTime(0, when);
   g.gain.linearRampToValueAtTime(peak, when + 0.012);
   g.gain.setValueAtTime(peak, when + Math.max(sustain, 0.02)); // 保持住音量,彈滿時值,不要提早衰減
@@ -1652,7 +1769,7 @@ async function exportVideo(cfg){
       for (const n of ev.notes) {
         const durSec = calib ? Math.max(calibToSec(ev.tWhole + n.durWhole) - t, 0.05) : wholeToSec(n.durWhole);
         if (n.drum) scheduleDrum(n.key, startCtxTime + t);
-        else scheduleNote(n.freq, startCtxTime + t, durSec, ev.legato, ev.pedalOn, chordAnchors, harmonyEndSec);
+        else scheduleNote(n.freq, startCtxTime + t, durSec, ev.legato, ev.pedalOn, chordAnchors, harmonyEndSec, ev.artic);
       }
     }
     const total = totalSec();
