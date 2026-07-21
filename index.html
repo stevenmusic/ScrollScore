@@ -1880,15 +1880,22 @@ function xAtSec(sec){
   const w = useCalib() ? calibSecToWhole(sec) : sec * bpm() / 240; // sec → whole
   if (!events.length) return 0;
   if (w <= events[0].tWhole) return events[0].x;
-  for (let i = 0; i < events.length; i++) {
-    const a = events[i];
-    const b = events[i+1] || { tWhole: totalWhole, x: endX };
-    if (w >= a.tWhole && w < b.tWhole) {
-      const f = (w - a.tWhole) / Math.max(b.tWhole - a.tWhole, 1e-6);
-      return a.x + (b.x - a.x) * f;
-    }
+  const lastEv = events[events.length - 1];
+  if (w >= lastEv.tWhole) {
+    const f = (w - lastEv.tWhole) / Math.max(totalWhole - lastEv.tWhole, 1e-6);
+    return lastEv.x + (endX - lastEv.x) * Math.min(Math.max(f, 0), 1);
   }
-  return endX;
+  // 二分搜尋找到 w 所在的區間,不管樂曲多長、播到哪裡,每次呼叫的運算量都差不多,
+  // 不會像逐一掃描那樣越播到後面越慢(這是造成長曲子匯出到後段畫面卡住的真正原因)
+  let lo = 0, hi = events.length - 2;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (events[mid].tWhole <= w) lo = mid; else hi = mid - 1;
+  }
+  const a = events[lo];
+  const b = events[lo + 1] || { tWhole: totalWhole, x: endX };
+  const f = (w - a.tWhole) / Math.max(b.tWhole - a.tWhole, 1e-6);
+  return a.x + (b.x - a.x) * f;
 }
 
 function tick(){
