@@ -176,7 +176,7 @@ input[type=file]{display:none}
   <button class="btn primary" id="playBtn" disabled>▶ 播放</button>
   <button class="btn" id="stopBtn" disabled>■ 停止</button>
   <div class="spacer"></div>
-  <div class="tempo-box">速度 <input type="range" id="tempo" min="40" max="220" value="100"><b id="tempoVal">100</b></div>
+  <div class="tempo-box">速度 <input type="range" id="tempo" min="40" max="400" value="100"><b id="tempoVal">100</b></div>
   <button class="btn" id="settingsToggle" style="display:flex;align-items:center;gap:6px">
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15a3 3 0 100-6 3 3 0 000 6z"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
     設定
@@ -370,9 +370,21 @@ $("fileInput").addEventListener("change", async e => {
     articMap = parsed.articMap;
     noteStaffMap = parsed.noteStaffMap;
     arpMap = parsed.arpMap;
+    let tempoNote = "";
+    if (parsed.soundTempo && parsed.soundTempo > 0) {
+      const t = Math.round(Math.min(400, Math.max(40, parsed.soundTempo)));
+      $("tempo").value = t;
+      $("tempoVal").textContent = t;
+      if (parsed.timeSig && parsed.timeSig.isCompound) {
+        const dottedQuarterEquiv = (t / 1.5).toFixed(1);
+        tempoNote = "(偵測到" + parsed.timeSig.beats + "/" + parsed.timeSig.beatType + "複拍子,已自動套用樂譜內建速度" + t + ",相當於附點四分音符=" + dottedQuarterEquiv + ")";
+      } else {
+        tempoNote = "(已自動套用樂譜內建速度" + t + ")";
+      }
+    }
     await renderScore(xmlText);
     lastXmlText = xmlText;
-    setStatus("已載入:" + file.name + "(" + events.length + " 個節點," + repeatChordRanges.length + " 組重複音型)");
+    setStatus("已載入:" + file.name + "(" + events.length + " 個節點," + repeatChordRanges.length + " 組重複音型)" + tempoNote);
     loadInstrumentSamples(currentInstrument());
   } catch (err) {
     setStatus("載入失敗:" + (err.message || err));
@@ -524,7 +536,28 @@ function parseXmlTimeline(xmlText){
       const c = p.getElementsByTagName("note").length;
       if (c > bestCount) { bestCount = c; bestPart = p; }
     }
-    if (!bestPart) return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, noteStaffMap: {}, arpMap: {} };
+    // 讀取樂譜本身內建的速度資訊(MusicXML規範規定這個數字永遠是換算成四分音符為單位,
+    // 不管拍號是不是複拍子、不管顯示的是不是附點四分音符,都不用我們自己再做換算)
+    let soundTempo = null;
+    const soundEl = doc.getElementsByTagName("sound");
+    for (const s of Array.from(soundEl)) {
+      const t = s.getAttribute("tempo");
+      if (t) { soundTempo = parseFloat(t); break; }
+    }
+    // 讀取拍號,判斷是不是複拍子(3/8,6/8,9/8,12/8這種),純粹給使用者參考用的資訊顯示
+    let timeSig = null;
+    const timeEl = doc.getElementsByTagName("time")[0];
+    if (timeEl) {
+      const beatsEl = timeEl.getElementsByTagName("beats")[0];
+      const beatTypeEl = timeEl.getElementsByTagName("beat-type")[0];
+      if (beatsEl && beatTypeEl) {
+        const beats = parseInt(beatsEl.textContent, 10);
+        const beatType = parseInt(beatTypeEl.textContent, 10);
+        const isCompound = beatType === 8 && beats % 3 === 0 && beats > 0;
+        timeSig = { beats, beatType, isCompound };
+      }
+    }
+    if (!bestPart) return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, noteStaffMap: {}, arpMap: {}, soundTempo, timeSig };
 
     let divisions = 1, cursor = 0, lastStaff = 1;
     const slurStarts = {};
@@ -653,10 +686,10 @@ function parseXmlTimeline(xmlText){
     for (const staffNum of Object.keys(staffOnsets)) {
       repeatRanges = repeatRanges.concat(detectRepeatingChordRanges(staffOnsets[staffNum]));
     }
-    return { slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges, articMap, noteStaffMap, arpMap };
+    return { slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges, articMap, noteStaffMap, arpMap, soundTempo, timeSig };
   } catch (e) {
     console.error("讀取踏板/圓滑線資訊失敗:", e);
-    return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, noteStaffMap: {}, arpMap: {} };
+    return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, noteStaffMap: {}, arpMap: {}, soundTempo: null, timeSig: null };
   }
 }
 /* 偵測某一手(譜表)裡,音符是否精確循環重複(例如分解和弦C-E-G-C-E-G...),
