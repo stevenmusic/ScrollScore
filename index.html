@@ -672,8 +672,12 @@ function parseXmlTimeline(xmlText){
               const noteMidiForArp = midiFromNote(child);
               if (noteMidiForArp !== null) {
                 const key = cursor.toFixed(6);
-                if (!arpMap[key]) arpMap[key] = { direction: arpEl.getAttribute("direction") || "up", midis: new Set() };
-                arpMap[key].midis.add(Math.round(noteMidiForArp) + "_" + staffNumEarly);
+                const groupNum = arpEl.getAttribute("number") || "1";
+                if (!arpMap[key]) arpMap[key] = { groups: {} };
+                if (!arpMap[key].groups[groupNum]) {
+                  arpMap[key].groups[groupNum] = { direction: arpEl.getAttribute("direction") || "up", notes: new Set() };
+                }
+                arpMap[key].groups[groupNum].notes.add(Math.round(noteMidiForArp) + "_" + staffNumEarly);
               }
             }
           }
@@ -857,19 +861,41 @@ function buildTimeline(){
     const arpInfo = findNearestEntry(arpEntries, tWhole, MARK_MATCH_EPSILON);
     let arpCount = 0, arpGapBeforeWhole = null;
     if (arpInfo && notes.length > 1) {
-      // 只挑出「確切被標記琶音」的音符,同時間點裡沒被標記的音符(例如同時按住的持續音)維持正常發聲,不跟著滾奏
-      const pitched = notes.filter(n => {
-        if (n.drum || !n.freq) return false;
+      // 依編號分組:同編號=同一條線(可能跨手,一起滾奏);不同編號=各自獨立的線(例如左右手分開,但要同時起始)
+      const groupNums = Object.keys(arpInfo.groups);
+      const byGroup = {};
+      for (const gn of groupNums) byGroup[gn] = [];
+      for (const n of notes) {
+        if (n.drum || !n.freq) continue;
         const origMidi = Math.round(freqToMidi(n.freq)) - transposeSemitones;
-        return arpInfo.midis.has(origMidi + "_" + (n.staff || 1));
-      });
-      if (pitched.length > 1) {
-        pitched.sort((a, b) => arpInfo.direction === "down" ? b.freq - a.freq : a.freq - b.freq);
-        // 最後一個音(依方向決定是最高或最低音)準時落在拍點上,前面幾個音壓縮在拍點前一個很短的區間內,
-        // 第一個音只會非常靠近拍點(不會展開太開),這樣才不會蓋到前一個拍點的旋律音
+        const noteKey = origMidi + "_" + (n.staff || 1);
+        for (const gn of groupNums) {
+          if (arpInfo.groups[gn].notes.has(noteKey)) { byGroup[gn].push(n); break; }
+        }
+      }
+      const activeGroups = groupNums.filter(gn => byGroup[gn].length > 1);
+      if (activeGroups.length === 1) {
+        // 只有一組(可能是跨手單一條線,或只有一手有琶音):維持原本邏輯,最後一個音準時落在拍點上
+        const gn = activeGroups[0];
+        const pitched = byGroup[gn];
+        const dir = arpInfo.groups[gn].direction;
+        pitched.sort((a, b) => dir === "down" ? b.freq - a.freq : a.freq - b.freq);
         const n = pitched.length;
         pitched.forEach((note, i) => { note.rollIndex = i - (n - 1); });
         arpCount = n;
+      } else if (activeGroups.length > 1) {
+        // 多組獨立的線(例如左右手分開的兩條琶音):每一組各自的第一個音要同時起始,
+        // 用最長的那一組當基準,其他組跟著對齊起始點,不是全部混在一起滾奏
+        const maxSize = Math.max(...activeGroups.map(gn => byGroup[gn].length));
+        for (const gn of activeGroups) {
+          const pitched = byGroup[gn];
+          const dir = arpInfo.groups[gn].direction;
+          pitched.sort((a, b) => dir === "down" ? b.freq - a.freq : a.freq - b.freq);
+          pitched.forEach((note, i) => { note.rollIndex = i - (maxSize - 1); });
+        }
+        arpCount = maxSize;
+      }
+      if (arpCount > 0) {
         arpGapBeforeWhole = tWhole - (events.length ? events[events.length - 1].tWhole : tWhole);
       }
     }
