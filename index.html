@@ -310,6 +310,7 @@ let events = [];        // {tWhole, x, notes:[{freq,durWhole}], legato, pedalOn}
 let slurRanges = [], pedalRanges = [], repeatChordRanges = [];
 let articMap = {};
 let noteStaffMap = {};
+let arpMap = {};
 let calibrating = false, calibStartPerf = 0, calibTapIndex = 0;
 let calibrationMap = []; // [{tWhole, realSec}] 已排序,由 tap-along 或自動偵測建立
 let endX = 0, totalWhole = 0;
@@ -320,6 +321,7 @@ let scheduled = [];     // 已排程的 audio nodes,停止時關閉
 let lastXmlText = null;
 let transposeSemitones = 0;
 const PLAYLINE_RATIO = 0.25;
+const ARP_ROLL_GAP = 0.045; // 琶音滾奏,每個音之間錯開的秒數
 
 /* ── 載入檔案 ──────────────────────────────── */
 $("loadBtn").addEventListener("click", () => $("fileInput").click());
@@ -355,6 +357,7 @@ $("fileInput").addEventListener("change", async e => {
     repeatChordRanges = parsed.repeatRanges;
     articMap = parsed.articMap;
     noteStaffMap = parsed.noteStaffMap;
+    arpMap = parsed.arpMap;
     await renderScore(xmlText);
     lastXmlText = xmlText;
     setStatus("已載入:" + file.name + "(" + events.length + " 個節點," + repeatChordRanges.length + " 組重複音型)");
@@ -509,7 +512,7 @@ function parseXmlTimeline(xmlText){
       const c = p.getElementsByTagName("note").length;
       if (c > bestCount) { bestCount = c; bestPart = p; }
     }
-    if (!bestPart) return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, noteStaffMap: {} };
+    if (!bestPart) return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, noteStaffMap: {}, arpMap: {} };
 
     let divisions = 1, cursor = 0;
     const slurStarts = {};
@@ -518,6 +521,7 @@ function parseXmlTimeline(xmlText){
     const outPedals = [];
     const staffOnsets = {}; // staffNum -> [{tWhole, durWhole, pcs:Set}], 給重複音型偵測用
     const articMap = {}; // tWhole(定點字串) -> {accent,strongAccent,staccato,staccatissimo,tenuto,detachedLegato,spiccato,softAccent,fermata}
+    const arpMap = {}; // tWhole(定點字串) -> "up"/"down",分解和弦(琶音)標記
     const noteStaffMap = {}; // "tWhole_midi" -> staffNum,給鍵盤左右手上色用(用原始未移調的音高當key)
 
     function midiFromNote(noteEl){
@@ -606,6 +610,9 @@ function parseXmlTimeline(xmlText){
               const existing = articMap[key] || {};
               articMap[key] = Object.assign(existing, flags);
             }
+            // 分解和弦(琶音)記號:資料上是同時按下的和絃,加了這個波浪線記號代表要滾奏,不是同時彈
+            const arpEl = notations.getElementsByTagName("arpeggiate")[0];
+            if (arpEl) arpMap[cursor.toFixed(6)] = arpEl.getAttribute("direction") || "up";
           }
           // 記錄這個音符所屬的譜表(左右手),用來做重複音型偵測跟鍵盤上色
           const staffEl = child.getElementsByTagName("staff")[0];
@@ -632,10 +639,10 @@ function parseXmlTimeline(xmlText){
     for (const staffNum of Object.keys(staffOnsets)) {
       repeatRanges = repeatRanges.concat(detectRepeatingChordRanges(staffOnsets[staffNum]));
     }
-    return { slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges, articMap, noteStaffMap };
+    return { slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges, articMap, noteStaffMap, arpMap };
   } catch (e) {
     console.error("讀取踏板/圓滑線資訊失敗:", e);
-    return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, noteStaffMap: {} };
+    return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, noteStaffMap: {}, arpMap: {} };
   }
 }
 /* 偵測某一手(譜表)裡,音符是否精確循環重複(例如分解和弦C-E-G-C-E-G...),
@@ -784,6 +791,12 @@ function buildTimeline(){
           notes.push({ freq: n.Pitch.Frequency, durWhole, staff });
         }
       }
+    }
+    const arpDir = arpMap[tWhole.toFixed(6)];
+    if (arpDir && notes.length > 1) {
+      const pitched = notes.filter(n => !n.drum && n.freq);
+      pitched.sort((a, b) => arpDir === "down" ? b.freq - a.freq : a.freq - b.freq);
+      pitched.forEach((n, i) => { n.rollIndex = i; });
     }
     events.push({ tWhole, x, notes });
     cursor.next();
@@ -1136,9 +1149,10 @@ function startAudioFrom(fromSec){
       : null;
     for (const n of ev.notes) {
       try {
+        const rollT = (n.rollIndex || 0) * ARP_ROLL_GAP;
         const durSec = calib ? Math.max(calibToSec(ev.tWhole + n.durWhole) - t, 0.05) : wholeToSec(n.durWhole);
-        if (n.drum) scheduleDrum(n.key, startCtxTime + t);
-        else scheduleNote(n.freq, startCtxTime + t, durSec, ev.legato, ev.pedalOn, chordAnchors, harmonyEndSec, ev.artic);
+        if (n.drum) scheduleDrum(n.key, startCtxTime + t + rollT);
+        else scheduleNote(n.freq, startCtxTime + t + rollT, durSec, ev.legato, ev.pedalOn, chordAnchors, harmonyEndSec, ev.artic);
       } catch (e) {
         errCount++; lastErr = e;
         console.error("排程音符失敗:", e);
@@ -1224,15 +1238,48 @@ rebuildKeyboardRange(); // 初始建立(此時還沒有樂譜,會用預設88鍵)
 
 function drawKeyboard(ctx, x, y, w, h, activeMap){
   const whiteW = w / KB_WHITE_KEYS.length;
+
+  // 底板陰影,讓整個鍵盤看起來有深度
+  const baseGrad = ctx.createLinearGradient(0, y, 0, y + h);
+  baseGrad.addColorStop(0, "#050403");
+  baseGrad.addColorStop(1, "#0C0A07");
+  ctx.fillStyle = baseGrad;
+  ctx.fillRect(x, y, w, h);
+
+  const rr = (cx, cy, cw, ch, r) => {
+    if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(cx, cy, cw, ch, r); }
+    else { ctx.beginPath(); ctx.rect(cx, cy, cw, ch); }
+  };
+
+  // 白鍵:漸層 + 立體邊緣 + 按下時的光暈
   for (let i = 0; i < KB_WHITE_KEYS.length; i++) {
     const m = KB_WHITE_KEYS[i];
     const kx = x + i * whiteW;
+    const kw = whiteW - 1;
     const staff = activeMap.get(m);
-    ctx.fillStyle = staff === 2 ? "#3FBFAE" : staff === 1 ? "#F2B94B" : "#FFFDF6";
-    ctx.fillRect(kx, y, whiteW - 1, h);
-    ctx.strokeStyle = "#2a2a2a"; ctx.lineWidth = 1;
-    ctx.strokeRect(kx, y, whiteW - 1, h);
+    const baseColor = staff === 2 ? ["#5FE0CE", "#22887A"] : staff === 1 ? ["#FFDA7A", "#C4901A"] : ["#FFFDF6", "#DDD6C4"];
+    const g = ctx.createLinearGradient(kx, y, kx, y + h);
+    g.addColorStop(0, baseColor[0]);
+    g.addColorStop(0.85, baseColor[1]);
+    g.addColorStop(1, baseColor[1]);
+    if (staff) {
+      ctx.save();
+      ctx.shadowColor = staff === 2 ? "rgba(63,191,174,0.85)" : "rgba(242,185,75,0.85)";
+      ctx.shadowBlur = 14;
+    }
+    rr(kx, y, kw, h, [3, 3, 6, 6]);
+    ctx.fillStyle = g;
+    ctx.fill();
+    if (staff) ctx.restore();
+    // 鍵縫陰影
+    ctx.strokeStyle = "rgba(0,0,0,0.35)"; ctx.lineWidth = 1;
+    rr(kx, y, kw, h, [3, 3, 6, 6]); ctx.stroke();
+    // 頂端高光細線,增加立體感
+    ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(kx + 2, y + 1); ctx.lineTo(kx + kw - 2, y + 1); ctx.stroke();
   }
+
+  // 黑鍵:漸層 + 陰影,疊在白鍵上方
   const blackH = h * 0.6, blackW = whiteW * 0.62;
   for (let m = KB_LOW; m <= KB_HIGH; m++) {
     if (!isBlackKey(m)) continue;
@@ -1242,21 +1289,43 @@ function drawKeyboard(ctx, x, y, w, h, activeMap){
     if (li === undefined) continue;
     const kx = x + (li + 1) * whiteW - blackW / 2;
     const staff = activeMap.get(m);
-    ctx.fillStyle = staff === 2 ? "#278F82" : staff === 1 ? "#C4901A" : "#161616";
-    ctx.fillRect(kx, y, blackW, blackH);
+    const baseColor = staff === 2 ? ["#3FBFAE", "#0F5F56"] : staff === 1 ? ["#F2B94B", "#8A6410"] : ["#3a3a3a", "#0a0a0a"];
+    // 黑鍵投影到白鍵上
+    ctx.fillStyle = "rgba(0,0,0,0.45)";
+    ctx.fillRect(kx - 1, y + blackH, blackW + 2, 6);
+
+    const g = ctx.createLinearGradient(kx, y, kx, y + blackH);
+    g.addColorStop(0, baseColor[0]);
+    g.addColorStop(1, baseColor[1]);
+    if (staff) {
+      ctx.save();
+      ctx.shadowColor = staff === 2 ? "rgba(63,191,174,0.9)" : "rgba(242,185,75,0.9)";
+      ctx.shadowBlur = 12;
+    }
+    rr(kx, y, blackW, blackH, [2, 2, 4, 4]);
+    ctx.fillStyle = g;
+    ctx.fill();
+    if (staff) ctx.restore();
+    // 黑鍵頂端光澤
+    ctx.fillStyle = "rgba(255,255,255,0.18)";
+    ctx.fillRect(kx + blackW * 0.15, y + 2, blackW * 0.3, blackH * 0.35);
   }
 }
 
 /* 找出某個時間點正在發聲的音符(midi -> staff),供鍵盤高亮使用 */
+const KB_MIN_VISUAL_SEC = 0.09; // 最短可視時間,避免極快的音符剛好卡在兩次畫面更新中間而完全沒被畫出來
 function getActiveNotesAt(sec, calib){
   const map = new Map();
   for (const ev of events) {
-    const t = calib ? calibToSec(ev.tWhole) : wholeToSec(ev.tWhole);
-    if (t > sec) break;
+    const t0 = calib ? calibToSec(ev.tWhole) : wholeToSec(ev.tWhole);
+    if (t0 > sec) break;
     for (const n of ev.notes) {
       if (n.drum || !n.freq) continue;
+      const rollT = (n.rollIndex || 0) * ARP_ROLL_GAP;
+      const t = t0 + rollT;
       // 鍵盤只反映樂譜寫的拍子時值,不要被踏板/和聲延音影響(那是音響效果,不是手指還按著琴鍵)
-      const endSec = calib ? calibToSec(ev.tWhole + n.durWhole) : wholeToSec(ev.tWhole + n.durWhole);
+      const writtenEnd = calib ? calibToSec(ev.tWhole + n.durWhole) : wholeToSec(ev.tWhole + n.durWhole);
+      const endSec = Math.max(writtenEnd + rollT, t + KB_MIN_VISUAL_SEC);
       if (sec >= t && sec < endSec) {
         const midi = Math.round(freqToMidi(n.freq));
         map.set(midi, n.staff || 1);
@@ -1935,9 +2004,10 @@ async function exportVideo(cfg){
         ? startCtxTime + (calib ? calibToSec(ev.harmonyEndWhole) : wholeToSec(ev.harmonyEndWhole))
         : null;
       for (const n of ev.notes) {
+        const rollT = (n.rollIndex || 0) * ARP_ROLL_GAP;
         const durSec = calib ? Math.max(calibToSec(ev.tWhole + n.durWhole) - t, 0.05) : wholeToSec(n.durWhole);
-        if (n.drum) scheduleDrum(n.key, startCtxTime + t);
-        else scheduleNote(n.freq, startCtxTime + t, durSec, ev.legato, ev.pedalOn, chordAnchors, harmonyEndSec, ev.artic);
+        if (n.drum) scheduleDrum(n.key, startCtxTime + t + rollT);
+        else scheduleNote(n.freq, startCtxTime + t + rollT, durSec, ev.legato, ev.pedalOn, chordAnchors, harmonyEndSec, ev.artic);
       }
     }
     const total = totalSec();
