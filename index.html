@@ -16,7 +16,9 @@
   --gold-bright:#EFD48A;
   --ivory:#F4ECDA;
   --muted:#8A7D5F;
+  --muted-bright:#B6A576;
   --line:#2A2415;
+  color-scheme:dark; /* 原生 <select> 彈出選單改用系統深色樣式,避免跳出淺色視窗破壞黑金質感 */
 }
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{height:100%;overflow:hidden}
@@ -31,6 +33,7 @@ header{
   gap:8px 14px;justify-content:space-between;
   padding:10px 14px;border-bottom:1px solid var(--line);
   background:var(--panel);
+  position:relative;z-index:65; /* 要蓋過 settingsBackdrop/settingsPanel,不然面板打開後蓋住整個視窗,「設定」鈕會點不到 */
 }
 .header-left,.header-right{display:flex;align-items:center;flex-wrap:wrap;gap:8px 10px}
 header h1{
@@ -51,7 +54,7 @@ header h1 span{color:var(--ivory);font-weight:600}
 .btn:active{background:var(--gold);color:var(--bg)}
 .btn.primary{background:var(--gold);color:var(--bg);font-weight:700}
 .btn.primary:disabled{opacity:.35}
-.btn:disabled{opacity:.35}
+.btn:disabled{opacity:.35;cursor:not-allowed}
 /* 樂譜載入前,播放/停止先整個隱藏(而不只是變淡),Header 只留「載入樂譜」這個唯一動作,
    載入成功後才讓它們出現在原本的位置 */
 .header-left .btn:disabled{display:none}
@@ -166,6 +169,15 @@ input[type=range]::-webkit-slider-thumb{
   .btn{height:42px}
   input[type=range]::-webkit-slider-thumb{width:24px;height:24px}
   #settingsPanel select{min-height:38px}
+  #progressbar{height:8px}
+}
+#stage.dragover::after{
+  content:"放開以載入樂譜";
+  position:absolute;inset:10px;z-index:9;pointer-events:none;
+  display:flex;align-items:center;justify-content:center;
+  border:2px dashed var(--gold);border-radius:18px;
+  background:rgba(201,162,75,.08);
+  color:var(--gold-bright);font-size:15px;font-weight:600;letter-spacing:.05em;
 }
 #scoreBg{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none;z-index:1}
 #scroller{will-change:transform;padding:0 0 0 0;position:relative;z-index:2}
@@ -205,11 +217,15 @@ body.score-loaded #playline{display:block}
 footer{
   padding:10px 14px calc(10px + env(safe-area-inset-bottom));
   border-top:1px solid var(--line);background:var(--panel);
-  font-size:12px;color:var(--muted);display:flex;gap:12px;align-items:center;
+  font-size:12px;color:var(--muted-bright);display:flex;gap:12px;align-items:center;
 }
-#progressbar{flex:1;height:3px;background:var(--line);border-radius:2px;overflow:hidden}
-#progressfill{height:100%;width:0%;background:var(--gold);transition:width .1s linear}
+#progressbar{flex:1;height:3px;background:var(--line);border-radius:2px;position:relative;cursor:pointer}
+#progressfill{height:100%;width:0%;background:var(--gold);transition:width .1s linear;border-radius:2px}
+#loopRegion{position:absolute;top:0;bottom:0;background:rgba(201,162,75,.3);display:none;pointer-events:none}
+.loop-marker{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--gold-bright);display:none;pointer-events:none;box-shadow:0 0 4px rgba(239,212,138,.8)}
 #status{white-space:nowrap;max-width:55%;overflow:hidden;text-overflow:ellipsis}
+#timeLabel{font-variant-numeric:tabular-nums}
+#kbdHint{flex:none;font-size:13px;opacity:.6;cursor:help}
 /* ── 錄影模式 ───────────────────── */
 body.recording header, body.recording footer{display:none}
 body.recording #stage{background:#FFFDF6}
@@ -320,7 +336,7 @@ input[type=file]{display:none}
 <div id="settingsBackdrop"></div>
 
 <div id="settingsPanel">
-  <div class="tempo-box">移調 <button class="btn" id="transDown" style="padding:4px 10px" disabled>−</button><b id="transVal">原調</b><button class="btn" id="transUp" style="padding:4px 10px" disabled>＋</button></div>
+  <div class="tempo-box">移調 <button class="btn" id="transDown" style="padding:4px 10px" disabled title="請先載入樂譜">−</button><b id="transVal">原調</b><button class="btn" id="transUp" style="padding:4px 10px" disabled title="請先載入樂譜">＋</button></div>
   <div class="tempo-box">樂器
     <select id="instrument">
       <option value="piano">鋼琴</option>
@@ -343,8 +359,15 @@ input[type=file]{display:none}
   <div class="tempo-box"><label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="legatoPedal" checked style="width:16px;height:16px">圓滑/踏板效果</label></div>
   <div class="tempo-box">背景透明度 <input type="range" id="scoreBgOpacity" min="0" max="100" value="0"><b id="scoreBgOpacityVal">0</b></div>
   <div class="tempo-box"><label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="showTempoMarks" style="width:16px;height:16px">顯示速度記號</label></div>
-  <button class="btn" id="recBtn" disabled>錄影模式</button>
-  <button class="btn" id="exportBtn" disabled><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m-5-5l5 5 5-5M4 21h16"/></svg>匯出影片</button>
+  <div class="tempo-box"><label style="display:flex;align-items:center;gap:6px;cursor:pointer" title="播放前先敲一小節節拍器,留時間把手放到樂器上"><input type="checkbox" id="countIn" style="width:16px;height:16px">預備拍</label></div>
+  <div class="tempo-box">
+    <label style="display:flex;align-items:center;gap:6px;cursor:pointer" title="在下方進度條標出 A、B 兩點,循環播放時只會反覆這個區間,方便針對特定段落練習"><input type="checkbox" id="loopEnabled" style="width:16px;height:16px">區間循環</label>
+    <button class="btn" id="loopSetA" style="padding:4px 10px" disabled title="請先載入樂譜">設 A</button>
+    <button class="btn" id="loopSetB" style="padding:4px 10px" disabled title="請先載入樂譜">設 B</button>
+    <button class="btn" id="loopClear" style="padding:4px 10px" disabled title="請先載入樂譜">清除</button>
+  </div>
+  <button class="btn" id="recBtn" disabled title="請先載入樂譜">錄影模式</button>
+  <button class="btn" id="exportBtn" disabled title="請先載入樂譜"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m-5-5l5 5 5-5M4 21h16"/></svg>匯出影片</button>
 </div>
 
 <div style="display:none">
@@ -421,8 +444,9 @@ input[type=file]{display:none}
 
 <footer>
   <span id="status">尚未載入樂譜</span>
-  <div id="progressbar"><div id="progressfill"></div></div>
+  <div id="progressbar"><div id="progressfill"></div><div id="loopRegion"></div><div id="loopMarkerA" class="loop-marker"></div><div id="loopMarkerB" class="loop-marker"></div></div>
   <span id="timeLabel">0:00 / 0:00</span>
+  <span id="kbdHint" title="快捷鍵:Space 播放/暫停、Esc 或 R 停止、↑↓ 調整速度">⌨️</span>
 </footer>
 
 <script>
@@ -436,6 +460,8 @@ let events = [];        // {tWhole, x, notes:[{freq,durWhole}], legato, pedalOn}
 let slurRanges = [], pedalRanges = [], repeatChordRanges = [];
 let articMap = {};
 let isDrumScore = false;
+let scoreTimeSig = null; // {beats, beatType, isCompound},用來估算預備拍要敲幾下(預設抓拍號分子,抓不到就用4下)
+let loopAWhole = null, loopBWhole = null; // A-B 循環練習區間,存全音符位置(跟調速無關,不會因為改BPM而跑掉)
 let importedAudioBuffer = null; // 使用者匯入的音檔(解碼後),有值時播放/匯出都改用這個,不再合成/取樣
 let importedAudioName = null;
 let crossNoteheadEntries = {}; // midi(取整數) -> 已排序的 {t,v} 陣列,記錄哪些時間點是打叉符頭(rim click等特殊擊法),用 findNearestEntry 容許誤差比對
@@ -519,8 +545,7 @@ document.addEventListener("click", e => {
   $("tempoPopover").classList.remove("open");
 });
 function syncTempoDisplay(){ $("tempoDisplay").textContent = bpm() + " BPM"; }
-$("fileInput").addEventListener("change", async e => {
-  const file = e.target.files[0];
+async function loadScoreFile(file){
   if (!file) return;
   stopPlayback();
   setStatus("解析中:" + file.name);
@@ -553,6 +578,7 @@ $("fileInput").addEventListener("change", async e => {
     arpMap = parsed.arpMap;
     articEntries = buildSortedEntries(articMap);
     arpEntries = buildSortedEntries(arpMap);
+    scoreTimeSig = parsed.timeSig;
     let tempoNote = "";
     if (parsed.soundTempo && parsed.soundTempo > 0) {
       const t = Math.round(Math.min(400, Math.max(40, parsed.soundTempo)));
@@ -573,7 +599,36 @@ $("fileInput").addEventListener("change", async e => {
   } catch (err) {
     setStatus("載入失敗:" + (err.message || err));
   }
+}
+$("fileInput").addEventListener("change", async e => {
+  await loadScoreFile(e.target.files[0]);
   e.target.value = "";
+});
+
+/* ── 拖放檔案到樂譜區直接載入(桌面版方便) ─────────────────── */
+const SCORE_FILE_RE = /\.(xml|musicxml|mxl)$/i;
+let dragDepth = 0;
+$("stage").addEventListener("dragenter", e => {
+  if (!Array.from(e.dataTransfer.types || []).includes("Files")) return;
+  e.preventDefault();
+  dragDepth++;
+  $("stage").classList.add("dragover");
+});
+$("stage").addEventListener("dragover", e => {
+  if (!Array.from(e.dataTransfer.types || []).includes("Files")) return;
+  e.preventDefault();
+});
+$("stage").addEventListener("dragleave", () => {
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (dragDepth === 0) $("stage").classList.remove("dragover");
+});
+$("stage").addEventListener("drop", async e => {
+  e.preventDefault();
+  dragDepth = 0;
+  $("stage").classList.remove("dragover");
+  const file = Array.from(e.dataTransfer.files || []).find(f => SCORE_FILE_RE.test(f.name));
+  if (!file) { setStatus("請拖曳 .musicxml / .xml / .mxl 檔案"); return; }
+  await loadScoreFile(file);
 });
 
 async function extractMXL(file){
@@ -709,7 +764,14 @@ async function renderScore(xmlText){
   $("exportBtn").disabled = false;
   $("transUp").disabled = false;
   $("transDown").disabled = false;
+  $("loopSetA").disabled = false;
+  $("loopSetB").disabled = false;
+  $("loopClear").disabled = false;
+  for (const id of ["recBtn", "exportBtn", "transUp", "transDown", "loopSetA", "loopSetB", "loopClear"]) $(id).removeAttribute("title");
   $("calibStartBtn").disabled = false;
+  loopAWhole = loopBWhole = null;
+  $("loopEnabled").checked = false;
+  updateLoopMarkers();
   updateTimeLabel(0);
 }
 
@@ -1199,6 +1261,9 @@ function totalSec(){
   if ($("useCalibration").checked && calibrationMap.length >= 2) return calibrationMap[calibrationMap.length-1].realSec;
   return wholeToSec(totalWhole);
 }
+/* 秒數 → 全音符位置(A-B 循環標記存這個單位,才不會被中途調速搞亂區間) */
+function secToWholeAny(sec){ return useCalib() ? calibSecToWhole(sec) : sec * bpm() / 240; }
+function wholeToSecAny(w){ return useCalib() ? calibToSec(w) : wholeToSec(w); }
 
 /* ── 校準時間換算(tap-along / 自動拍點偵測共用) ── */
 function calibToSec(w){
@@ -1399,13 +1464,12 @@ $("tempo").addEventListener("input", () => {
     startAudioFrom(cur);
   }
   updateTimeLabel(playing ? currentSec() : pausedAtSec);
+  updateLoopMarkers(); // A/B 標記是用全音符位置存的,秒數換算會隨 BPM 改變,要重新算百分比位置
 });
 
-// 速度數字改成可以直接點擊輸入,不用只靠拖曳滑桿(滑桿範圍 40~400 橫跨很大,拖曳很難精準停在某個特定數字上)
-$("tempoVal").addEventListener("change", () => {
-  let t = parseInt($("tempoVal").value, 10);
-  if (isNaN(t)) t = bpm();
-  t = Math.min(400, Math.max(40, t));
+/* 套用一個新的 BPM 數值:同步滑桿/數字框/小按鈕顯示,播放中的話從目前位置以新速度重新排程 */
+function applyTempo(t){
+  t = Math.min(400, Math.max(40, Math.round(t)));
   $("tempoVal").value = t;
   $("tempo").value = t;
   syncTempoDisplay();
@@ -1415,6 +1479,37 @@ $("tempoVal").addEventListener("change", () => {
     startAudioFrom(cur);
   }
   updateTimeLabel(playing ? currentSec() : pausedAtSec);
+  updateLoopMarkers();
+}
+
+// 速度數字改成可以直接點擊輸入,不用只靠拖曳滑桿(滑桿範圍 40~400 橫跨很大,拖曳很難精準停在某個特定數字上)
+$("tempoVal").addEventListener("change", () => {
+  let t = parseInt($("tempoVal").value, 10);
+  if (isNaN(t)) t = bpm();
+  applyTempo(t);
+});
+
+/* ── 鍵盤快捷鍵:方便放在譜架/桌上練習時不用點螢幕 ──────────
+   Space 播放/暫停、Esc 或 R 停止回到開頭、↑↓ 微調 BPM */
+document.addEventListener("keydown", e => {
+  const tag = document.activeElement ? document.activeElement.tagName : "";
+  if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+  if (document.body.classList.contains("recording") || exporting) return;
+  if ($("formatOverlay").classList.contains("show") || $("exportOverlay").classList.contains("show")) return;
+  if (!events.length) return;
+  if (e.code === "Space") {
+    e.preventDefault();
+    if (playing) pausePlayback(); else beginPlayback(pausedAtSec);
+  } else if (e.code === "Escape" || e.key === "r" || e.key === "R") {
+    e.preventDefault();
+    stopPlayback();
+  } else if (e.code === "ArrowUp") {
+    e.preventDefault();
+    applyTempo(bpm() + 1);
+  } else if (e.code === "ArrowDown") {
+    e.preventDefault();
+    applyTempo(bpm() - 1);
+  }
 });
 
 /* ── 移調 ─────────────────────────────────── */
@@ -1462,7 +1557,8 @@ $("showTempoMarks").addEventListener("change", async () => {
 /* ── 播放控制 ─────────────────────────────── */
 $("playBtn").addEventListener("click", () => {
   if (!events.length) return;
-  if (playing) { pausePlayback(); } else { startPlayback(pausedAtSec); }
+  if (countingIn) { countInCancelled = true; setPlayBtnState(false); setStatus(""); countingIn = false; return; }
+  if (playing) { pausePlayback(); } else { beginPlayback(pausedAtSec); }
 });
 $("stopBtn").addEventListener("click", stopPlayback);
 
@@ -1487,8 +1583,50 @@ function startPlayback(fromSec){
   ensureAudio();
   playing = true;
   setPlayBtnState(true);
+  acquireWakeLock(); // 播放中避免螢幕自動熄滅(練習/放在譜架上看譜時尤其需要)
   startAudioFrom(fromSec || 0);
   rafId = requestAnimationFrame(tick);
+}
+
+/* ── 預備拍(Count-in):播放前先敲一小節節拍器,留時間把手放到樂器/譜架前 ── */
+function scheduleMetronomeClick(when, accent){
+  const osc = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  osc.type = "square";
+  osc.frequency.value = accent ? 1600 : 1000;
+  g.gain.setValueAtTime(0.0001, when);
+  g.gain.exponentialRampToValueAtTime(accent ? 0.5 : 0.32, when + 0.004);
+  g.gain.exponentialRampToValueAtTime(0.0001, when + 0.05);
+  osc.connect(g); g.connect(masterGain);
+  osc.start(when); osc.stop(when + 0.06);
+}
+function countInClicks(){
+  if (scoreTimeSig && !scoreTimeSig.isCompound && scoreTimeSig.beats >= 1) return Math.min(8, scoreTimeSig.beats);
+  return 4;
+}
+function playCountIn(){
+  ensureAudio();
+  return new Promise(resolve => {
+    const n = countInClicks();
+    const interval = 60 / bpm();
+    const startAt = audioCtx.currentTime + 0.05;
+    for (let i = 0; i < n; i++) scheduleMetronomeClick(startAt + i * interval, i === 0);
+    setTimeout(resolve, (0.05 + n * interval) * 1000);
+  });
+}
+let countInCancelled = false, countingIn = false;
+async function beginPlayback(fromSec){
+  if (countingIn) return; // 已經在倒數中,避免重複點擊疊加倒數
+  if ($("countIn").checked) {
+    countInCancelled = false;
+    countingIn = true;
+    setPlayBtnState(true); // 倒數期間先顯示「暫停」圖示,表示已經進入播放流程
+    setStatus("預備拍…");
+    await playCountIn();
+    countingIn = false;
+    if (countInCancelled) { setPlayBtnState(false); return; }
+  }
+  startPlayback(fromSec);
 }
 
 /* 匯入音檔取代合成音時,直接整段排程播放這個音檔本身,不再逐音符觸發樂器/鼓組音色。
@@ -2530,6 +2668,7 @@ function pausePlayback(){
   playing = false;
   setPlayBtnState(false);
   cancelAnimationFrame(rafId);
+  if (!exporting) releaseWakeLock();
 }
 
 function stopAudioOnly(){
@@ -2538,6 +2677,7 @@ function stopAudioOnly(){
 }
 
 function stopPlayback(){
+  if (countingIn) { countInCancelled = true; countingIn = false; setStatus(""); }
   stopAudioOnly();
   playing = false; pausedAtSec = 0;
   setPlayBtnState(false);
@@ -2546,6 +2686,7 @@ function stopPlayback(){
   updateTimeLabel(0);
   $("progressfill").style.width = "0%";
   drawKeyboardLive(0);
+  if (!exporting) releaseWakeLock();
 }
 
 /* ── 捲動同步 ─────────────────────────────── */
@@ -2575,6 +2716,16 @@ function xAtSec(sec){
 
 function tick(){
   const sec = currentSec();
+  if ($("loopEnabled").checked && loopAWhole != null && loopBWhole != null) {
+    const aSec = wholeToSecAny(Math.min(loopAWhole, loopBWhole));
+    const bSec = wholeToSecAny(Math.max(loopAWhole, loopBWhole));
+    if (bSec - aSec > 0.15 && sec >= bSec) {
+      stopAudioOnly();
+      startAudioFrom(aSec);
+      rafId = requestAnimationFrame(tick);
+      return;
+    }
+  }
   if (sec >= totalSec()) { stopPlayback(); return; }
   const x = xAtSec(sec);
   $("scroller").style.transform = "translateX(" + (playlineX() - x) + "px)";
@@ -2591,6 +2742,59 @@ function resetScroll(){
 
 function fmt(s){ s=Math.max(0,Math.floor(s)); return Math.floor(s/60)+":"+String(s%60).padStart(2,"0"); }
 function updateTimeLabel(sec){ $("timeLabel").textContent = fmt(sec) + " / " + fmt(totalSec()); }
+
+/* ── 進度條拖曳/點擊直接跳到該位置,同時支援 A-B 循環標記 ─── */
+function seekTo(sec){
+  if (!events.length) return;
+  sec = Math.max(0, Math.min(totalSec(), sec));
+  if (playing) { stopAudioOnly(); startAudioFrom(sec); }
+  else pausedAtSec = sec;
+  const x = xAtSec(sec);
+  $("scroller").style.transform = "translateX(" + (playlineX() - x) + "px)";
+  $("progressfill").style.width = (sec / totalSec() * 100).toFixed(2) + "%";
+  updateTimeLabel(sec);
+  drawKeyboardLive(sec);
+}
+$("progressbar").addEventListener("click", e => {
+  const rect = $("progressbar").getBoundingClientRect();
+  const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+  seekTo(frac * totalSec());
+});
+
+function updateLoopMarkers(){
+  const total = totalSec();
+  const mA = $("loopMarkerA"), mB = $("loopMarkerB"), region = $("loopRegion");
+  if (loopAWhole != null && total > 0) {
+    mA.style.display = "block";
+    mA.style.left = Math.min(100, Math.max(0, wholeToSecAny(loopAWhole) / total * 100)) + "%";
+  } else mA.style.display = "none";
+  if (loopBWhole != null && total > 0) {
+    mB.style.display = "block";
+    mB.style.left = Math.min(100, Math.max(0, wholeToSecAny(loopBWhole) / total * 100)) + "%";
+  } else mB.style.display = "none";
+  if (loopAWhole != null && loopBWhole != null && total > 0) {
+    const aPct = Math.min(100, Math.max(0, wholeToSecAny(Math.min(loopAWhole, loopBWhole)) / total * 100));
+    const bPct = Math.min(100, Math.max(0, wholeToSecAny(Math.max(loopAWhole, loopBWhole)) / total * 100));
+    region.style.display = "block";
+    region.style.left = aPct + "%";
+    region.style.width = Math.max(0, bPct - aPct) + "%";
+  } else region.style.display = "none";
+}
+$("loopSetA").addEventListener("click", () => {
+  if (!events.length) return;
+  loopAWhole = secToWholeAny(playing ? currentSec() : pausedAtSec);
+  updateLoopMarkers();
+});
+$("loopSetB").addEventListener("click", () => {
+  if (!events.length) return;
+  loopBWhole = secToWholeAny(playing ? currentSec() : pausedAtSec);
+  updateLoopMarkers();
+});
+$("loopClear").addEventListener("click", () => {
+  loopAWhole = loopBWhole = null;
+  $("loopEnabled").checked = false;
+  updateLoopMarkers();
+});
 
 /* ── 錄影模式 ─────────────────────────────── */
 $("recBtn").addEventListener("click", () => {
@@ -2792,7 +2996,7 @@ async function releaseWakeLock(){
   try { if (wakeLockRef) { await wakeLockRef.release(); wakeLockRef = null; } } catch (e) {}
 }
 document.addEventListener("visibilitychange", async () => {
-  if (exporting && document.visibilityState === "visible" && !wakeLockRef) await acquireWakeLock();
+  if ((exporting || playing) && document.visibilityState === "visible" && !wakeLockRef) await acquireWakeLock();
 });
 
 async function exportVideo(cfg){
