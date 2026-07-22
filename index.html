@@ -1452,7 +1452,7 @@ const DRUM_PAD_LAYOUT = [
   { id: "snare",       label: "Snare",  cymbal: false, x: 0.25,  cyOff: 0.24,  r: 0.70 },
   { id: "kick",        label: "Kick",   cymbal: false, x: 0.50,  cyOff: 0.08,  r: 0.95 },
   { id: "tomMid",      label: "Mid",    cymbal: false, x: 0.625, cyOff: -0.34, r: 0.65 },
-  { id: "tomFloor",    label: "Floor",  cymbal: false, x: 0.71,  cyOff: 0.26,  r: 0.73 },
+  { id: "tomFloor",    label: "Floor",  cymbal: false, x: 0.71,  cyOff: 0.26,  r: 0.85 },
   { id: "ride",        label: "Ride",   cymbal: true,  x: 0.855, cyOff: -0.22, r: 0.95 },
   { id: "crash2",      label: "Crash",  cymbal: true,  x: 0.955, cyOff: -0.42, r: 1.00 }
 ];
@@ -1511,12 +1511,32 @@ function drawCymbalDisc(ctx, cx, cy, r, ry, accent, intensity, label){
   ctx.stroke();
   ctx.strokeStyle = "rgba(255,255,255," + (0.08 + intensity * 0.18) + ")";
   ctx.lineWidth = Math.max(0.5, r * 0.025);
-  for (let k = 1; k <= 2; k++) {
-    const t = k / 3;
+  for (let k = 1; k <= 3; k++) {
+    const t = k / 4;
     ctx.beginPath();
     ctx.ellipse(cx, cy, r * t, ry * t, 0, 0, Math.PI * 2);
     ctx.stroke();
   }
+  // 鎚紋顆粒質感(比照真實銅鈸表面手工鎚打的凹痕紋理),沿幾圈同心圓均勻散佈小凹點
+  ctx.save();
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, r, ry, 0, 0, Math.PI * 2);
+  ctx.clip();
+  for (let ring = 1; ring <= 4; ring++) {
+    const rt = ring / 5;
+    const count = 10 + ring * 4;
+    for (let i = 0; i < count; i++) {
+      const a = (i / count) * Math.PI * 2 + ring * 0.4;
+      const dx = cx + Math.cos(a) * r * rt;
+      const dy = cy + Math.sin(a) * ry * rt;
+      const dr = Math.max(0.6, r * 0.035);
+      ctx.beginPath();
+      ctx.ellipse(dx, dy, dr, dr * (ry / r), 0, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(0,0,0,0.10)";
+      ctx.fill();
+    }
+  }
+  ctx.restore();
   if (intensity > 0) ctx.restore();
   if (label) drawPadLabel(ctx, cx, cy, r, ry, label);
 }
@@ -1534,30 +1554,41 @@ function drawDrumPad(ctx, cx, cy, r, pad, intensity){
     return;
   }
 
-  // 鼓类(鼓皮+鼓圈):中心到邊緣的漸層,靜止時是暗木質/皮革色,打擊瞬間混入金色並隨餘光衰減
+  // 鼓类(白色鼓皮+黑色鼓圈五金):比照參考照片的實際鼓組 ── 鼓皮本身是接近白色的乳白色,
+  // 邊緣有一圈黑色鼓圈,靜止時鼓皮偏冷灰白,打擊瞬間混入金色並隨餘光衰減
   const ry = r * 0.8;
   if (intensity > 0) {
     ctx.save();
     ctx.shadowColor = "rgba(" + accent[0] + "," + accent[1] + "," + accent[2] + "," + (0.5 + 0.4 * intensity) + ")";
     ctx.shadowBlur = 8 + 28 * intensity;
   }
-  const bodyGrad = ctx.createRadialGradient(cx, cy - ry * 0.3, r * 0.15, cx, cy, r);
-  bodyGrad.addColorStop(0, mixColor([224, 208, 176], accent, intensity, 1));
-  bodyGrad.addColorStop(0.68, mixColor([118, 84, 48], accent, intensity * 0.6, 1));
-  bodyGrad.addColorStop(1, mixColor([44, 30, 18], accent, intensity * 0.3, 1));
+  // 最外圈黑色鼓圈(仿照片中黑色五金圈)
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, r * 1.06, ry * 1.06, 0, 0, Math.PI * 2);
+  ctx.fillStyle = "#0a0a0a";
+  ctx.fill();
+  const bodyGrad = ctx.createRadialGradient(cx, cy - ry * 0.3, r * 0.1, cx, cy, r);
+  bodyGrad.addColorStop(0, mixColor([250, 248, 244], accent, intensity, 1));
+  bodyGrad.addColorStop(0.55, mixColor([214, 210, 202], accent, intensity * 0.75, 1));
+  bodyGrad.addColorStop(1, mixColor([158, 154, 146], accent, intensity * 0.45, 1));
   ctx.beginPath();
   ctx.ellipse(cx, cy, r, ry, 0, 0, Math.PI * 2);
   ctx.fillStyle = bodyGrad;
   ctx.fill();
-  ctx.strokeStyle = mixColor([20, 16, 12], accent, intensity * 0.6, 0.9);
-  ctx.lineWidth = Math.max(1.2, r * 0.05);
+  ctx.strokeStyle = mixColor([30, 28, 24], accent, intensity * 0.5, 0.85);
+  ctx.lineWidth = Math.max(1, r * 0.03);
   ctx.stroke();
   // 鼓皮頂端高光弧線,增加立體感(跟白鍵頂端高光是同一套手法)
-  ctx.strokeStyle = "rgba(255,255,255,0.35)";
+  ctx.strokeStyle = "rgba(255,255,255,0.55)";
   ctx.lineWidth = Math.max(1, r * 0.035);
   ctx.beginPath();
   ctx.ellipse(cx, cy - ry * 0.35, r * 0.6, ry * 0.32, 0, Math.PI * 1.1, Math.PI * 1.9);
   ctx.stroke();
+  // 鼓皮中央的小logo貼片(比照 Evans 鼓皮中心常見的小圓貼)
+  ctx.beginPath();
+  ctx.ellipse(cx, cy + ry * 0.12, r * 0.16, ry * 0.16, 0, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(40,36,30,0.5)";
+  ctx.fill();
   if (intensity > 0) ctx.restore();
   drawPadLabel(ctx, cx, cy, r, ry, pad.label);
 }
@@ -2339,11 +2370,15 @@ async function exportVideo(cfg){
   let aDest = null;
   try {
     const W = cfg.W, H = cfg.H, SCORE_H = cfg.scoreH;
-    const kbH = cfg.includeKeyboard ? H * 0.12 : 0; // 鍵盤保留高度(沒選鍵盤就不留空間)
     const margin = H * 0.05;
-    const topY = cfg.align === "top" ? margin
-      : cfg.align === "bottom" ? (H - SCORE_H - margin - kbH)
-      : (H - SCORE_H - kbH) / 2; // center(預設),有鍵盤時稍微往上挪讓出空間
+    // 有包含鼓組/鍵盤面板時,樂譜固定貼齊上方留白,鼓組面板直接緊接在樂譜下方、
+    // 一路延伸到畫面最底部(不留下方留白),避免樂譜與面板之間出現一截背景色的白色縫隙,
+    // 同時鼓組面板也因此拿到最大可用高度,顯示會更大更清楚
+    const topY = cfg.includeKeyboard ? margin
+      : cfg.align === "top" ? margin
+      : cfg.align === "bottom" ? (H - SCORE_H - margin)
+      : (H - SCORE_H) / 2;
+    const kbH = cfg.includeKeyboard ? (H - topY - SCORE_H) : 0;
     const plX = W * PLAYLINE_RATIO;
     const { tiles, scale } = await rasterizeScore(SCORE_H);
 
