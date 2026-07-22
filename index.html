@@ -1510,11 +1510,11 @@ function mixColor(base, accent, t, alpha){
 }
 /* 部位名稱直接寫在該部位圓圈裡面(仿照參考照片的標示方式),不額外佔一排文字,畫面比較不雜亂 */
 function drawPadLabel(ctx, cx, cy, r, ry, text){
-  const fontSize = Math.max(8, Math.min(15, ry * 0.62, r * 0.34));
+  const fontSize = Math.max(11, Math.min(22, ry * 0.85, r * 0.46));
   ctx.font = "700 " + fontSize.toFixed(1) + "px 'Noto Sans TC', sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillStyle = "rgba(28,18,10,0.82)";
+  ctx.fillStyle = "rgba(28,18,10,0.9)";
   ctx.fillText(text, cx, cy + ry * 0.06);
 }
 /* 依 DRUM_PAD_LAYOUT 展開出每個部位實際佔用的圓形(開放式 Hi-Hat 展開成兩個子圓),
@@ -1679,10 +1679,11 @@ function drawDrumPad(ctx, cx, cy, r, pad, intensity){
   ctx.beginPath();
   ctx.ellipse(cx, cy - ry * 0.35, r * 0.6, ry * 0.32, 0, Math.PI * 1.1, Math.PI * 1.9);
   ctx.stroke();
-  // 鼓皮中央的小logo貼片(比照 Evans 鼓皮中心常見的小圓貼)
+  // 鼓皮下緣的小logo貼片(比照 Evans 鼓皮中心常見的小圓貼),移到偏下方、顏色也放淡,
+  // 避免跟正中央的部位名稱文字疊在一起、把字蓋住看不清楚
   ctx.beginPath();
-  ctx.ellipse(cx, cy + ry * 0.12, r * 0.16, ry * 0.16, 0, 0, Math.PI * 2);
-  ctx.fillStyle = "rgba(40,36,30,0.5)";
+  ctx.ellipse(cx, cy + ry * 0.58, r * 0.13, ry * 0.13, 0, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(40,36,30,0.22)";
   ctx.fill();
   if (intensity > 0) ctx.restore();
   drawPadLabel(ctx, cx, cy, r, ry, pad.label);
