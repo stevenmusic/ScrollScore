@@ -27,10 +27,12 @@ body{
 }
 /* ── 頂欄 ───────────────────────── */
 header{
-  display:flex;align-items:center;gap:10px;
+  display:flex;align-items:center;flex-wrap:wrap;
+  gap:8px 14px;justify-content:space-between;
   padding:10px 14px;border-bottom:1px solid var(--line);
-  background:var(--panel);flex-wrap:wrap;
+  background:var(--panel);
 }
+.header-left,.header-right{display:flex;align-items:center;flex-wrap:wrap;gap:8px 10px}
 header h1{
   font-family:"Noto Serif TC",serif;font-size:17px;font-weight:700;
   letter-spacing:.12em;color:var(--gold);white-space:nowrap;
@@ -39,17 +41,17 @@ header h1 span{color:var(--ivory);font-weight:600}
 .btn{
   border:1px solid var(--gold);background:transparent;color:var(--gold);
   font-family:inherit;font-size:14px;font-weight:500;
-  padding:8px 16px;border-radius:999px;cursor:pointer;
+  padding:8px 16px;min-height:38px;border-radius:999px;cursor:pointer;
   transition:background .2s,color .2s;
+  white-space:nowrap;
 }
 .btn:active{background:var(--gold);color:var(--bg)}
 .btn.primary{background:var(--gold);color:var(--bg);font-weight:700}
 .btn.primary:disabled{opacity:.35}
 .btn:disabled{opacity:.35}
-.spacer{flex:1}
-.tempo-box{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
+.tempo-box{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);white-space:nowrap}
 .tempo-box b{color:var(--gold-bright);font-size:15px;min-width:34px;text-align:right;font-variant-numeric:tabular-nums}
-.tempo-box input[type=number]{color:var(--gold-bright);font-size:15px;width:58px;text-align:right;font-variant-numeric:tabular-nums;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:2px 4px;font-family:inherit}
+.tempo-box input[type=number]{color:var(--gold-bright);font-size:15px;width:52px;text-align:right;font-variant-numeric:tabular-nums;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:4px 4px;font-family:inherit}
 .tempo-box input[type=number]:focus{outline:none;border-color:var(--gold)}
 input[type=range]{
   -webkit-appearance:none;width:110px;height:3px;border-radius:2px;
@@ -59,12 +61,54 @@ input[type=range]::-webkit-slider-thumb{
   -webkit-appearance:none;width:20px;height:20px;border-radius:50%;
   background:var(--gold);border:2px solid var(--bg);
 }
+/* ── 設定面板 ───────────────────── */
+#settingsPanel{
+  display:none;flex-wrap:wrap;align-items:center;gap:10px 16px;
+  padding:10px 14px;border-bottom:1px solid var(--line);background:var(--panel);
+}
+#settingsPanel.open{display:flex}
+#settingsPanel select{
+  background:var(--bg);color:var(--ivory);border:1px solid var(--gold);
+  border-radius:999px;padding:6px 12px;font-family:inherit;font-size:13px;
+  min-height:34px;max-width:150px;
+}
 /* ── 樂譜視窗 ───────────────────── */
 #stage{
-  flex:1;position:relative;overflow:hidden;
+  flex:1;position:relative;overflow:hidden;min-height:110px;
   display:flex;align-items:center;
   background:
     radial-gradient(ellipse 120% 80% at 50% 0%, #171208 0%, var(--bg) 60%);
+}
+/* ── 鍵盤/鼓組面板 ───────────────── */
+#keyboardCanvas{display:block;width:100%;height:150px;background:var(--bg);flex:none}
+/* ── 響應式斷點 ─────────────────── */
+/* 手機直向、小螢幕:控制項縮小,面板改窄留更多空間給樂譜 */
+@media (max-width:600px){
+  header{padding:8px 10px;gap:6px 10px}
+  header h1{font-size:15px}
+  .btn{padding:7px 12px;font-size:13px}
+  #settingsPanel{padding:8px 10px;gap:8px 12px}
+  .tempo-box{font-size:12px;gap:6px}
+  input[type=range]{width:88px}
+  #keyboardCanvas{height:110px}
+}
+/* 手機橫向 / 螢幕高度極矮:樂譜區最容易被擠不見,優先壓縮頂欄與鍵盤高度 */
+@media (max-height:420px){
+  header{padding:5px 10px;gap:4px 8px}
+  header h1{font-size:13px}
+  .btn{padding:5px 10px;min-height:30px;font-size:12px}
+  #settingsPanel{padding:5px 10px;gap:5px 10px}
+  .tempo-box{font-size:11px;gap:4px}
+  #settingsPanel select{padding:4px 10px;min-height:28px}
+  input[type=range]{width:70px}
+  #keyboardCanvas{height:64px}
+  #stage{min-height:70px}
+}
+/* 觸控裝置:放大可點擊區域,滑桿把手更好抓 */
+@media (pointer:coarse){
+  .btn{min-height:42px}
+  input[type=range]::-webkit-slider-thumb{width:24px;height:24px}
+  #settingsPanel select{min-height:38px}
 }
 #scoreBg{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none;z-index:1}
 #scroller{will-change:transform;padding:0 0 0 0;position:relative;z-index:2}
@@ -175,23 +219,26 @@ input[type=file]{display:none}
 <body>
 
 <header>
-  <h1>Scroll<span>Score</span></h1>
-  <button class="btn" id="loadBtn">載入樂譜</button>
-  <button class="btn primary" id="playBtn" disabled>▶ 播放</button>
-  <button class="btn" id="stopBtn" disabled>■ 停止</button>
-  <div class="spacer"></div>
-  <div class="tempo-box">速度 <input type="range" id="tempo" min="40" max="400" value="100" step="1"><input type="number" id="tempoVal" min="40" max="400" value="100"></div>
-  <button class="btn" id="settingsToggle" style="display:flex;align-items:center;gap:6px">
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15a3 3 0 100-6 3 3 0 000 6z"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
-    設定
-  </button>
+  <div class="header-left">
+    <h1>Scroll<span>Score</span></h1>
+    <button class="btn" id="loadBtn">載入樂譜</button>
+    <button class="btn primary" id="playBtn" disabled>▶ 播放</button>
+    <button class="btn" id="stopBtn" disabled>■ 停止</button>
+  </div>
+  <div class="header-right">
+    <div class="tempo-box">速度 <input type="range" id="tempo" min="40" max="400" value="100" step="1"><input type="number" id="tempoVal" min="40" max="400" value="100"></div>
+    <button class="btn" id="settingsToggle" style="display:flex;align-items:center;gap:6px">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15a3 3 0 100-6 3 3 0 000 6z"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+      設定
+    </button>
+  </div>
   <input type="file" id="fileInput" accept=".xml,.musicxml,.mxl">
 </header>
 
-<div id="settingsPanel" style="padding:10px 14px;border-bottom:1px solid var(--line);background:var(--panel);display:none;flex-wrap:wrap;gap:10px;align-items:center">
+<div id="settingsPanel">
   <div class="tempo-box">移調 <button class="btn" id="transDown" style="padding:4px 10px" disabled>−</button><b id="transVal">原調</b><button class="btn" id="transUp" style="padding:4px 10px" disabled>＋</button></div>
   <div class="tempo-box">樂器
-    <select id="instrument" style="background:var(--bg);color:var(--ivory);border:1px solid var(--gold);border-radius:8px;padding:5px 8px;font-family:inherit;font-size:13px;text-align:center;text-align-last:center">
+    <select id="instrument">
       <option value="piano">鋼琴</option>
       <option value="strings">小提琴</option>
       <option value="cello">大提琴</option>
@@ -285,7 +332,7 @@ input[type=file]{display:none}
     </div>
   </div>
 </div>
-<canvas id="keyboardCanvas" style="display:block;width:100%;height:150px;background:#0C0A07"></canvas>
+<canvas id="keyboardCanvas"></canvas>
 
 <footer>
   <span id="status">尚未載入樂譜</span>
@@ -361,8 +408,7 @@ function computeArpEffectiveGap(ev, t0, calib){
 $("loadBtn").addEventListener("click", () => $("fileInput").click());
 
 $("settingsToggle").addEventListener("click", () => {
-  const p = $("settingsPanel");
-  p.style.display = (p.style.display === "none") ? "flex" : "none";
+  $("settingsPanel").classList.toggle("open");
 });
 $("fileInput").addEventListener("change", async e => {
   const file = e.target.files[0];
@@ -2750,6 +2796,11 @@ async function exportVideo(cfg){
 }
 
 window.addEventListener("resize", () => { if (!playing) resetScroll(); });
+window.addEventListener("orientationchange", () => {
+  resizeKeyboardCanvas();
+  drawKeyboardLive(playing ? currentSec() : pausedAtSec);
+  if (!playing) resetScroll();
+});
 resizeKeyboardCanvas();
 drawKeyboardLive(0);
 </script>
