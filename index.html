@@ -2074,6 +2074,28 @@ function playSample(name, when, gain, rate){
   return true;
 }
 
+/* Rim click 直接借用同一套小鼓取樣本身(跟 kick/snare/tom 是同一次錄音、同一個空間),
+   不是憑空合成一個不相干的音色 —— 只是把它裁得很短(切掉鼓皮鼓弦共鳴的延音尾巴,只留下打擊瞬間)、
+   加高通濾掉低頻的「蓬」聲、拉高一點點音高(模擬打在鼓框而不是鼓皮上),這樣音色才會跟其他鼓件
+   聽起來像同一套鼓,而不是另外拼上去的東西 */
+function playRimClickFromSample(when, gain){
+  const buf = kitBuffers["snare"];
+  if (!buf) return false;
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  src.playbackRate.value = 1.3;
+  const hp = audioCtx.createBiquadFilter();
+  hp.type = "highpass"; hp.frequency.value = 1100;
+  const g = audioCtx.createGain();
+  g.gain.setValueAtTime(gain, when);
+  g.gain.exponentialRampToValueAtTime(0.0001, when + 0.045);
+  src.connect(hp); hp.connect(g); g.connect(masterGain);
+  src.start(when);
+  src.stop(when + 0.07);
+  scheduled.push(src);
+  return true;
+}
+
 /* 金屬銅鈸合成:九方波非諧波泛音堆疊(敲擊的「叮」)+ 濾波白噪音(鈸片震動的「沙沙」共鳴),
    兩層疊加是真實鈸聲(尤其爵士 ride)的關鍵 —— 純泛音堆疊只有攻擊聲、沒有那種會延續的沙沙聲底 */
 function synthCymbal(when, decay, hpFreq, gain, noiseMix){
@@ -2117,8 +2139,8 @@ function scheduleDrum(key, when){
       if (!playSample("kick", when, 1.0)) synthKick(when); break;
     case 38: case 40: // Snare
       if (!playSample("snare", when, 0.95)) synthSnare(when, 0.95); break;
-    case 37:          // Side stick / rim click:獨立合成的短促木頭聲,音色明顯區別於一般小鼓,
-      synthRimClick(when, 0.7); break; // 不能再借用小鼓取樣調音高矇混過去(聽起來還是像小鼓)
+    case 37:          // Side stick / rim click:優先裁短同一套小鼓取樣(音色才會跟整組鼓一致),
+      if (!playRimClickFromSample(when, 0.85)) synthRimClick(when, 0.7); break; // 取樣載入失敗才退回合成音
     case 39:          // Clap → snare 替代
       playSample("snare", when, 0.8) || synthSnare(when, 0.8); break;
     case 42:          // Closed hi-hat
