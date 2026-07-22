@@ -2,7 +2,7 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>ScrollScore — 橫向捲動樂譜播放器</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@600;700&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
@@ -52,6 +52,9 @@ header h1 span{color:var(--ivory);font-weight:600}
 .btn.primary{background:var(--gold);color:var(--bg);font-weight:700}
 .btn.primary:disabled{opacity:.35}
 .btn:disabled{opacity:.35}
+/* 樂譜載入前,播放/停止先整個隱藏(而不只是變淡),Header 只留「載入樂譜」這個唯一動作,
+   載入成功後才讓它們出現在原本的位置 */
+.header-left .btn:disabled{display:none}
 .tempo-box{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);white-space:nowrap}
 .tempo-box b{color:var(--gold-bright);font-size:15px;min-width:34px;text-align:right;font-variant-numeric:tabular-nums}
 .tempo-box input[type=number]{color:var(--gold-bright);font-size:15px;width:52px;text-align:right;font-variant-numeric:tabular-nums;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:4px 4px;font-family:inherit}
@@ -64,12 +67,42 @@ input[type=range]::-webkit-slider-thumb{
   -webkit-appearance:none;width:20px;height:20px;border-radius:50%;
   background:var(--gold);border:2px solid var(--bg);
 }
-/* ── 設定面板 ───────────────────── */
-#settingsPanel{
-  display:none;flex-wrap:wrap;align-items:center;gap:10px 16px;
-  padding:10px 14px;border-bottom:1px solid var(--line);background:var(--panel);
+/* ── 速度:收成 "100 BPM ▾" 小按鈕,點擊才彈出滑桿,平常不佔 Header 空間 ── */
+.tempo-compact{position:relative}
+#tempoToggle{color:var(--gold-bright);font-variant-numeric:tabular-nums}
+#tempoToggle .caret{font-size:10px;color:var(--muted);margin-left:1px}
+#tempoPopover{
+  position:absolute;top:calc(100% + 10px);right:0;z-index:60;
+  display:flex;flex-direction:column;gap:10px;min-width:190px;
+  background:var(--panel);border:1px solid var(--gold);border-radius:16px;
+  padding:14px 16px;box-shadow:0 10px 28px rgba(0,0,0,.5);
+  opacity:0;transform:translateY(-6px);pointer-events:none;
+  transition:opacity .18s,transform .18s;
 }
-#settingsPanel.open{display:flex}
+#tempoPopover.open{opacity:1;transform:translateY(0);pointer-events:auto}
+#tempoPopover .tempo-box{font-size:12px}
+#tempoPopover input[type=range]{flex:1;width:auto}
+/* ── 設定面板:改成從螢幕底部滑出的抽屜(Bottom Sheet),不再往下推擠樂譜區 ── */
+#settingsBackdrop{
+  position:fixed;inset:0;z-index:58;background:rgba(8,6,3,.6);
+  opacity:0;pointer-events:none;transition:opacity .25s;
+}
+#settingsBackdrop.open{opacity:1;pointer-events:auto}
+#settingsPanel{
+  position:fixed;left:0;right:0;bottom:0;z-index:59;
+  display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;
+  max-height:72vh;overflow-y:auto;
+  padding:20px 14px calc(16px + env(safe-area-inset-bottom));
+  border-top:1px solid var(--gold);border-radius:18px 18px 0 0;
+  background:var(--panel);box-shadow:0 -10px 30px rgba(0,0,0,.55);
+  transform:translateY(100%);pointer-events:none;
+  transition:transform .3s cubic-bezier(.32,.72,0,1);
+}
+#settingsPanel.open{transform:translateY(0);pointer-events:auto}
+#settingsPanel::before{
+  content:"";position:absolute;top:8px;left:50%;transform:translateX(-50%);
+  width:36px;height:4px;border-radius:2px;background:var(--line);
+}
 #settingsPanel select{
   background:var(--bg);color:var(--ivory);border:1px solid var(--gold);
   border-radius:999px;padding:6px 12px;font-family:inherit;font-size:13px;
@@ -144,24 +177,34 @@ input[type=range]::-webkit-slider-thumb{
   background:linear-gradient(to bottom,transparent,var(--gold-bright) 12%,var(--gold-bright) 88%,transparent);
   box-shadow:0 0 14px 2px rgba(233,203,122,.45);
   pointer-events:none;z-index:5;
+  display:none; /* 樂譜載入前先不亮這條播放線,避免跟中間的說明文字疊在一起 */
 }
+body.score-loaded #playline{display:block}
 #playline::before{
   content:"";position:absolute;top:-2px;left:50%;transform:translateX(-50%);
   border:7px solid transparent;border-top:10px solid var(--gold);
 }
 #empty{
   position:absolute;inset:0;display:flex;flex-direction:column;
-  align-items:center;justify-content:center;gap:14px;color:var(--muted);
+  align-items:center;justify-content:center;color:var(--muted);
   text-align:center;padding:24px;z-index:2;
 }
-#empty .mark{
-  font-family:"Noto Serif TC",serif;font-size:52px;color:var(--gold);
-  line-height:1;opacity:.85;
+.empty-card{
+  display:flex;flex-direction:column;align-items:center;gap:10px;
+  max-width:360px;padding:30px 32px;
+  background:rgba(22,18,9,.55);border:1px solid var(--line);border-radius:20px;
+  backdrop-filter:blur(2px);
 }
-#empty p{font-size:14px;line-height:1.8;max-width:420px}
+.empty-card .mark{
+  font-family:"Noto Serif TC",serif;font-size:48px;color:var(--gold);
+  line-height:1;opacity:.85;margin-bottom:4px;
+}
+.empty-card .empty-title{font-size:16px;line-height:1.5;color:var(--ivory);font-weight:600}
+.empty-card .empty-sub{font-size:13px;line-height:1.7;color:var(--muted)}
 /* ── 底部狀態列 ─────────────────── */
 footer{
-  padding:8px 14px;border-top:1px solid var(--line);background:var(--panel);
+  padding:10px 14px calc(10px + env(safe-area-inset-bottom));
+  border-top:1px solid var(--line);background:var(--panel);
   font-size:12px;color:var(--muted);display:flex;gap:12px;align-items:center;
 }
 #progressbar{flex:1;height:3px;background:var(--line);border-radius:2px;overflow:hidden}
@@ -245,11 +288,11 @@ input[type=file]{display:none}
 <header>
   <div class="header-left">
     <h1>Scroll<span>Score</span></h1>
-    <button class="btn" id="loadBtn" aria-label="載入樂譜">
+    <button class="btn primary" id="loadBtn" aria-label="載入樂譜">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
       <span class="btn-label">載入樂譜</span>
     </button>
-    <button class="btn primary" id="playBtn" disabled aria-label="播放">
+    <button class="btn" id="playBtn" disabled aria-label="播放">
       <svg id="playIcon" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
       <span id="playLabel" class="btn-label">播放</span>
     </button>
@@ -259,7 +302,14 @@ input[type=file]{display:none}
     </button>
   </div>
   <div class="header-right">
-    <div class="tempo-box"><span class="tempo-label">速度</span> <input type="range" id="tempo" min="40" max="400" value="100" step="1"><input type="number" id="tempoVal" min="40" max="400" value="100"></div>
+    <div class="tempo-compact">
+      <button class="btn" id="tempoToggle" aria-label="速度">
+        <span id="tempoDisplay">100 BPM</span><span class="caret">▾</span>
+      </button>
+      <div id="tempoPopover">
+        <div class="tempo-box"><span class="tempo-label">速度</span> <input type="range" id="tempo" min="40" max="400" value="100" step="1"><input type="number" id="tempoVal" min="40" max="400" value="100"></div>
+      </div>
+    </div>
     <button class="btn" id="settingsToggle" aria-label="設定">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15a3 3 0 100-6 3 3 0 000 6z"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
       <span class="btn-label">設定</span>
@@ -267,6 +317,7 @@ input[type=file]{display:none}
   </div>
   <input type="file" id="fileInput" accept=".xml,.musicxml,.mxl">
 </header>
+<div id="settingsBackdrop"></div>
 
 <div id="settingsPanel">
   <div class="tempo-box">移調 <button class="btn" id="transDown" style="padding:4px 10px" disabled>−</button><b id="transVal">原調</b><button class="btn" id="transUp" style="padding:4px 10px" disabled>＋</button></div>
@@ -315,10 +366,11 @@ input[type=file]{display:none}
 <div id="stage">
   <div id="scoreBg"></div>
   <div id="empty">
-    <div class="mark">𝄞</div>
-    <p>從 Sibelius 匯出 MusicXML(.musicxml / .xml / .mxl),<br>
-    點「載入樂譜」即可生成單行橫向捲動樂譜。<br>
-    播放時樂譜會流過固定的金色播放線,音符同步發聲。</p>
+    <div class="empty-card">
+      <div class="mark">𝄞</div>
+      <p class="empty-title">點擊「載入樂譜」開始使用</p>
+      <p class="empty-sub">支援 Sibelius / Finale / MuseScore 匯出之 MusicXML(.xml / .mxl)</p>
+    </div>
   </div>
   <div id="scroller"><div id="score"></div></div>
   <div id="playline"></div>
@@ -440,9 +492,33 @@ function computeArpEffectiveGap(ev, t0, calib){
 /* ── 載入檔案 ──────────────────────────────── */
 $("loadBtn").addEventListener("click", () => $("fileInput").click());
 
+function openSettingsSheet(){
+  $("tempoPopover").classList.remove("open");
+  $("settingsPanel").classList.add("open");
+  $("settingsBackdrop").classList.add("open");
+}
+function closeSettingsSheet(){
+  $("settingsPanel").classList.remove("open");
+  $("settingsBackdrop").classList.remove("open");
+}
 $("settingsToggle").addEventListener("click", () => {
-  $("settingsPanel").classList.toggle("open");
+  if ($("settingsPanel").classList.contains("open")) closeSettingsSheet(); else openSettingsSheet();
 });
+$("settingsBackdrop").addEventListener("click", closeSettingsSheet);
+
+/* 速度收成小按鈕,點擊才彈出滑桿,不再常駐佔用 Header 空間 */
+$("tempoToggle").addEventListener("click", e => {
+  e.stopPropagation();
+  closeSettingsSheet();
+  $("tempoPopover").classList.toggle("open");
+});
+document.addEventListener("click", e => {
+  if (!$("tempoPopover").classList.contains("open")) return;
+  if (e.target === $("tempoToggle") || $("tempoToggle").contains(e.target)) return;
+  if ($("tempoPopover").contains(e.target)) return;
+  $("tempoPopover").classList.remove("open");
+});
+function syncTempoDisplay(){ $("tempoDisplay").textContent = bpm() + " BPM"; }
 $("fileInput").addEventListener("change", async e => {
   const file = e.target.files[0];
   if (!file) return;
@@ -482,6 +558,7 @@ $("fileInput").addEventListener("change", async e => {
       const t = Math.round(Math.min(400, Math.max(40, parsed.soundTempo)));
       $("tempo").value = t;
       $("tempoVal").value = t;
+      syncTempoDisplay();
       if (parsed.timeSig && parsed.timeSig.isCompound) {
         const dottedQuarterEquiv = (t / 1.5).toFixed(1);
         tempoNote = "(偵測到" + parsed.timeSig.beats + "/" + parsed.timeSig.beatType + "複拍子,已自動套用樂譜內建速度" + t + ",相當於附點四分音符=" + dottedQuarterEquiv + ")";
@@ -599,6 +676,9 @@ function transposeMusicXML(xmlText, semitones){
 /* ── 渲染 + 建立時間軸 ─────────────────────── */
 async function renderScore(xmlText){
   $("empty").style.display = "none";
+  document.body.classList.add("score-loaded");
+  $("loadBtn").classList.remove("primary");
+  $("playBtn").classList.add("primary");
   const scoreDiv = $("score");
   scoreDiv.innerHTML = "";
   osmd = new opensheetmusicdisplay.OpenSheetMusicDisplay(scoreDiv, {
@@ -1312,6 +1392,7 @@ $("calibRetapBtn").addEventListener("click", () => {
 
 $("tempo").addEventListener("input", () => {
   $("tempoVal").value = bpm();
+  syncTempoDisplay();
   if (playing) { // 播放中改速度:重新以目前位置起算
     const cur = currentSec();
     stopAudioOnly();
@@ -1327,6 +1408,7 @@ $("tempoVal").addEventListener("change", () => {
   t = Math.min(400, Math.max(40, t));
   $("tempoVal").value = t;
   $("tempo").value = t;
+  syncTempoDisplay();
   if (playing) {
     const cur = currentSec();
     stopAudioOnly();
@@ -2513,6 +2595,7 @@ function updateTimeLabel(sec){ $("timeLabel").textContent = fmt(sec) + " / " + f
 /* ── 錄影模式 ─────────────────────────────── */
 $("recBtn").addEventListener("click", () => {
   stopPlayback();
+  closeSettingsSheet();
   document.body.classList.add("recording");
   resetScroll();
   // 倒數 3 秒後自動播放,留時間開啟 iOS 螢幕錄製
@@ -2553,6 +2636,7 @@ function showFmtStep(step){
 }
 $("exportBtn").addEventListener("click", () => {
   if (!events.length || exporting) return;
+  closeSettingsSheet();
   showFmtStep("type");
   $("formatOverlay").classList.add("show");
 });
