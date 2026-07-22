@@ -969,7 +969,28 @@ function getDrumKey(n){
   // 2) 備援:標準爵士鼓記譜位置(顯示音高 → GM)
   const midi = n.Pitch.getHalfTone ? n.Pitch.getHalfTone() + 12 : (n.Pitch.halfTone + 12);
   const posMap = { 64:36, 65:36, 67:41, 69:43, 72:38, 74:47, 76:48, 77:51, 79:42, 81:49 };
-  return posMap[midi] || 38;
+  const key = posMap[midi];
+  if (key === undefined) return 38;
+  // snare 同一線位置,如果符頭是打叉(MusicXML notehead="cross"),代表這顆音符是 rim click(邊擊/側擊),
+  // 不是一般擊面,要用 GM 37(Side Stick)取代 GM 38(Acoustic Snare),播放跟鼓面板高亮才會是短促的click聲而不是完整的鼓聲。
+  // 其他位置(hi-hat/crash/ride)本來就是用打叉符頭當作一般記譜慣例,所以只在 snare 這個位置才需要特別判斷。
+  if (key === 38 && isCrossNotehead(n)) return 37;
+  return key;
+}
+function isCrossNotehead(n){
+  // OSMD 不同版本 Notehead 物件的欄位命名略有差異,依序嘗試幾個常見欄位名稱,
+  // 對照到 MusicXML <notehead> 元素的 "cross"(打叉符頭)值
+  try {
+    const nh = n.Notehead;
+    if (!nh) return false;
+    const candidates = [nh.Style, nh.style, nh.ContentType, nh.contentType, nh.type, nh.Type, nh.Shape, nh.shape, nh.Content];
+    for (const c of candidates) {
+      if (c === undefined || c === null) continue;
+      const s = String(c).toLowerCase();
+      if (s.includes("cross") || s === "x") return true;
+    }
+  } catch (e) {}
+  return false;
 }
 function normalizeDrumKey(k){
   // MusicXML midi-unpitched 為 1–128;若落在 GM 打擊區間直接用,否則減 1 修正
