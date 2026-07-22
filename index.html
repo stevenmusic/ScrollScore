@@ -1445,16 +1445,16 @@ function drawKeyboard(ctx, x, y, w, h, activeMap){
    打法各自獨立發光,所以總共 10 個可發光區塊。每個部位的相對大小(r)是照參考照片實際量測各部位的
    像素寬度換算比例而來(以照片中最大的 Crash 2 為基準 1.00),不是隨意給的 ── */
 const DRUM_PAD_LAYOUT = [
-  { id: "crash1",      label: "Crash",  cymbal: true,  x: 0.045, cyOff: -0.40, r: 0.98 },
-  { id: "hihatClosed", label: "Hat",    cymbal: true,  x: 0.135, cyOff: 0.00,  r: 0.80 },
-  { id: "hihatOpen",   label: "Open",   cymbal: true,  x: 0.195, cyOff: -0.30, r: 0.80, openHat: true },
-  { id: "tomHi",       label: "Hi",     cymbal: false, x: 0.365, cyOff: -0.32, r: 0.59 },
-  { id: "snare",       label: "Snare",  cymbal: false, x: 0.25,  cyOff: 0.24,  r: 0.70 },
-  { id: "kick",        label: "Kick",   cymbal: false, x: 0.50,  cyOff: 0.08,  r: 0.95 },
-  { id: "tomMid",      label: "Mid",    cymbal: false, x: 0.625, cyOff: -0.34, r: 0.65 },
-  { id: "tomFloor",    label: "Floor",  cymbal: false, x: 0.71,  cyOff: 0.26,  r: 0.85 },
-  { id: "ride",        label: "Ride",   cymbal: true,  x: 0.855, cyOff: -0.22, r: 0.95 },
-  { id: "crash2",      label: "Crash",  cymbal: true,  x: 0.955, cyOff: -0.42, r: 1.00 }
+  { id: "crash1",      label: "Crash",  cymbal: true,  x: 0.05,  cyOff: -0.42, r: 0.98 },
+  { id: "hihatClosed", label: "Hat",    cymbal: true,  x: 0.16,  cyOff: 0.10,  r: 0.80 },
+  { id: "hihatOpen",   label: "Open",   cymbal: true,  x: 0.22,  cyOff: -0.05, r: 0.80, openHat: true },
+  { id: "tomHi",       label: "Hi",     cymbal: false, x: 0.39,  cyOff: -0.22, r: 0.59 },
+  { id: "snare",       label: "Snare",  cymbal: false, x: 0.32,  cyOff: 0.20,  r: 0.70 },
+  { id: "kick",        label: "Kick",   cymbal: false, x: 0.50,  cyOff: 0.05,  r: 0.95 },
+  { id: "tomMid",      label: "Mid",    cymbal: false, x: 0.60,  cyOff: -0.22, r: 0.65 },
+  { id: "tomFloor",    label: "Floor",  cymbal: false, x: 0.70,  cyOff: 0.24,  r: 0.85 },
+  { id: "ride",        label: "Ride",   cymbal: true,  x: 0.83,  cyOff: -0.35, r: 0.95 },
+  { id: "crash2",      label: "Crash",  cymbal: true,  x: 0.94,  cyOff: 0.05,  r: 1.00 }
 ];
 function mixColor(base, accent, t, alpha){
   t = Math.max(0, Math.min(1, t));
