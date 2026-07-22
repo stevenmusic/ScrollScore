@@ -1472,6 +1472,55 @@ function drawPadLabel(ctx, cx, cy, r, ry, text){
   ctx.fillStyle = "rgba(28,18,10,0.82)";
   ctx.fillText(text, cx, cy + ry * 0.06);
 }
+/* 依 DRUM_PAD_LAYOUT 展開出每個部位實際佔用的圓形(開放式 Hi-Hat 展開成兩個子圓),
+   用來精確計算縮放與置中,確保連五金外框都完整落在面板內、不會被上下邊界裁切 */
+function drumPadCircles(pad){
+  if (pad.openHat){
+    return [
+      { cOffH: -0.30 * pad.r, rx: 0.88 * pad.r, ry: 0.42 * pad.r },
+      { cOffH: 0.22 * pad.r,  rx: pad.r,        ry: 0.48 * pad.r }
+    ];
+  }
+  if (pad.cymbal) return [ { cOffH: 0, rx: pad.r, ry: 0.5 * pad.r } ];
+  return [ { cOffH: 0, rx: 1.06 * pad.r, ry: 0.848 * pad.r } ]; // 0.8(鼓皮橢圓)×1.06(外圈黑鼓圈)
+}
+let _drumFitCache = { w: -1, h: -1 };
+function fitDrumLayout(w, h){
+  if (_drumFitCache.w === w && _drumFitCache.h === h) return _drumFitCache;
+  const circles = [];
+  for (const pad of DRUM_PAD_LAYOUT) {
+    for (const c of drumPadCircles(pad)) {
+      circles.push({ x: w * pad.x, baseCyOffH: pad.cyOff * h, cOffR: c.cOffH, rx: c.rx, ry: c.ry });
+    }
+  }
+  // 寬度限制:與縮放係數 R 呈線性關係,跟垫直置中無關,可以直接算出上限
+  let Rw = Infinity;
+  for (const c of circles) {
+    if (c.rx <= 0) continue;
+    Rw = Math.min(Rw, c.x / c.rx, (w - c.x) / c.rx);
+  }
+  const heightSpan = R => {
+    let mn = Infinity, mx = -Infinity;
+    for (const c of circles) {
+      const top = c.baseCyOffH + c.cOffR * R - c.ry * R;
+      const bot = c.baseCyOffH + c.cOffR * R + c.ry * R;
+      if (top < mn) mn = top;
+      if (bot > mx) mx = bot;
+    }
+    return { span: mx - mn, mn };
+  };
+  // 高度限制:二分搜尋找出仍能整組放入高度 h 的最大縮放係數
+  let lo = 0, hi = Math.max(0, Rw);
+  for (let i = 0; i < 30; i++) {
+    const mid = (lo + hi) / 2;
+    if (heightSpan(mid).span <= h) lo = mid; else hi = mid;
+  }
+  const R = Math.max(1, lo);
+  const { mn, span } = heightSpan(R);
+  const C = (h - span) / 2 - mn; // 讓整組上下留白平均,達到垂直置中
+  _drumFitCache = { w, h, R, C };
+  return _drumFitCache;
+}
 function drawDrumKit(ctx, x, y, w, h, activeMap){
   const baseGrad = ctx.createLinearGradient(0, y, 0, y + h);
   baseGrad.addColorStop(0, "#050403");
@@ -1479,8 +1528,9 @@ function drawDrumKit(ctx, x, y, w, h, activeMap){
   ctx.fillStyle = baseGrad;
   ctx.fillRect(x, y, w, h);
 
-  const centerY = y + h / 2 + h * 0.06;
-  const baseR = Math.min(h * 0.46, w * 0.055);
+  const fit = fitDrumLayout(w, h);
+  const centerY = y + fit.C;
+  const baseR = fit.R;
 
   for (const pad of DRUM_PAD_LAYOUT) {
     const cx = x + w * pad.x;
