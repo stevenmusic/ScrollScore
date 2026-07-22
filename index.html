@@ -49,6 +49,8 @@ header h1 span{color:var(--ivory);font-weight:600}
 .spacer{flex:1}
 .tempo-box{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
 .tempo-box b{color:var(--gold-bright);font-size:15px;min-width:34px;text-align:right;font-variant-numeric:tabular-nums}
+.tempo-box input[type=number]{color:var(--gold-bright);font-size:15px;width:58px;text-align:right;font-variant-numeric:tabular-nums;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:2px 4px;font-family:inherit}
+.tempo-box input[type=number]:focus{outline:none;border-color:var(--gold)}
 input[type=range]{
   -webkit-appearance:none;width:110px;height:3px;border-radius:2px;
   background:var(--line);outline:none;
@@ -178,7 +180,7 @@ input[type=file]{display:none}
   <button class="btn primary" id="playBtn" disabled>▶ 播放</button>
   <button class="btn" id="stopBtn" disabled>■ 停止</button>
   <div class="spacer"></div>
-  <div class="tempo-box">速度 <input type="range" id="tempo" min="40" max="400" value="100"><b id="tempoVal">100</b></div>
+  <div class="tempo-box">速度 <input type="range" id="tempo" min="40" max="400" value="100" step="1"><input type="number" id="tempoVal" min="40" max="400" value="100"></div>
   <button class="btn" id="settingsToggle" style="display:flex;align-items:center;gap:6px">
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15a3 3 0 100-6 3 3 0 000 6z"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
     設定
@@ -400,7 +402,7 @@ $("fileInput").addEventListener("change", async e => {
     if (parsed.soundTempo && parsed.soundTempo > 0) {
       const t = Math.round(Math.min(400, Math.max(40, parsed.soundTempo)));
       $("tempo").value = t;
-      $("tempoVal").textContent = t;
+      $("tempoVal").value = t;
       if (parsed.timeSig && parsed.timeSig.isCompound) {
         const dottedQuarterEquiv = (t / 1.5).toFixed(1);
         tempoNote = "(偵測到" + parsed.timeSig.beats + "/" + parsed.timeSig.beatType + "複拍子,已自動套用樂譜內建速度" + t + ",相當於附點四分音符=" + dottedQuarterEquiv + ")";
@@ -1230,8 +1232,23 @@ $("calibRetapBtn").addEventListener("click", () => {
 });
 
 $("tempo").addEventListener("input", () => {
-  $("tempoVal").textContent = bpm();
+  $("tempoVal").value = bpm();
   if (playing) { // 播放中改速度:重新以目前位置起算
+    const cur = currentSec();
+    stopAudioOnly();
+    startAudioFrom(cur);
+  }
+  updateTimeLabel(playing ? currentSec() : pausedAtSec);
+});
+
+// 速度數字改成可以直接點擊輸入,不用只靠拖曳滑桿(滑桿範圍 40~400 橫跨很大,拖曳很難精準停在某個特定數字上)
+$("tempoVal").addEventListener("change", () => {
+  let t = parseInt($("tempoVal").value, 10);
+  if (isNaN(t)) t = bpm();
+  t = Math.min(400, Math.max(40, t));
+  $("tempoVal").value = t;
+  $("tempo").value = t;
+  if (playing) {
     const cur = currentSec();
     stopAudioOnly();
     startAudioFrom(cur);
