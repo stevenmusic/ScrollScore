@@ -197,6 +197,7 @@ input[type=file]{display:none}
       <option value="guitar">木吉他(民謠)</option>
       <option value="guitarnylon">古典吉他(尼龍弦)</option>
       <option value="clarinet">單簧管</option>
+      <option value="drum">鼓組</option>
     </select>
   </div>
 
@@ -243,7 +244,7 @@ input[type=file]{display:none}
           <span><b>純樂譜</b><br><small>滿版1920×1080 或 1080×1920</small></span>
         </button>
         <button class="fmt" id="fmtTypeWithKeyboard">
-          <span><b>樂譜+鍵盤</b><br><small>畫面下方加上鋼琴鍵盤(鼓譜則為鼓組面板)高亮顯示</small></span>
+          <span><b>樂譜+鍵盤</b><br><small>畫面下方加上鍵盤或鼓組面板高亮顯示(依照樂器選單而定)</small></span>
         </button>
         <button class="btn" id="fmtCancel">取消</button>
       </div>
@@ -372,6 +373,13 @@ $("fileInput").addEventListener("change", async e => {
     repeatChordRanges = parsed.repeatRanges;
     articMap = parsed.articMap;
     isDrumScore = parsed.isDrumScore;
+    // 依樂譜類型自動切換樂器選單:鼓譜自動選到「鼓組」,離開鼓譜時如果還停在「鼓組」就退回鋼琴,
+    // 其餘一般樂器(小提琴、大提琴...)選擇維持使用者原本的選擇,不強制改動
+    if (isDrumScore) {
+      $("instrument").value = "drum";
+    } else if (currentInstrument() === "drum") {
+      $("instrument").value = "piano";
+    }
     arpMap = parsed.arpMap;
     articEntries = buildSortedEntries(articMap);
     arpEntries = buildSortedEntries(arpMap);
@@ -1654,7 +1662,7 @@ function drawKeyboardLive(sec){
   if (!cv || !cv.width) return;
   const ctx = cv.getContext("2d");
   ctx.clearRect(0, 0, cv.width, cv.height);
-  if (isDrumScore) {
+  if (currentInstrument() === "drum") {
     const active = events.length ? getActiveDrumHitsAt(sec + KB_LOOKAHEAD_SEC, useCalib()) : new Map();
     drawDrumKit(ctx, 0, 0, cv.width, cv.height, active);
   } else {
@@ -1765,7 +1773,12 @@ function scheduleNote(freq, when, dur, legato, pedal, chordAnchors, harmonyEndSe
   }
 }
 
-$("instrument").addEventListener("change", () => { ensureAudio(); loadInstrumentSamples(currentInstrument()); });
+$("instrument").addEventListener("change", () => {
+  ensureAudio();
+  if (currentInstrument() === "drum") loadDrumKit();
+  else loadInstrumentSamples(currentInstrument());
+  drawKeyboardLive(playing ? currentSec() : pausedAtSec);
+});
 
 function schedulePiano(freq, when, dur, legato, pedal, harmonyEndSec, artic){
   const osc = audioCtx.createOscillator();
@@ -2266,7 +2279,7 @@ async function exportCombinedWithVideo(){
         }
         ctx.strokeStyle = "#B8860B"; ctx.lineWidth = 3;
         ctx.beginPath(); ctx.moveTo(plX, scoreH*0.05); ctx.lineTo(plX, scoreH*0.95); ctx.stroke();
-        if (isDrumScore) {
+        if (currentInstrument() === "drum") {
           const active = getActiveDrumHitsAt(sec + KB_LOOKAHEAD_SEC, calib);
           drawDrumKit(ctx, 0, scoreH, W, kbH, active);
         } else {
@@ -2385,7 +2398,7 @@ async function exportVideo(cfg){
         ctx.moveTo(plX-9, H*0.08-2); ctx.lineTo(plX+9, H*0.08-2); ctx.lineTo(plX, H*0.08+13);
         ctx.closePath(); ctx.fill();
         if (cfg.includeKeyboard) {
-          if (isDrumScore) {
+          if (currentInstrument() === "drum") {
             const active = getActiveDrumHitsAt(sec + KB_LOOKAHEAD_SEC, calib);
             drawDrumKit(ctx, 0, H - kbH, W, kbH, active);
           } else {
