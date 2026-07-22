@@ -39,12 +39,14 @@ header h1{
 }
 header h1 span{color:var(--ivory);font-weight:600}
 .btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:6px;line-height:1;
   border:1px solid var(--gold);background:transparent;color:var(--gold);
   font-family:inherit;font-size:14px;font-weight:500;
-  padding:8px 16px;min-height:38px;border-radius:999px;cursor:pointer;
+  padding:8px 16px;height:38px;border-radius:999px;cursor:pointer;
   transition:background .2s,color .2s;
   white-space:nowrap;
 }
+.btn svg{flex:none}
 .btn:active{background:var(--gold);color:var(--bg)}
 .btn.primary{background:var(--gold);color:var(--bg);font-weight:700}
 .btn.primary:disabled{opacity:.35}
@@ -86,7 +88,7 @@ input[type=range]::-webkit-slider-thumb{
 @media (max-width:600px){
   header{padding:8px 10px;gap:6px 10px}
   header h1{font-size:15px}
-  .btn{padding:7px 12px;font-size:13px}
+  .btn{padding:0 12px;height:36px;font-size:13px}
   #settingsPanel{padding:8px 10px;gap:8px 12px}
   .tempo-box{font-size:12px;gap:6px}
   input[type=range]{width:88px}
@@ -96,7 +98,7 @@ input[type=range]::-webkit-slider-thumb{
 @media (max-height:420px){
   header{padding:5px 10px;gap:4px 8px}
   header h1{font-size:13px}
-  .btn{padding:5px 10px;min-height:30px;font-size:12px}
+  .btn{padding:0 10px;height:28px;font-size:12px}
   #settingsPanel{padding:5px 10px;gap:5px 10px}
   .tempo-box{font-size:11px;gap:4px}
   #settingsPanel select{padding:4px 10px;min-height:28px}
@@ -106,7 +108,7 @@ input[type=range]::-webkit-slider-thumb{
 }
 /* 觸控裝置:放大可點擊區域,滑桿把手更好抓 */
 @media (pointer:coarse){
-  .btn{min-height:42px}
+  .btn{height:42px}
   input[type=range]::-webkit-slider-thumb{width:24px;height:24px}
   #settingsPanel select{min-height:38px}
 }
@@ -222,8 +224,8 @@ input[type=file]{display:none}
   <div class="header-left">
     <h1>Scroll<span>Score</span></h1>
     <button class="btn" id="loadBtn">載入樂譜</button>
-    <button class="btn primary" id="playBtn" disabled>▶ 播放</button>
-    <button class="btn" id="stopBtn" disabled>■ 停止</button>
+    <button class="btn primary" id="playBtn" disabled><svg id="playIcon" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span id="playLabel">播放</span></button>
+    <button class="btn" id="stopBtn" disabled><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>停止</button>
   </div>
   <div class="header-right">
     <div class="tempo-box">速度 <input type="range" id="tempo" min="40" max="400" value="100" step="1"><input type="number" id="tempoVal" min="40" max="400" value="100"></div>
@@ -260,7 +262,7 @@ input[type=file]{display:none}
   <div class="tempo-box">背景透明度 <input type="range" id="scoreBgOpacity" min="0" max="100" value="0"><b id="scoreBgOpacityVal">0</b></div>
   <div class="tempo-box"><label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="showTempoMarks" style="width:16px;height:16px">顯示速度記號</label></div>
   <button class="btn" id="recBtn" disabled>錄影模式</button>
-  <button class="btn" id="exportBtn" disabled>⬇ 匯出影片</button>
+  <button class="btn" id="exportBtn" disabled><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m-5-5l5 5 5-5M4 21h16"/></svg>匯出影片</button>
 </div>
 
 <div style="display:none">
@@ -1361,10 +1363,17 @@ function ensureAudio(){
   if (audioCtx.state === "suspended") audioCtx.resume();
 }
 
+const PLAY_ICON_D = "M8 5v14l11-7z";
+const PAUSE_ICON_D = "M6 5h4v14H6zM14 5h4v14h-4z";
+function setPlayBtnState(isPlaying){
+  $("playIcon").setAttribute("d", isPlaying ? PAUSE_ICON_D : PLAY_ICON_D);
+  $("playLabel").textContent = isPlaying ? "暫停" : "播放";
+}
+
 function startPlayback(fromSec){
   ensureAudio();
   playing = true;
-  $("playBtn").textContent = "❚❚ 暫停";
+  setPlayBtnState(true);
   startAudioFrom(fromSec || 0);
   rafId = requestAnimationFrame(tick);
 }
@@ -2406,7 +2415,7 @@ function pausePlayback(){
   pausedAtSec = currentSec();
   stopAudioOnly();
   playing = false;
-  $("playBtn").textContent = "▶ 播放";
+  setPlayBtnState(false);
   cancelAnimationFrame(rafId);
 }
 
@@ -2418,7 +2427,7 @@ function stopAudioOnly(){
 function stopPlayback(){
   stopAudioOnly();
   playing = false; pausedAtSec = 0;
-  $("playBtn").textContent = "▶ 播放";
+  setPlayBtnState(false);
   cancelAnimationFrame(rafId);
   resetScroll();
   updateTimeLabel(0);
