@@ -665,10 +665,12 @@ function parseXmlTimeline(xmlText){
           const isGrace = !!child.getElementsByTagName("grace")[0];
           const durEl = child.getElementsByTagName("duration")[0];
           const durWhole = durEl ? (parseFloat(durEl.textContent) / divisions) / 4 : 0;
-          // 打叉符頭(notehead="cross"):在鼓譜裡,snare 那條線用打叉符頭記譜,慣例上代表 rim click(邊擊/側擊),
+          // 打叉符頭:在鼓譜裡,snare 那條線用打叉符頭記譜,慣例上代表 rim click(邊擊/側擊),
           // 而不是一般擊面。直接從原始XML讀<notehead>元素判斷,比透過OSMD物件模型的內部欄位更準確可靠。
+          // MusicXML 的 notehead-value 列舉裡「x」才是標準值,「cross」是少數記譜軟體會另外用的值,
+          // 兩種都要接受,不然只認 cross 會漏掉最常見的 x。
           const noteheadEl = child.getElementsByTagName("notehead")[0];
-          if (noteheadEl && /cross/i.test(noteheadEl.textContent.trim())) {
+          if (noteheadEl && /^(x|cross)$/i.test(noteheadEl.textContent.trim())) {
             const midiForHead = midiFromNoteAny(child);
             if (midiForHead !== null) {
               const mk = String(Math.round(midiForHead));
@@ -2115,8 +2117,8 @@ function scheduleDrum(key, when){
       if (!playSample("kick", when, 1.0)) synthKick(when); break;
     case 38: case 40: // Snare
       if (!playSample("snare", when, 0.95)) synthSnare(when, 0.95); break;
-    case 37:          // Side stick
-      if (!playSample("snare", when, 0.4, 1.6)) synthSnare(when, 0.4); break;
+    case 37:          // Side stick / rim click:獨立合成的短促木頭聲,音色明顯區別於一般小鼓,
+      synthRimClick(when, 0.7); break; // 不能再借用小鼓取樣調音高矇混過去(聽起來還是像小鼓)
     case 39:          // Clap → snare 替代
       playSample("snare", when, 0.8) || synthSnare(when, 0.8); break;
     case 42:          // Closed hi-hat
@@ -2169,6 +2171,35 @@ function synthSnare(when, vol){
   og.gain.exponentialRampToValueAtTime(0.001, when+0.1);
   o.connect(og); og.connect(masterGain);
   o.start(when); o.stop(when+0.12); scheduled.push(o);
+}
+/* Rim click(側擊/邊擊):鼓棒直接敲在鼓框上,聲音又短又乾、偏木頭感,跟小鼓的鼓皮+鼓弦共鳴完全不同,
+   不能借用小鼓取樣調音高矇混過去 —— 用「短促的高頻噪點」做打點的清脆感,疊一顆快速衰減的短音給木頭音高感 */
+function synthRimClick(when, gain){
+  gain = gain != null ? gain : 0.7;
+  const bufSec = 0.03;
+  const noiseBuf = audioCtx.createBuffer(1, Math.ceil(audioCtx.sampleRate * bufSec), audioCtx.sampleRate);
+  const data = noiseBuf.getChannelData(0);
+  for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+  const noiseSrc = audioCtx.createBufferSource();
+  noiseSrc.buffer = noiseBuf;
+  const hp = audioCtx.createBiquadFilter();
+  hp.type = "highpass"; hp.frequency.value = 2500;
+  const ng = audioCtx.createGain();
+  ng.gain.setValueAtTime(gain * 0.75, when);
+  ng.gain.exponentialRampToValueAtTime(0.0001, when + bufSec);
+  noiseSrc.connect(hp); hp.connect(ng); ng.connect(masterGain);
+  noiseSrc.start(when); noiseSrc.stop(when + bufSec + 0.01);
+  scheduled.push(noiseSrc);
+
+  const o = audioCtx.createOscillator(), og = audioCtx.createGain();
+  o.type = "triangle";
+  o.frequency.setValueAtTime(1500, when);
+  o.frequency.exponentialRampToValueAtTime(850, when + 0.025);
+  og.gain.setValueAtTime(gain * 0.5, when);
+  og.gain.exponentialRampToValueAtTime(0.0001, when + 0.04);
+  o.connect(og); og.connect(masterGain);
+  o.start(when); o.stop(when + 0.05);
+  scheduled.push(o);
 }
 function synthTom(when, freq){
   const o = audioCtx.createOscillator(), g = audioCtx.createGain();
