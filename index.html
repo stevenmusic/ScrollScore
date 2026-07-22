@@ -36,6 +36,7 @@ header{
 header h1{
   font-family:"Noto Serif TC",serif;font-size:17px;font-weight:700;
   letter-spacing:.12em;color:var(--gold);white-space:nowrap;
+  flex:none;
 }
 header h1 span{color:var(--ivory);font-weight:600}
 .btn{
@@ -84,15 +85,36 @@ input[type=range]::-webkit-slider-thumb{
 /* ── 鍵盤/鼓組面板 ───────────────── */
 #keyboardCanvas{display:block;width:100%;height:150px;background:var(--bg);flex:none}
 /* ── 響應式斷點 ─────────────────── */
-/* 手機直向、小螢幕:控制項縮小,面板改窄留更多空間給樂譜 */
+/* 手機寬度:頂欄改成單排「圖示按鈕」,文字標籤收起來(用 aria-label 留給螢幕報讀器),
+   這樣 載入/播放/停止/速度/設定 全部擠在一行也不會換行,不會有兩排高低不一的觀感 */
 @media (max-width:600px){
-  header{padding:8px 10px;gap:6px 10px}
-  header h1{font-size:15px}
-  .btn{padding:0 12px;height:36px;font-size:13px}
+  header{padding:8px 10px;gap:6px 8px;flex-wrap:nowrap}
+  .header-left,.header-right{gap:6px}
+  header h1{font-size:14px;letter-spacing:.06em}
+  .btn{padding:0 10px;height:34px;font-size:13px}
+  .btn-label{display:none}
+  .header-left .btn svg,#settingsToggle svg{margin:0}
   #settingsPanel{padding:8px 10px;gap:8px 12px}
   .tempo-box{font-size:12px;gap:6px}
-  input[type=range]{width:88px}
+  .tempo-label{display:none}
+  input[type=range]{width:64px}
+  .tempo-box input[type=number]{width:42px;padding:3px}
   #keyboardCanvas{height:110px}
+}
+/* 螢幕更窄(iPhone SE 等):logo 縮到最小、按鈕間距再收緊,確保單排絕對放得下 */
+@media (max-width:380px){
+  header{padding:6px 8px;gap:4px 6px}
+  header h1{font-size:12px;letter-spacing:.02em}
+  .header-left,.header-right{gap:4px}
+  .btn{padding:0 8px;height:32px}
+  input[type=range]{width:48px}
+}
+/* 最舊款極窄機型(320px):再壓縮一輪滑桿與數字框寬度 */
+@media (max-width:330px){
+  header h1{font-size:11px;letter-spacing:0}
+  .btn{padding:0 7px}
+  input[type=range]{width:34px}
+  .tempo-box input[type=number]{width:34px;padding:2px}
 }
 /* 手機橫向 / 螢幕高度極矮:樂譜區最容易被擠不見,優先壓縮頂欄與鍵盤高度 */
 @media (max-height:420px){
@@ -223,15 +245,24 @@ input[type=file]{display:none}
 <header>
   <div class="header-left">
     <h1>Scroll<span>Score</span></h1>
-    <button class="btn" id="loadBtn">載入樂譜</button>
-    <button class="btn primary" id="playBtn" disabled><svg id="playIcon" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span id="playLabel">播放</span></button>
-    <button class="btn" id="stopBtn" disabled><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>停止</button>
+    <button class="btn" id="loadBtn" aria-label="載入樂譜">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      <span class="btn-label">載入樂譜</span>
+    </button>
+    <button class="btn primary" id="playBtn" disabled aria-label="播放">
+      <svg id="playIcon" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+      <span id="playLabel" class="btn-label">播放</span>
+    </button>
+    <button class="btn" id="stopBtn" disabled aria-label="停止">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
+      <span class="btn-label">停止</span>
+    </button>
   </div>
   <div class="header-right">
-    <div class="tempo-box">速度 <input type="range" id="tempo" min="40" max="400" value="100" step="1"><input type="number" id="tempoVal" min="40" max="400" value="100"></div>
-    <button class="btn" id="settingsToggle" style="display:flex;align-items:center;gap:6px">
+    <div class="tempo-box"><span class="tempo-label">速度</span> <input type="range" id="tempo" min="40" max="400" value="100" step="1"><input type="number" id="tempoVal" min="40" max="400" value="100"></div>
+    <button class="btn" id="settingsToggle" aria-label="設定">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15a3 3 0 100-6 3 3 0 000 6z"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
-      設定
+      <span class="btn-label">設定</span>
     </button>
   </div>
   <input type="file" id="fileInput" accept=".xml,.musicxml,.mxl">
