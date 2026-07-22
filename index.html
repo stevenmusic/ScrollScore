@@ -1430,17 +1430,22 @@ function drawKeyboard(ctx, x, y, w, h, activeMap){
   }
 }
 
-/* ── 鼓組面板視覺化:鼓譜沒有音高可以對應鋼琴鍵盤,改成畫一組鼓件面板,
-   打到哪個部位那個部位就發亮(跟琴鍵發光是同一套視覺語言:鼓皮類用金色、銅鈸類用青色) ── */
+/* ── 鼓組面板視覺化:鼓譜沒有音高可以對應鋼琴鍵盤,改成畫一整組鼓組面板(參考實體爵士鼓的俯視擺位),
+   打到哪個部位那個部位就發亮(跟琴鍵發光是同一套視覺語言:鼓皮類用金色、銅鈸類用青色)。
+   座標比照實體鼓組的俯視相對位置:兩片 Crash 分居兩側外緣、Hi-Hat 在左手邊、Ride 在右手邊、
+   Hi/Mid Tom 在上方居中、Snare/Kick/Floor Tom 在下方居中,共 9 個部位;Hi-Hat 再分開閉合/開放兩種
+   打法各自獨立發光,所以總共 10 個可發光區塊 ── */
 const DRUM_PAD_LAYOUT = [
-  { id: "crash",    label: "Crash",    cymbal: true,  r: 0.30, cyOff: -0.22 },
-  { id: "hihat",    label: "Hi-Hat",   cymbal: true,  r: 0.27, cyOff: -0.10 },
-  { id: "tomHi",    label: "Tom 1",    cymbal: false, r: 0.23, cyOff: -0.26 },
-  { id: "tomMid",   label: "Tom 2",    cymbal: false, r: 0.25, cyOff: -0.24 },
-  { id: "snare",    label: "Snare",    cymbal: false, r: 0.27, cyOff: 0.06 },
-  { id: "kick",     label: "Kick",     cymbal: false, r: 0.38, cyOff: 0.20 },
-  { id: "tomFloor", label: "Floor",    cymbal: false, r: 0.30, cyOff: 0.14 },
-  { id: "ride",     label: "Ride",     cymbal: true,  r: 0.32, cyOff: -0.20 }
+  { id: "crash1",      label: "Crash 1",   cymbal: true,  x: 0.06, cyOff: -0.40, r: 1.00 },
+  { id: "hihatClosed", label: "HH 閉",     cymbal: true,  x: 0.155, cyOff: 0.00, r: 0.62 },
+  { id: "hihatOpen",   label: "HH 開",     cymbal: true,  x: 0.205, cyOff: -0.28, r: 0.66, openHat: true },
+  { id: "tomHi",       label: "Hi Tom",    cymbal: false, x: 0.355, cyOff: -0.32, r: 0.68 },
+  { id: "snare",       label: "Snare",     cymbal: false, x: 0.255, cyOff: 0.24,  r: 0.82 },
+  { id: "kick",        label: "Kick",      cymbal: false, x: 0.50,  cyOff: 0.08,  r: 1.20 },
+  { id: "tomMid",      label: "Mid Tom",   cymbal: false, x: 0.625, cyOff: -0.34, r: 0.74 },
+  { id: "tomFloor",    label: "Floor",     cymbal: false, x: 0.70,  cyOff: 0.26,  r: 0.96 },
+  { id: "ride",        label: "Ride",      cymbal: true,  x: 0.845, cyOff: -0.24, r: 0.98 },
+  { id: "crash2",      label: "Crash 2",   cymbal: true,  x: 0.94,  cyOff: -0.42, r: 1.00 }
 ];
 function mixColor(base, accent, t, alpha){
   t = Math.max(0, Math.min(1, t));
@@ -1456,75 +1461,91 @@ function drawDrumKit(ctx, x, y, w, h, activeMap){
   ctx.fillStyle = baseGrad;
   ctx.fillRect(x, y, w, h);
 
-  const n = DRUM_PAD_LAYOUT.length;
-  const slotW = w / n;
-  const baseR = Math.min(slotW * 0.82, h * 0.46);
-  const labelH = Math.max(11, h * 0.15);
-  const centerY = y + (h - labelH) / 2;
+  const labelH = Math.max(11, h * 0.16);
+  const usableH = h - labelH;
+  const centerY = y + usableH / 2 + usableH * 0.06;
+  const baseR = Math.min(usableH * 0.44, w * 0.042);
 
-  for (let i = 0; i < n; i++) {
-    const pad = DRUM_PAD_LAYOUT[i];
-    const cx = x + slotW * (i + 0.5);
-    const cy = centerY + pad.cyOff * (h - labelH) * 0.5;
-    const r = baseR * (pad.r / 0.38);
+  for (const pad of DRUM_PAD_LAYOUT) {
+    const cx = x + w * pad.x;
+    const cy = centerY + pad.cyOff * usableH;
+    const r = baseR * pad.r;
     const intensity = activeMap.get(pad.id) || 0;
-    drawDrumPad(ctx, cx, cy, r, pad.cymbal, intensity);
+    drawDrumPad(ctx, cx, cy, r, pad, intensity);
     ctx.fillStyle = "rgba(232,214,178," + (0.5 + intensity * 0.5) + ")";
-    ctx.font = "600 " + Math.max(10, Math.min(15, slotW * 0.16)) + "px 'Noto Sans TC', sans-serif";
+    ctx.font = "600 " + Math.max(9, Math.min(13, w * 0.0105)) + "px 'Noto Sans TC', sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "alphabetic";
-    ctx.fillText(pad.label, cx, y + h - labelH * 0.32);
+    ctx.fillText(pad.label, cx, y + h - labelH * 0.30);
   }
 }
-function drawDrumPad(ctx, cx, cy, r, isCymbal, intensity){
-  const accent = isCymbal ? [95, 224, 206] : [242, 185, 75]; // 銅鈸=青色、鼓皮=金色,跟琴鍵配色語言一致
-  const ry = r * (isCymbal ? 0.56 : 0.8);
+/* 單片鈸(銅鈸類共用):由中心到邊緣的漸層,靜止時是暗金屬色,打擊瞬間混入青色並隨餘光衰減,
+   加上同心圈溝紋做出實體銅鈸的金屬光澤感 */
+function drawCymbalDisc(ctx, cx, cy, r, ry, accent, intensity){
+  if (intensity > 0) {
+    ctx.save();
+    ctx.shadowColor = "rgba(" + accent[0] + "," + accent[1] + "," + accent[2] + "," + (0.5 + 0.4 * intensity) + ")";
+    ctx.shadowBlur = 6 + 24 * intensity;
+  }
+  const bodyGrad = ctx.createRadialGradient(cx, cy - ry * 0.3, r * 0.15, cx, cy, r);
+  bodyGrad.addColorStop(0, mixColor([196, 188, 168], accent, intensity, 1));
+  bodyGrad.addColorStop(0.7, mixColor([104, 96, 82], accent, intensity * 0.75, 1));
+  bodyGrad.addColorStop(1, mixColor([46, 41, 34], accent, intensity * 0.4, 1));
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, r, ry, 0, 0, Math.PI * 2);
+  ctx.fillStyle = bodyGrad;
+  ctx.fill();
+  ctx.strokeStyle = mixColor([20, 16, 12], accent, intensity * 0.6, 0.9);
+  ctx.lineWidth = Math.max(1, r * 0.06);
+  ctx.stroke();
+  ctx.strokeStyle = "rgba(255,255,255," + (0.08 + intensity * 0.18) + ")";
+  ctx.lineWidth = Math.max(0.5, r * 0.025);
+  for (let k = 1; k <= 2; k++) {
+    const t = k / 3;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, r * t, ry * t, 0, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  if (intensity > 0) ctx.restore();
+}
+function drawDrumPad(ctx, cx, cy, r, pad, intensity){
+  const accent = pad.cymbal ? [95, 224, 206] : [242, 185, 75]; // 銅鈸=青色、鼓皮=金色,跟琴鍵配色語言一致
 
+  if (pad.openHat) {
+    // 開放式 Hi-Hat:上下兩片鈸中間留出縫隙,一眼就能跟閉合式的單片區分開來
+    drawCymbalDisc(ctx, cx, cy - r * 0.30, r * 0.88, r * 0.42, accent, intensity * 0.85);
+    drawCymbalDisc(ctx, cx, cy + r * 0.22, r, r * 0.48, accent, intensity);
+    return;
+  }
+  if (pad.cymbal) {
+    drawCymbalDisc(ctx, cx, cy, r, r * 0.5, accent, intensity);
+    return;
+  }
+
+  // 鼓类(鼓皮+鼓圈):中心到邊緣的漸層,靜止時是暗木質/皮革色,打擊瞬間混入金色並隨餘光衰減
+  const ry = r * 0.8;
   if (intensity > 0) {
     ctx.save();
     ctx.shadowColor = "rgba(" + accent[0] + "," + accent[1] + "," + accent[2] + "," + (0.5 + 0.4 * intensity) + ")";
     ctx.shadowBlur = 8 + 28 * intensity;
   }
-
-  // 鼓圈/鈸體本體:由中心到邊緣的漸層,靜止時是暗金屬/木質色,打擊瞬間混入色系亮色並隨餘光衰減
   const bodyGrad = ctx.createRadialGradient(cx, cy - ry * 0.3, r * 0.15, cx, cy, r);
-  if (isCymbal) {
-    bodyGrad.addColorStop(0, mixColor([196, 188, 168], accent, intensity, 1));
-    bodyGrad.addColorStop(0.7, mixColor([104, 96, 82], accent, intensity * 0.75, 1));
-    bodyGrad.addColorStop(1, mixColor([46, 41, 34], accent, intensity * 0.4, 1));
-  } else {
-    bodyGrad.addColorStop(0, mixColor([224, 208, 176], accent, intensity, 1));
-    bodyGrad.addColorStop(0.68, mixColor([118, 84, 48], accent, intensity * 0.6, 1));
-    bodyGrad.addColorStop(1, mixColor([44, 30, 18], accent, intensity * 0.3, 1));
-  }
+  bodyGrad.addColorStop(0, mixColor([224, 208, 176], accent, intensity, 1));
+  bodyGrad.addColorStop(0.68, mixColor([118, 84, 48], accent, intensity * 0.6, 1));
+  bodyGrad.addColorStop(1, mixColor([44, 30, 18], accent, intensity * 0.3, 1));
   ctx.beginPath();
   ctx.ellipse(cx, cy, r, ry, 0, 0, Math.PI * 2);
   ctx.fillStyle = bodyGrad;
   ctx.fill();
-
   ctx.strokeStyle = mixColor([20, 16, 12], accent, intensity * 0.6, 0.9);
   ctx.lineWidth = Math.max(1.2, r * 0.05);
   ctx.stroke();
-
-  if (isCymbal) {
-    // 銅鈸紋路:同心圈溝紋,製造金屬光澤感
-    ctx.strokeStyle = "rgba(255,255,255," + (0.08 + intensity * 0.18) + ")";
-    ctx.lineWidth = Math.max(0.6, r * 0.02);
-    for (let k = 1; k <= 3; k++) {
-      const t = k / 4;
-      ctx.beginPath();
-      ctx.ellipse(cx, cy, r * t, ry * t, 0, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-  } else {
-    // 鼓皮頂端高光弧線,增加立體感(跟白鍵頂端高光是同一套手法)
-    ctx.strokeStyle = "rgba(255,255,255,0.35)";
-    ctx.lineWidth = Math.max(1, r * 0.035);
-    ctx.beginPath();
-    ctx.ellipse(cx, cy - ry * 0.35, r * 0.6, ry * 0.32, 0, Math.PI * 1.1, Math.PI * 1.9);
-    ctx.stroke();
-  }
-
+  // 鼓皮頂端高光弧線,增加立體感(跟白鍵頂端高光是同一套手法)
+  ctx.strokeStyle = "rgba(255,255,255,0.35)";
+  ctx.lineWidth = Math.max(1, r * 0.035);
+  ctx.beginPath();
+  ctx.ellipse(cx, cy - ry * 0.35, r * 0.6, ry * 0.32, 0, Math.PI * 1.1, Math.PI * 1.9);
+  ctx.stroke();
   if (intensity > 0) ctx.restore();
 }
 
@@ -1582,11 +1603,13 @@ function getActiveNotesAt(sec, calib){
 const DRUM_PIECES = {
   35: "kick", 36: "kick",
   38: "snare", 40: "snare", 37: "snare", 39: "snare",
-  42: "hihat", 44: "hihat", 46: "hihat",
+  42: "hihatClosed", 44: "hihatClosed",
+  46: "hihatOpen",
   48: "tomHi", 50: "tomHi",
   45: "tomMid", 47: "tomMid",
   41: "tomFloor", 43: "tomFloor",
-  49: "crash", 57: "crash", 55: "crash", 52: "crash",
+  49: "crash1", 55: "crash1",
+  57: "crash2", 52: "crash2",
   51: "ride", 59: "ride", 53: "ride"
 };
 const DRUM_FLASH_SEC = 0.22; // 打擊後視覺餘光衰減時間
