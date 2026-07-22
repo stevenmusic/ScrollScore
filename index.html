@@ -1510,7 +1510,9 @@ function mixColor(base, accent, t, alpha){
 }
 /* 部位名稱直接寫在該部位圓圈裡面(仿照參考照片的標示方式),不額外佔一排文字,畫面比較不雜亂 */
 function drawPadLabel(ctx, cx, cy, r, ry, text){
-  const fontSize = Math.max(11, Math.min(22, ry * 0.85, r * 0.46));
+  // 字體大小完全跟著這個部位實際畫出來的圓圈尺寸走(不設絕對像素上限),匯出影片畫布大很多,
+  // 圓圈本身也跟著等比放大,字才會跟著一起放大,而不是卡在一個給小畫面調的固定像素上限
+  const fontSize = Math.max(11, Math.min(ry * 0.85, r * 0.46));
   ctx.font = "700 " + fontSize.toFixed(1) + "px 'Noto Sans TC', sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
@@ -1636,7 +1638,9 @@ function drawCymbalDisc(ctx, cx, cy, r, ry, accent, intensity, label){
   if (label) drawPadLabel(ctx, cx, cy, r, ry, label);
 }
 function drawDrumPad(ctx, cx, cy, r, pad, intensity){
-  const accent = pad.cymbal ? [95, 224, 206] : [242, 185, 75]; // 銅鈸=青色、鼓皮=金色,跟琴鍵配色語言一致
+  // 銅鈸=偏白偏亮的香檳金(模擬真實銅鈸是黃銅/青銅材質反光的樣子)、鼓皮=深一點的琥珀金,
+  // 兩個都在同一個暖色調家族裡,只是明暗深淺不同,不會像先前金色配青色那樣色相衝突不搭
+  const accent = pad.cymbal ? [255, 230, 160] : [242, 185, 75];
 
   if (pad.openHat) {
     // 開放式 Hi-Hat:上下兩片鈸中間留出縫隙,一眼就能跟閉合式的單片區分開來;名稱寫在下面較大片鈸上
