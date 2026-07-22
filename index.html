@@ -201,6 +201,12 @@ input[type=file]{display:none}
     </select>
   </div>
 
+  <div class="tempo-box">
+    <button class="btn" id="audioImportBtn">匯入音檔</button>
+    <input type="file" id="audioImportFile" accept="audio/*">
+    <span id="audioImportStatus" style="font-size:12px;opacity:0.75">尚未匯入音檔(播放樂器合成音)</span>
+    <button class="btn" id="audioImportClearBtn" style="padding:4px 10px" disabled>移除</button>
+  </div>
   <div class="tempo-box"><label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="legatoPedal" checked style="width:16px;height:16px">圓滑/踏板效果</label></div>
   <div class="tempo-box">背景透明度 <input type="range" id="scoreBgOpacity" min="0" max="100" value="0"><b id="scoreBgOpacityVal">0</b></div>
   <div class="tempo-box"><label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="showTempoMarks" style="width:16px;height:16px">顯示速度記號</label></div>
@@ -296,6 +302,8 @@ let events = [];        // {tWhole, x, notes:[{freq,durWhole}], legato, pedalOn}
 let slurRanges = [], pedalRanges = [], repeatChordRanges = [];
 let articMap = {};
 let isDrumScore = false;
+let importedAudioBuffer = null; // 使用者匯入的音檔(解碼後),有值時播放/匯出都改用這個,不再合成/取樣
+let importedAudioName = null;
 let crossNoteheadEntries = {}; // midi(取整數) -> 已排序的 {t,v} 陣列,記錄哪些時間點是打叉符頭(rim click等特殊擊法),用 findNearestEntry 容許誤差比對
 let articEntries = [], arpEntries = [];
 const MARK_MATCH_EPSILON = 0.01; // 全音符單位,容許兩套游標系統之間的小飄移
@@ -1298,9 +1306,25 @@ function startPlayback(fromSec){
   rafId = requestAnimationFrame(tick);
 }
 
+/* 匯入音檔取代合成音時,直接整段排程播放這個音檔本身,不再逐音符觸發樂器/鼓組音色。
+   假設音檔的開頭對齊樂譜的起點(tWhole=0),跟現有的捲動/計時邏輯共用同一個 startCtxTime,
+   所以中途暫停、拖動進度都不用特別處理,直接用 offsetSec 從音檔對應位置接著播即可 */
+function scheduleImportedAudio(startTime, offsetSec){
+  if (!importedAudioBuffer || offsetSec >= importedAudioBuffer.duration) return;
+  const src = audioCtx.createBufferSource();
+  src.buffer = importedAudioBuffer;
+  src.connect(masterGain);
+  src.start(startTime, offsetSec);
+  scheduled.push(src);
+}
+
 function startAudioFrom(fromSec){
   startCtxTime = audioCtx.currentTime - fromSec;
   scheduled = [];
+  if (importedAudioBuffer) {
+    scheduleImportedAudio(audioCtx.currentTime, fromSec);
+    return;
+  }
   const calib = useCalib();
   let errCount = 0, lastErr = null;
   for (const ev of events) {
@@ -1915,6 +1939,35 @@ $("instrument").addEventListener("change", () => {
   if (currentInstrument() === "drum") { loadDrumKit(); loadCymbalKit(); }
   else loadInstrumentSamples(currentInstrument());
   drawKeyboardLive(playing ? currentSec() : pausedAtSec);
+});
+
+/* ── 匯入音檔取代合成音色 ─────────────────── */
+$("audioImportBtn").addEventListener("click", () => $("audioImportFile").click());
+$("audioImportFile").addEventListener("change", async e => {
+  const file = e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  ensureAudio();
+  setStatus("讀取音檔中…");
+  try {
+    const arr = await file.arrayBuffer();
+    importedAudioBuffer = await audioCtx.decodeAudioData(arr);
+    importedAudioName = file.name;
+    $("audioImportStatus").textContent = "已匯入:" + file.name + "(靜音樂器合成音)";
+    $("audioImportClearBtn").disabled = false;
+    setStatus("音檔已就緒,播放/匯出時改用這個音檔,不再播放樂器合成音");
+    if (playing) { stopAudioOnly(); startAudioFrom(currentSec()); }
+  } catch (err) {
+    setStatus("音檔讀取失敗:" + (err.message || err));
+  }
+});
+$("audioImportClearBtn").addEventListener("click", () => {
+  importedAudioBuffer = null;
+  importedAudioName = null;
+  $("audioImportStatus").textContent = "尚未匯入音檔(播放樂器合成音)";
+  $("audioImportClearBtn").disabled = true;
+  setStatus("已移除音檔,恢復播放樂器合成音");
+  if (playing) { stopAudioOnly(); startAudioFrom(currentSec()); }
 });
 
 function schedulePiano(freq, when, dur, legato, pedal, harmonyEndSec, artic){
@@ -2599,18 +2652,22 @@ async function exportVideo(cfg){
     const t0 = audioCtx.currentTime + 0.1;
     startCtxTime = t0 + LEAD;
     scheduled = [];
-    const calib = useCalib();
-    for (const ev of events) {
-      const t = calib ? calibToSec(ev.tWhole) : wholeToSec(ev.tWhole);
-      const chordAnchors = {};
-      const harmonyEndSec = ev.harmonyEndWhole != null
-        ? startCtxTime + (calib ? calibToSec(ev.harmonyEndWhole) : wholeToSec(ev.harmonyEndWhole))
-        : null;
-      for (const n of ev.notes) {
-        const rollT = (n.rollIndex || 0) * computeArpEffectiveGap(ev, t, calib);
-        const durSec = calib ? Math.max(calibToSec(ev.tWhole + n.durWhole) - t, 0.05) : wholeToSec(n.durWhole);
-        if (n.drum) scheduleDrum(n.key, startCtxTime + t + rollT);
-        else scheduleNote(n.freq, startCtxTime + t + rollT, durSec, ev.legato, ev.pedalOn, chordAnchors, harmonyEndSec, ev.artic);
+    if (importedAudioBuffer) {
+      scheduleImportedAudio(startCtxTime, 0); // 有匯入音檔就整段用它,不逐音符排程合成/取樣音色
+    } else {
+      const calib = useCalib();
+      for (const ev of events) {
+        const t = calib ? calibToSec(ev.tWhole) : wholeToSec(ev.tWhole);
+        const chordAnchors = {};
+        const harmonyEndSec = ev.harmonyEndWhole != null
+          ? startCtxTime + (calib ? calibToSec(ev.harmonyEndWhole) : wholeToSec(ev.harmonyEndWhole))
+          : null;
+        for (const n of ev.notes) {
+          const rollT = (n.rollIndex || 0) * computeArpEffectiveGap(ev, t, calib);
+          const durSec = calib ? Math.max(calibToSec(ev.tWhole + n.durWhole) - t, 0.05) : wholeToSec(n.durWhole);
+          if (n.drum) scheduleDrum(n.key, startCtxTime + t + rollT);
+          else scheduleNote(n.freq, startCtxTime + t + rollT, durSec, ev.legato, ev.pedalOn, chordAnchors, harmonyEndSec, ev.artic);
+        }
       }
     }
     const total = totalSec();
