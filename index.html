@@ -938,17 +938,17 @@ function buildTimeline(){
 }
 
 /* ── 鼓譜偵測 ─────────────────────────────── */
-function isPercussionInstrument(instr){
-  if (!instr || !instr.SubInstruments) return false;
-  return instr.SubInstruments.some(s => s.fixedKey > 0);
-}
 function getDrumKey(n){
+  // 判斷這個音符是不是「無定音」打擊樂記譜:OSMD 只有在讀到 MusicXML <unpitched> 元素時
+  // 才會設定 displayStepUnpitched,這個欄位直接對應該顆音符本身,不需要樂器有沒有填
+  // <midi-instrument><midi-unpitched>(很多鼓譜匯出時根本不會寫這段選填欄位,導致誤判成一般音高、
+  // 用鋼琴音色播放)
+  if (n.displayStepUnpitched === undefined || n.displayStepUnpitched === null) return null;
+  // 1) 優先:MusicXML midi-unpitched 有明確 GM 對照時直接用(Sibelius 鼓組會寫入)
   let instr = null;
   try { instr = n.ParentVoiceEntry.ParentVoice.Parent; } catch(e){}
-  if (!isPercussionInstrument(instr)) return null;
-  // 1) 優先:MusicXML midi-unpitched(Sibelius 鼓組會寫入)
   const pid = n.PlaybackInstrumentId || n.playbackInstrumentId;
-  if (pid) {
+  if (pid && instr && instr.SubInstruments) {
     const sub = instr.SubInstruments.find(s => s.idString === pid);
     if (sub && sub.fixedKey > 0) return normalizeDrumKey(sub.fixedKey);
   }
@@ -1757,23 +1757,41 @@ function playSample(name, when, gain, rate){
   return true;
 }
 
-/* 金屬銅鈸合成:六方波泛音堆疊 + 帶通/高通,經典金屬音色法 */
-function synthCymbal(when, decay, hpFreq, gain){
-  const ratios = [2, 3, 4.16, 5.43, 6.79, 8.21];
+/* 金屬銅鈸合成:九方波非諧波泛音堆疊(敲擊的「叮」)+ 濾波白噪音(鈸片震動的「沙沙」共鳴),
+   兩層疊加是真實鈸聲(尤其爵士 ride)的關鍵 —— 純泛音堆疊只有攻擊聲、沒有那種會延續的沙沙聲底 */
+function synthCymbal(when, decay, hpFreq, gain, noiseMix){
+  noiseMix = noiseMix != null ? noiseMix : 0.35;
+  const ratios = [1, 1.79, 2.43, 3.86, 4.34, 5.43, 6.79, 8.21, 10.1];
   const bp = audioCtx.createBiquadFilter();
-  bp.type = "bandpass"; bp.frequency.value = 10000;
+  bp.type = "bandpass"; bp.frequency.value = 9000; bp.Q.value = 0.7;
   const hp = audioCtx.createBiquadFilter();
   hp.type = "highpass"; hp.frequency.value = hpFreq;
-  const g = audioCtx.createGain();
-  g.gain.setValueAtTime(gain, when);
-  g.gain.exponentialRampToValueAtTime(0.0001, when + decay);
-  bp.connect(hp); hp.connect(g); g.connect(masterGain);
+  const pingGain = audioCtx.createGain();
+  pingGain.gain.setValueAtTime(gain * (1 - noiseMix * 0.6), when);
+  pingGain.gain.exponentialRampToValueAtTime(0.0001, when + decay * 0.75);
+  bp.connect(hp); hp.connect(pingGain); pingGain.connect(masterGain);
   for (const r of ratios) {
     const o = audioCtx.createOscillator();
-    o.type = "square"; o.frequency.value = 130.81 * r;
+    o.type = "square"; o.frequency.value = 220 * r;
     o.connect(bp); o.start(when); o.stop(when + decay + 0.05);
     scheduled.push(o);
   }
+  if (noiseMix <= 0) return;
+  const bufSec = decay + 0.15;
+  const noiseBuf = audioCtx.createBuffer(1, Math.ceil(audioCtx.sampleRate * bufSec), audioCtx.sampleRate);
+  const data = noiseBuf.getChannelData(0);
+  for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+  const noiseSrc = audioCtx.createBufferSource();
+  noiseSrc.buffer = noiseBuf;
+  const noiseHp = audioCtx.createBiquadFilter();
+  noiseHp.type = "highpass"; noiseHp.frequency.value = hpFreq * 1.5;
+  const noiseGain = audioCtx.createGain();
+  noiseGain.gain.setValueAtTime(0.0001, when);
+  noiseGain.gain.linearRampToValueAtTime(gain * noiseMix, when + Math.min(0.02, decay * 0.15));
+  noiseGain.gain.exponentialRampToValueAtTime(0.0001, when + bufSec);
+  noiseSrc.connect(noiseHp); noiseHp.connect(noiseGain); noiseGain.connect(masterGain);
+  noiseSrc.start(when); noiseSrc.stop(when + bufSec);
+  scheduled.push(noiseSrc);
 }
 
 function scheduleDrum(key, when){
@@ -1787,11 +1805,11 @@ function scheduleDrum(key, when){
     case 39:          // Clap → snare 替代
       playSample("snare", when, 0.8) || synthSnare(when, 0.8); break;
     case 42:          // Closed hi-hat
-      if (!playSample("hihat", when, 0.75)) synthCymbal(when, 0.06, 8000, 0.25); break;
+      if (!playSample("hihat", when, 0.75)) synthCymbal(when, 0.06, 8000, 0.25, 0.25); break;
     case 44:          // Pedal hi-hat
-      if (!playSample("hihat", when, 0.45, 1.1)) synthCymbal(when, 0.05, 8000, 0.16); break;
+      if (!playSample("hihat", when, 0.45, 1.1)) synthCymbal(when, 0.05, 8000, 0.16, 0.2); break;
     case 46:          // Open hi-hat
-      synthCymbal(when, 0.45, 7000, 0.28); break;
+      synthCymbal(when, 0.45, 7000, 0.28, 0.4); break;
     case 41: case 43: // Floor toms
       if (!playSample("tom3", when, 0.95)) synthTom(when, 90); break;
     case 45: case 47: // Mid toms
@@ -1799,11 +1817,11 @@ function scheduleDrum(key, when){
     case 48: case 50: // High toms
       if (!playSample("tom1", when, 0.95)) synthTom(when, 175); break;
     case 49: case 57: case 55: case 52: // Crash / splash / china
-      synthCymbal(when, 1.6, 5500, 0.4); break;
-    case 51: case 59: // Ride
-      synthCymbal(when, 0.9, 9000, 0.2); break;
-    case 53:          // Ride bell
-      synthCymbal(when, 0.5, 10500, 0.3); break;
+      synthCymbal(when, 1.6, 5500, 0.4, 0.45); break;
+    case 51: case 59: // Ride:爵士鼓的主要律動聲部,拉長延音+加重沙沙共鳴(wash),才會有那種會「唱歌」的 ride 音色
+      synthCymbal(when, 1.3, 8500, 0.22, 0.55); break;
+    case 53:          // Ride bell:鈴心敲擊,音色要乾淨集中,noise 層降到最低
+      synthCymbal(when, 0.6, 11000, 0.32, 0.12); break;
     default:
       playSample("snare", when, 0.7) || synthSnare(when, 0.7);
   }
