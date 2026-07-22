@@ -296,6 +296,7 @@ let events = [];        // {tWhole, x, notes:[{freq,durWhole}], legato, pedalOn}
 let slurRanges = [], pedalRanges = [], repeatChordRanges = [];
 let articMap = {};
 let isDrumScore = false;
+let crossNoteheadEntries = {}; // midi(取整數) -> 已排序的 {t,v} 陣列,記錄哪些時間點是打叉符頭(rim click等特殊擊法),用 findNearestEntry 容許誤差比對
 let articEntries = [], arpEntries = [];
 const MARK_MATCH_EPSILON = 0.01; // 全音符單位,容許兩套游標系統之間的小飄移
 function buildSortedEntries(map){
@@ -373,6 +374,10 @@ $("fileInput").addEventListener("change", async e => {
     repeatChordRanges = parsed.repeatRanges;
     articMap = parsed.articMap;
     isDrumScore = parsed.isDrumScore;
+    crossNoteheadEntries = {};
+    for (const mk of Object.keys(parsed.crossNoteheadMap || {})) {
+      crossNoteheadEntries[mk] = buildSortedEntries(parsed.crossNoteheadMap[mk]);
+    }
     // 依樂譜類型自動切換樂器選單:鼓譜自動選到「鼓組」,離開鼓譜時如果還停在「鼓組」就退回鋼琴,
     // 其餘一般樂器(小提琴、大提琴...)選擇維持使用者原本的選擇,不強制改動
     if (isDrumScore) {
@@ -570,7 +575,7 @@ function parseXmlTimeline(xmlText){
         timeSig = { beats, beatType, isCompound };
       }
     }
-    if (!bestPart) return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, arpMap: {}, soundTempo, timeSig, isDrumScore: false };
+    if (!bestPart) return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, arpMap: {}, soundTempo, timeSig, isDrumScore: false, crossNoteheadMap: {} };
     // 判斷這份樂譜是不是打擊樂記譜:直接看譜表有沒有用「打擊譜號」(<clef><sign>percussion</sign></clef>),
     // 這是所有記譜軟體匯出鼓譜都會寫的標準記號,比音符物件上某些欄位的預設值可靠多了(不會誤判成一般樂器)
     const isDrumScore = Array.from(bestPart.getElementsByTagName("clef")).some(c => {
@@ -586,6 +591,7 @@ function parseXmlTimeline(xmlText){
     const staffOnsets = {}; // staffNum -> [{tWhole, durWhole, pcs:Set}], 給重複音型偵測用
     const articMap = {}; // tWhole(定點字串) -> {accent,strongAccent,staccato,staccatissimo,tenuto,detachedLegato,spiccato,softAccent,fermata}
     const arpMap = {}; // tWhole(定點字串) -> "up"/"down",分解和弦(琶音)標記
+    const crossNoteheadMap = {}; // midi(整數字串) -> { tWhole定點字串: true },記錄打叉符頭(rim click)音符
 
     function midiFromNote(noteEl){
       const pitchEl = noteEl.getElementsByTagName("pitch")[0];
@@ -598,6 +604,22 @@ function parseXmlTimeline(xmlText){
       if (base === undefined) return null;
       const alterEl = pitchEl.getElementsByTagName("alter")[0];
       if (alterEl) base += parseFloat(alterEl.textContent);
+      const oct = parseInt(octaveEl.textContent, 10);
+      return (oct + 1) * 12 + base;
+    }
+    // 打擊樂記譜大多是用 <unpitched><display-step>/<display-octave> 標示在譜表上的位置(而不是<pitch>),
+    // 這裡沿用跟 <pitch> 完全相同的公式換算,才能跟 OSMD 內部 Note.Pitch 算出來的值對得起來
+    function midiFromNoteAny(noteEl){
+      const direct = midiFromNote(noteEl);
+      if (direct !== null) return direct;
+      const unpitchedEl = noteEl.getElementsByTagName("unpitched")[0];
+      if (!unpitchedEl) return null;
+      const stepEl = unpitchedEl.getElementsByTagName("display-step")[0];
+      const octaveEl = unpitchedEl.getElementsByTagName("display-octave")[0];
+      if (!stepEl || !octaveEl) return null;
+      const stepMap = { C:0, D:2, E:4, F:5, G:7, A:9, B:11 };
+      const base = stepMap[stepEl.textContent.trim()];
+      if (base === undefined) return null;
       const oct = parseInt(octaveEl.textContent, 10);
       return (oct + 1) * 12 + base;
     }
@@ -643,6 +665,17 @@ function parseXmlTimeline(xmlText){
           const isGrace = !!child.getElementsByTagName("grace")[0];
           const durEl = child.getElementsByTagName("duration")[0];
           const durWhole = durEl ? (parseFloat(durEl.textContent) / divisions) / 4 : 0;
+          // 打叉符頭(notehead="cross"):在鼓譜裡,snare 那條線用打叉符頭記譜,慣例上代表 rim click(邊擊/側擊),
+          // 而不是一般擊面。直接從原始XML讀<notehead>元素判斷,比透過OSMD物件模型的內部欄位更準確可靠。
+          const noteheadEl = child.getElementsByTagName("notehead")[0];
+          if (noteheadEl && /cross/i.test(noteheadEl.textContent.trim())) {
+            const midiForHead = midiFromNoteAny(child);
+            if (midiForHead !== null) {
+              const mk = String(Math.round(midiForHead));
+              if (!crossNoteheadMap[mk]) crossNoteheadMap[mk] = {};
+              crossNoteheadMap[mk][cursor.toFixed(6)] = true;
+            }
+          }
           // 譜表(左右手)判斷提前到這裡,琶音標記要用到,分辨同一時間點左右手彈相同音高但只有一手標記的情況
           const staffElEarly = child.getElementsByTagName("staff")[0];
           const staffNumEarly = staffElEarly ? parseInt(staffElEarly.textContent, 10) : lastStaff;
@@ -716,10 +749,10 @@ function parseXmlTimeline(xmlText){
     for (const staffNum of Object.keys(staffOnsets)) {
       repeatRanges = repeatRanges.concat(detectRepeatingChordRanges(staffOnsets[staffNum]));
     }
-    return { slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges, articMap, arpMap, soundTempo, timeSig, isDrumScore };
+    return { slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges, articMap, arpMap, soundTempo, timeSig, isDrumScore, crossNoteheadMap };
   } catch (e) {
     console.error("讀取踏板/圓滑線資訊失敗:", e);
-    return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, arpMap: {}, soundTempo: null, timeSig: null, isDrumScore: false };
+    return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, arpMap: {}, soundTempo: null, timeSig: null, isDrumScore: false, crossNoteheadMap: {} };
   }
 }
 /* 偵測某一手(譜表)裡,音符是否精確循環重複(例如分解和弦C-E-G-C-E-G...),
@@ -859,7 +892,7 @@ function buildTimeline(){
         if (n.NoteTie && n.NoteTie.StartNote === n) {
           durWhole = n.NoteTie.Notes.reduce((s,t)=>s+t.Length.RealValue,0);
         }
-        const drumKey = isDrumScore ? getDrumKey(n) : null;
+        const drumKey = isDrumScore ? getDrumKey(n, tWhole) : null;
         if (drumKey !== null) {
           notes.push({ drum: true, key: drumKey, durWhole });
         } else {
@@ -957,7 +990,7 @@ function buildTimeline(){
 // 只有在 parseXmlTimeline() 判定整份樂譜是打擊樂記譜(isDrumScore,靠 <clef sign="percussion"> 判斷)
 // 才會呼叫這裡,所以不用再判斷「這顆音符是不是打擊樂」——OSMD 的 Note 物件上 displayStepUnpitched/
 // displayOctaveUnpitched 這兩個欄位不管是不是無定音音符,永遠是數字(預設值 0),沒辦法拿來判斷。
-function getDrumKey(n){
+function getDrumKey(n, tWhole){
   // 1) 優先:MusicXML midi-unpitched 有明確 GM 對照時直接用(Sibelius 鼓組會寫入)
   let instr = null;
   try { instr = n.ParentVoiceEntry.ParentVoice.Parent; } catch(e){}
@@ -971,26 +1004,15 @@ function getDrumKey(n){
   const posMap = { 64:36, 65:36, 67:41, 69:43, 72:38, 74:47, 76:48, 77:51, 79:42, 81:49 };
   const key = posMap[midi];
   if (key === undefined) return 38;
-  // snare 同一線位置,如果符頭是打叉(MusicXML notehead="cross"),代表這顆音符是 rim click(邊擊/側擊),
+  // snare 同一線位置,如果原始XML的符頭是打叉(notehead="cross"),代表這顆音符是 rim click(邊擊/側擊),
   // 不是一般擊面,要用 GM 37(Side Stick)取代 GM 38(Acoustic Snare),播放跟鼓面板高亮才會是短促的click聲而不是完整的鼓聲。
-  // 其他位置(hi-hat/crash/ride)本來就是用打叉符頭當作一般記譜慣例,所以只在 snare 這個位置才需要特別判斷。
-  if (key === 38 && isCrossNotehead(n)) return 37;
+  // 直接查表比對「音高_時間點」這個組合鍵,是在解析原始XML時就記錄好的(crossNoteheadSet),
+  // 比透過OSMD物件模型猜測內部欄位名稱可靠很多。
+  if (key === 38 && tWhole !== undefined) {
+    const entries = crossNoteheadEntries[Math.round(midi)];
+    if (entries && findNearestEntry(entries, tWhole, MARK_MATCH_EPSILON) !== undefined) return 37;
+  }
   return key;
-}
-function isCrossNotehead(n){
-  // OSMD 不同版本 Notehead 物件的欄位命名略有差異,依序嘗試幾個常見欄位名稱,
-  // 對照到 MusicXML <notehead> 元素的 "cross"(打叉符頭)值
-  try {
-    const nh = n.Notehead;
-    if (!nh) return false;
-    const candidates = [nh.Style, nh.style, nh.ContentType, nh.contentType, nh.type, nh.Type, nh.Shape, nh.shape, nh.Content];
-    for (const c of candidates) {
-      if (c === undefined || c === null) continue;
-      const s = String(c).toLowerCase();
-      if (s.includes("cross") || s === "x") return true;
-    }
-  } catch (e) {}
-  return false;
 }
 function normalizeDrumKey(k){
   // MusicXML midi-unpitched 為 1–128;若落在 GM 打擊區間直接用,否則減 1 修正
