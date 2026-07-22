@@ -294,6 +294,7 @@ let osmd = null;
 let events = [];        // {tWhole, x, notes:[{freq,durWhole}], legato, pedalOn}
 let slurRanges = [], pedalRanges = [], repeatChordRanges = [];
 let articMap = {};
+let isDrumScore = false;
 let articEntries = [], arpEntries = [];
 const MARK_MATCH_EPSILON = 0.01; // 全音符單位,容許兩套游標系統之間的小飄移
 function buildSortedEntries(map){
@@ -370,6 +371,7 @@ $("fileInput").addEventListener("change", async e => {
     pedalRanges = parsed.pedalRanges;
     repeatChordRanges = parsed.repeatRanges;
     articMap = parsed.articMap;
+    isDrumScore = parsed.isDrumScore;
     arpMap = parsed.arpMap;
     articEntries = buildSortedEntries(articMap);
     arpEntries = buildSortedEntries(arpMap);
@@ -560,7 +562,13 @@ function parseXmlTimeline(xmlText){
         timeSig = { beats, beatType, isCompound };
       }
     }
-    if (!bestPart) return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, arpMap: {}, soundTempo, timeSig };
+    if (!bestPart) return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, arpMap: {}, soundTempo, timeSig, isDrumScore: false };
+    // 判斷這份樂譜是不是打擊樂記譜:直接看譜表有沒有用「打擊譜號」(<clef><sign>percussion</sign></clef>),
+    // 這是所有記譜軟體匯出鼓譜都會寫的標準記號,比音符物件上某些欄位的預設值可靠多了(不會誤判成一般樂器)
+    const isDrumScore = Array.from(bestPart.getElementsByTagName("clef")).some(c => {
+      const signEl = c.getElementsByTagName("sign")[0];
+      return signEl && signEl.textContent.trim().toLowerCase() === "percussion";
+    });
 
     let divisions = 1, cursor = 0, lastStaff = 1;
     const slurStarts = {};
@@ -700,10 +708,10 @@ function parseXmlTimeline(xmlText){
     for (const staffNum of Object.keys(staffOnsets)) {
       repeatRanges = repeatRanges.concat(detectRepeatingChordRanges(staffOnsets[staffNum]));
     }
-    return { slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges, articMap, arpMap, soundTempo, timeSig };
+    return { slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges, articMap, arpMap, soundTempo, timeSig, isDrumScore };
   } catch (e) {
     console.error("讀取踏板/圓滑線資訊失敗:", e);
-    return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, arpMap: {}, soundTempo: null, timeSig: null };
+    return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, arpMap: {}, soundTempo: null, timeSig: null, isDrumScore: false };
   }
 }
 /* 偵測某一手(譜表)裡,音符是否精確循環重複(例如分解和弦C-E-G-C-E-G...),
@@ -843,7 +851,7 @@ function buildTimeline(){
         if (n.NoteTie && n.NoteTie.StartNote === n) {
           durWhole = n.NoteTie.Notes.reduce((s,t)=>s+t.Length.RealValue,0);
         }
-        const drumKey = getDrumKey(n);
+        const drumKey = isDrumScore ? getDrumKey(n) : null;
         if (drumKey !== null) {
           notes.push({ drum: true, key: drumKey, durWhole });
         } else {
@@ -938,12 +946,10 @@ function buildTimeline(){
 }
 
 /* ── 鼓譜偵測 ─────────────────────────────── */
+// 只有在 parseXmlTimeline() 判定整份樂譜是打擊樂記譜(isDrumScore,靠 <clef sign="percussion"> 判斷)
+// 才會呼叫這裡,所以不用再判斷「這顆音符是不是打擊樂」——OSMD 的 Note 物件上 displayStepUnpitched/
+// displayOctaveUnpitched 這兩個欄位不管是不是無定音音符,永遠是數字(預設值 0),沒辦法拿來判斷。
 function getDrumKey(n){
-  // 判斷這個音符是不是「無定音」打擊樂記譜:OSMD 只有在讀到 MusicXML <unpitched> 元素時
-  // 才會設定 displayStepUnpitched,這個欄位直接對應該顆音符本身,不需要樂器有沒有填
-  // <midi-instrument><midi-unpitched>(很多鼓譜匯出時根本不會寫這段選填欄位,導致誤判成一般音高、
-  // 用鋼琴音色播放)
-  if (n.displayStepUnpitched === undefined || n.displayStepUnpitched === null) return null;
   // 1) 優先:MusicXML midi-unpitched 有明確 GM 對照時直接用(Sibelius 鼓組會寫入)
   let instr = null;
   try { instr = n.ParentVoiceEntry.ParentVoice.Parent; } catch(e){}
