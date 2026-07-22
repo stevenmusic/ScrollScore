@@ -540,7 +540,7 @@ async function renderScore(xmlText){
 
   buildTimeline();
   rebuildKeyboardRange();
-  if (events.some(ev => ev.notes.some(n => n.drum))) loadDrumKit();
+  if (events.some(ev => ev.notes.some(n => n.drum))) { loadDrumKit(); loadCymbalKit(); }
   resetScroll();
   $("playBtn").disabled = false;
   $("stopBtn").disabled = false;
@@ -1936,7 +1936,7 @@ function scheduleNote(freq, when, dur, legato, pedal, chordAnchors, harmonyEndSe
 
 $("instrument").addEventListener("change", () => {
   ensureAudio();
-  if (currentInstrument() === "drum") loadDrumKit();
+  if (currentInstrument() === "drum") { loadDrumKit(); loadCymbalKit(); }
   else loadInstrumentSamples(currentInstrument());
   drawKeyboardLive(playing ? currentSec() : pausedAtSec);
 });
@@ -2099,42 +2099,68 @@ function scheduleClarinet(freq, when, dur){
   scheduled.push(o);
 }
 
-/* ── 鼓音色引擎:Virtuosity Drums 真實爵士鼓取樣 + 合成備援 ─────────────
-   Virtuosity Drums(Versilian Studios × Karoryfer Samples,CC0 授權、可商用免標註)是專門為
-   KVR Developer Challenge 錄製的當代爵士鼓組:同一套鼓、同一個鼓手(Austin McMahon)、
-   同一個空間跟麥克風陣列一次錄完全部部位(含 kick/snare/crossstick/tom/hi-hat/crash/ride),
-   比之前「Tone.js 鼓組 + VCSL 銅鈸」兩個不同來源拼起來更統一、更像同一套真實鼓組。
-   這裡固定取「mid」麥克風位置(近距離主麥克風,最接近單一鼓組直接收音的聽感)、
-   固定用 vl3 這個力度層(中等偏強、清楚有力的一擊)。 */
-const DRUM_SAMPLE_BASE = "https://raw.githubusercontent.com/sfzinstruments/virtuosity_drums/master/Samples/mid/";
-const DRUM_SAMPLES = {
-  kick:        "kick/mid_kick_snoff_vl3_rr1.flac",
-  snare:       "snare/mid_snare_center_vl3.flac",
-  rimClick:    "snare/mid_snare_crossstick_vl3.flac", // 同一顆小鼓的 cross-stick 錄音,不是拼湊出來的
-  tomLow:      "ltom/mid_ltom_center_vl3.flac",
-  tomHigh:     "htom/mid_htom_center_vl3.flac",
-  hihatClosed: "hh/mid_hh_closed_vl3_rr1.flac",
-  hihatPedal:  "hh/mid_hh_pedal_vl3_rr1.flac",
-  hihatOpen:   "hh/mid_hh_open_vl3_rr1.flac",
-  crash:       "crash/mid_crash_crash_vl3_rr1.flac",
-  ride:        "ride/mid_ride_ride_vl3_rr1.flac",
-  rideBell:    "ride/mid_ride_bell_vl3_rr1.flac"
-};
+/* ── 鼓音色引擎:原聲取樣 + 銅鈸合成 ───────── */
+const KIT_URL = "https://tonejs.github.io/audio/drum-samples/acoustic-kit/";
 const kitBuffers = {};   // name → AudioBuffer
 let kitLoading = null;
 
 function loadDrumKit(){
   if (kitLoading) return kitLoading;
   ensureAudio();
-  setStatus("載入真實爵士鼓取樣中…");
-  kitLoading = Promise.all(Object.entries(DRUM_SAMPLES).map(async ([name, path]) => {
+  const files = ["kick","snare","hihat","tom1","tom2","tom3"];
+  setStatus("載入鼓音色中…");
+  kitLoading = Promise.all(files.map(async name => {
     try {
-      const res = await fetch(DRUM_SAMPLE_BASE + path);
+      const res = await fetch(KIT_URL + name + ".mp3");
       const arr = await res.arrayBuffer();
       kitBuffers[name] = await audioCtx.decodeAudioData(arr);
     } catch(e){ /* 載入失敗時該鼓件退回合成音 */ }
   })).then(() => setStatus("鼓音色就緒"));
   return kitLoading;
+}
+
+/* 銅鈸類原本完全是合成音,改用 VCSL(Versilian Community Sample Library,CC0 授權、可商用免標註)
+   的真實演奏錄音取代,kick/snare/tom 已經是同一套鼓的真實取樣不用動,銅鈸是目前唯一還在用合成音的部分 */
+const VCSL_URL = "https://raw.githubusercontent.com/sgossner/VCSL/master/";
+const CYMBAL_SAMPLES = {
+  crash:     "Idiophones/Struck%20Idiophones/Clash%20Cymbals%201/cymbal_crash1_ff2.wav",
+  ride:      "Idiophones/Struck%20Idiophones/Suspended%20Cymbal%201/susCymb1_hit_stick_f1.wav",
+  rideBell:  "Idiophones/Struck%20Idiophones/Suspended%20Cymbal%201/susCymb1_hit_bell_mf1.wav",
+  hihatOpen: "Idiophones/Struck%20Idiophones/Hi-Hat%20Cymbal/HiHat_HitO_rr1_Mid.wav"
+};
+const cymbalBuffers = {};   // name → AudioBuffer
+let cymbalLoading = null;
+
+function loadCymbalKit(){
+  if (cymbalLoading) return cymbalLoading;
+  ensureAudio();
+  cymbalLoading = Promise.all(Object.entries(CYMBAL_SAMPLES).map(async ([name, path]) => {
+    try {
+      const res = await fetch(VCSL_URL + path);
+      const arr = await res.arrayBuffer();
+      cymbalBuffers[name] = await audioCtx.decodeAudioData(arr);
+    } catch(e){ /* 載入失敗時該銅鈸退回合成音 */ }
+  }));
+  return cymbalLoading;
+}
+
+/* 銅鈸取樣是音樂廳實錄,自然延音拖得比一般鼓組取樣長很多(原始檔案殘響甚至長達十幾秒),
+   直接整段播放在快速的段落裡會糊成一片,所以要主動包一個振幅包絡收尾,而不是照樣放給它自然結束 */
+function playCymbalSample(name, when, gain, sustainSec, rate){
+  const buf = cymbalBuffers[name];
+  if (!buf) return false;
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  if (rate) src.playbackRate.value = rate;
+  const g = audioCtx.createGain();
+  g.gain.setValueAtTime(gain, when);
+  g.gain.setValueAtTime(gain, when + sustainSec * 0.5);
+  g.gain.exponentialRampToValueAtTime(0.0001, when + sustainSec);
+  src.connect(g); g.connect(masterGain);
+  src.start(when);
+  src.stop(when + sustainSec + 0.1);
+  scheduled.push(src);
+  return true;
 }
 
 function playSample(name, when, gain, rate){
@@ -2151,21 +2177,24 @@ function playSample(name, when, gain, rate){
   return true;
 }
 
-/* 銅鈸/開鈸/腳踏鈸類的原始錄音殘響拖得比鼓類長很多(crash 原始檔案甚至長達十幾秒),
-   直接整段播放在快速的段落裡會糊成一片,所以要主動包一個振幅包絡收尾,而不是照樣放給它自然結束 */
-function playCymbalSample(name, when, gain, sustainSec, rate){
-  const buf = kitBuffers[name];
+/* Rim click 直接借用同一套小鼓取樣本身(跟 kick/snare/tom 是同一次錄音、同一個空間),
+   不是憑空合成一個不相干的音色 —— 只是把它裁得很短(切掉鼓皮鼓弦共鳴的延音尾巴,只留下打擊瞬間)、
+   加高通濾掉低頻的「蓬」聲、拉高一點點音高(模擬打在鼓框而不是鼓皮上),這樣音色才會跟其他鼓件
+   聽起來像同一套鼓,而不是另外拼上去的東西 */
+function playRimClickFromSample(when, gain){
+  const buf = kitBuffers["snare"];
   if (!buf) return false;
   const src = audioCtx.createBufferSource();
   src.buffer = buf;
-  if (rate) src.playbackRate.value = rate;
+  src.playbackRate.value = 1.3;
+  const hp = audioCtx.createBiquadFilter();
+  hp.type = "highpass"; hp.frequency.value = 1100;
   const g = audioCtx.createGain();
   g.gain.setValueAtTime(gain, when);
-  g.gain.setValueAtTime(gain, when + sustainSec * 0.5);
-  g.gain.exponentialRampToValueAtTime(0.0001, when + sustainSec);
-  src.connect(g); g.connect(masterGain);
+  g.gain.exponentialRampToValueAtTime(0.0001, when + 0.045);
+  src.connect(hp); hp.connect(g); g.connect(masterGain);
   src.start(when);
-  src.stop(when + sustainSec + 0.1);
+  src.stop(when + 0.07);
   scheduled.push(src);
   return true;
 }
@@ -2213,27 +2242,27 @@ function scheduleDrum(key, when){
       if (!playSample("kick", when, 1.0)) synthKick(when); break;
     case 38: case 40: // Snare
       if (!playSample("snare", when, 0.95)) synthSnare(when, 0.95); break;
-    case 37:          // Side stick / rim click:同一套鼓的 cross-stick 錄音,不是拼湊出來的
-      if (!playSample("rimClick", when, 0.9)) synthRimClick(when, 0.7); break;
+    case 37:          // Side stick / rim click:優先裁短同一套小鼓取樣(音色才會跟整組鼓一致),
+      if (!playRimClickFromSample(when, 0.85)) synthRimClick(when, 0.7); break; // 取樣載入失敗才退回合成音
     case 39:          // Clap → snare 替代
       playSample("snare", when, 0.8) || synthSnare(when, 0.8); break;
     case 42:          // Closed hi-hat
-      if (!playSample("hihatClosed", when, 0.85)) synthCymbal(when, 0.06, 8000, 0.25, 0.25); break;
-    case 44:          // Pedal hi-hat:原始錄音比真正的「chick」聲長,包絡收緊一點
-      if (!playCymbalSample("hihatPedal", when, 0.7, 0.15)) synthCymbal(when, 0.05, 8000, 0.16, 0.2); break;
-    case 46:          // Open hi-hat
+      if (!playSample("hihat", when, 0.75)) synthCymbal(when, 0.06, 8000, 0.25, 0.25); break;
+    case 44:          // Pedal hi-hat
+      if (!playSample("hihat", when, 0.45, 1.1)) synthCymbal(when, 0.05, 8000, 0.16, 0.2); break;
+    case 46:          // Open hi-hat:優先用 VCSL 真實開鈸錄音
       if (!playCymbalSample("hihatOpen", when, 0.8, 0.45)) synthCymbal(when, 0.45, 7000, 0.28, 0.4); break;
-    case 41: case 43: // Floor toms:最低的落地鼓,用同一顆低音鼓稍微降一點音高做出更深沉的感覺
-      if (!playSample("tomLow", when, 0.95, 0.94)) synthTom(when, 90); break;
+    case 41: case 43: // Floor toms
+      if (!playSample("tom3", when, 0.95)) synthTom(when, 90); break;
     case 45: case 47: // Mid toms
-      if (!playSample("tomLow", when, 0.95)) synthTom(when, 130); break;
+      if (!playSample("tom2", when, 0.95)) synthTom(when, 130); break;
     case 48: case 50: // High toms
-      if (!playSample("tomHigh", when, 0.95)) synthTom(when, 175); break;
-    case 49: case 57: case 55: case 52: // Crash / splash / china
+      if (!playSample("tom1", when, 0.95)) synthTom(when, 175); break;
+    case 49: case 57: case 55: case 52: // Crash / splash / china:優先用 VCSL 真實鈸片錄音
       if (!playCymbalSample("crash", when, 0.85, 1.8)) synthCymbal(when, 1.6, 5500, 0.4, 0.45); break;
-    case 51: case 59: // Ride:爵士鼓的主要律動聲部,才會有那種會「唱歌」的質感
+    case 51: case 59: // Ride:爵士鼓的主要律動聲部,優先用真實 suspended cymbal 錄音才會有那種會「唱歌」的質感
       if (!playCymbalSample("ride", when, 0.8, 1.4)) synthCymbal(when, 1.3, 8500, 0.22, 0.55); break;
-    case 53:          // Ride bell:鈴心敲擊,音色乾淨集中
+    case 53:          // Ride bell:鈴心敲擊,優先用真實錄音的鈴心版本,音色乾淨集中
       if (!playCymbalSample("rideBell", when, 0.85, 0.7)) synthCymbal(when, 0.6, 11000, 0.32, 0.12); break;
     default:
       playSample("snare", when, 0.7) || synthSnare(when, 0.7);
