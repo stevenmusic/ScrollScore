@@ -1945,7 +1945,11 @@ const REAL_INSTRUMENTS = {
   cello:    { folder: "cello",           minOct: 1, maxOct: 5 },
   flute:    { folder: "flute",           minOct: 3, maxOct: 7 },
   guitar:   { folder: "guitar-acoustic", minOct: 2, maxOct: 6 },
-  guitarnylon: { folder: "guitar-nylon", minOct: 2, maxOct: 6 },
+  // guitar-nylon 這個取樣庫實際收錄的音不是每個八度都有 C/D#/F#/A(預設四個取樣點),
+  // 尤其完全沒有任何一個 C 音,套用預設取樣點會抓不到檔案、幾乎整段退回合成音色。
+  // 改成這個取樣庫實際涵蓋 2-5 八度都存在的 D/E/F#/A,音色才會真的用上真實錄音
+  // (已逐一 fetch 驗證存在;6 八度以上這個取樣庫完全沒有錄音,所以上限收到 5)
+  guitarnylon: { folder: "guitar-nylon", minOct: 2, maxOct: 5, notes: [["D",2],["E",4],["Fs",6],["A",9]] },
   clarinet: { folder: "clarinet",        minOct: 2, maxOct: 6 }
 };
 const instrumentBuffers = {};   // instKey -> [{midi, buffer}]
@@ -1956,7 +1960,7 @@ function loadInstrumentSamples(instKey){
   if (!cfg) return Promise.resolve();
   if (instrumentBuffers[instKey] || instrumentLoading[instKey]) return instrumentLoading[instKey] || Promise.resolve();
   ensureAudio();
-  const notes = [["C",0],["Ds",3],["Fs",6],["A",9]];
+  const notes = cfg.notes || [["C",0],["Ds",3],["Fs",6],["A",9]];
   const list = [];
   const jobs = [];
   for (let oct = cfg.minOct; oct <= cfg.maxOct; oct++) {
