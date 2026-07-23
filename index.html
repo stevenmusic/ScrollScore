@@ -390,7 +390,11 @@ input[type=file]{display:none}
 .ratio-p{width:19px;height:34px;margin:0 7.5px}
 /* ── 匯出預覽 ───────────────────── */
 #previewOverlay{
-  position:absolute;inset:0;z-index:46;display:none;
+  /* fixed(而非absolute)是因為這層原本嵌套在 #stage 裡,#stage 本身受 flex 版面限制、
+     高度不等於整個裝置視窗——直式(portrait)預覽圖很高時,absolute+inset:0 只會撐滿
+     #stage 那塊被壓縮過的區域,導致下方按鈕被推到 #stage 範圍外、完全按不到。
+     改成 fixed 讓這層一定是相對於真正的視窗定位,不受 #stage 高度影響。 */
+  position:fixed;inset:0;z-index:46;display:none;
   align-items:center;justify-content:center;
   background:rgba(12,10,7,.9);backdrop-filter:blur(3px);
 }
@@ -398,13 +402,15 @@ input[type=file]{display:none}
 #previewOverlay .box{
   text-align:center;padding:20px;border:1px solid var(--gold);
   border-radius:14px;background:var(--panel);width:min(94vw,640px);
-  max-height:92vh;overflow-y:auto;box-sizing:border-box;
+  max-height:92vh;max-height:92dvh;overflow-y:auto;box-sizing:border-box;
 }
 #previewOverlay .title{
   font-family:"Noto Serif TC",serif;font-size:19px;color:var(--gold);
   letter-spacing:.1em;margin-bottom:14px;
 }
-#previewImg{max-width:100%;display:block;margin:0 auto 14px;border-radius:8px;border:1px solid var(--line)}
+/* 直式(portrait)匯出圖片長寬比很高,若不限制高度會把下方文字跟按鈕擠出可視範圍,
+   所以限制在視窗高度一半左右,不論橫式/直式都保證按鈕留在畫面內 */
+#previewImg{max-width:100%;max-height:50vh;max-height:50dvh;object-fit:contain;display:block;margin:0 auto 14px;border-radius:8px;border:1px solid var(--line)}
 #previewOverlay p{font-size:12px;color:var(--muted);line-height:1.7;margin-bottom:16px}
 </style>
 </head>
@@ -2904,6 +2910,28 @@ $("audioImportClearBtn").addEventListener("click", () => {
 
 /* ── 匯入背景圖片:放在樂譜後面,跟現有「背景透明度」共用同一個透明度控制,現場畫面跟匯出影片都會用到 ── */
 let customBgImage = null; // 解碼完成的 Image 物件,匯出時直接畫進 canvas
+
+/* 樂譜音符是套 invert 濾鏡後的淡金色線條,疊在 #scoreBg 這層之上——
+   #scoreBg 越暗,淡金色音符對比越強、可以承受越高的透明度;
+   #scoreBg 越亮(接近白),會把淡色音符洗掉,透明度要壓低。
+   所以匯入圖片後用平均亮度自動反推一個「看得到背景、又不會蓋掉音符」的透明度,不用使用者自己猜。 */
+function computeImageAvgLuminance(img) {
+  const w = 32, h = 32;
+  const c = document.createElement("canvas");
+  c.width = w; c.height = h;
+  const cx = c.getContext("2d");
+  cx.drawImage(img, 0, 0, w, h);
+  let data;
+  try { data = cx.getImageData(0, 0, w, h).data; }
+  catch (e) { return null; }
+  let sum = 0, n = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    sum += 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2];
+    n++;
+  }
+  return sum / n / 255; // 0(全黑)~1(全白)
+}
+
 $("bgImageBtn").addEventListener("click", () => $("bgImageFile").click());
 $("bgImageFile").addEventListener("change", async e => {
   const file = e.target.files[0];
@@ -2918,9 +2946,18 @@ $("bgImageFile").addEventListener("change", async e => {
     $("scoreBg").style.backgroundImage = "url(" + url + ")";
     $("scoreBg").style.backgroundSize = "cover";
     $("scoreBg").style.backgroundPosition = "center";
+    const lum = computeImageAvgLuminance(img);
+    let statusMsg = "背景圖片已套用,可用「背景透明度」調整深淺";
+    if (lum !== null) {
+      const autoOpacity = Math.round(Math.max(15, Math.min(65, 65 - 50 * lum)));
+      $("scoreBgOpacity").value = autoOpacity;
+      $("scoreBgOpacityVal").textContent = autoOpacity;
+      $("scoreBg").style.opacity = autoOpacity / 100;
+      statusMsg = "背景圖片已套用,已自動調整透明度(可用「背景透明度」微調)";
+    }
     $("bgImageStatus").textContent = "已匯入:" + file.name;
     $("bgImageClearBtn").disabled = false;
-    setStatus("背景圖片已套用,可用「背景透明度」調整深淺");
+    setStatus(statusMsg);
   } catch (err) {
     setStatus("背景圖片讀取失敗:" + (err.message || err));
   }
