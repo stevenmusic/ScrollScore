@@ -3787,8 +3787,11 @@ async function exportVideo(cfg){
         // 字級依畫面高度等比例縮放,不管輸出1080p還是其他解析度,字體大小跟邊距比例都一致。
         // 左上標題用網頁同一套金色、字級比右上浮水印大,播放軸也已經上下縮短,兩者不會疊在一起
         if (cfg.watermarkEnabled && (cfg.title || cfg.channel)) {
-          const titleFontSize = Math.round(H * 0.036);
-          const channelFontSize = Math.round(H * 0.022);
+          // 手機瀏覽影片時畫面通常會被縮得比原始解析度小很多(動態消息、嵌入播放器等),
+          // 實際模擬縮小到常見手機動態消息寬度(約480px)檢視過,字級要抓更大一點才看得清楚,
+          // 尤其右上角浮水印字體本來就比標題小,更容易在縮小後糊掉;字級抓大後跟播放軸還是有留足夠間距
+          const titleFontSize = Math.round(H * 0.055);
+          const channelFontSize = Math.round(H * 0.038);
           const wmPadX = Math.round(W * 0.02);
           const wmPadY = Math.max(Math.round(titleFontSize * 0.55), 16);
           ctx.save();
