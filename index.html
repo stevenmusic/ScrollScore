@@ -245,10 +245,16 @@ body.score-loaded #playline{display:block}
   max-width:360px;padding:30px 32px;
   background:rgba(22,18,9,.55);border:1px solid var(--line);border-radius:20px;
   backdrop-filter:blur(2px);
+  cursor:pointer;transition:background-color .15s,border-color .15s;
+}
+.empty-card:hover,.empty-card:focus-visible{
+  background:rgba(22,18,9,.75);border-color:var(--gold);outline:none;
 }
 .empty-card .mark{
-  font-family:"Noto Serif TC",serif;font-size:48px;color:var(--gold);
-  line-height:1;opacity:.85;margin-bottom:4px;
+  display:flex;align-items:center;justify-content:center;
+  width:64px;height:64px;border-radius:50%;
+  background:rgba(201,162,75,.12);color:var(--gold);
+  margin-bottom:4px;
 }
 .empty-card .empty-title{font-size:16px;line-height:1.5;color:var(--ivory);font-weight:600}
 .empty-card .empty-sub{font-size:13px;line-height:1.7;color:var(--muted)}
@@ -483,8 +489,10 @@ input[type=file]{display:none}
 <div id="stage">
   <div id="scoreBg"></div>
   <div id="empty">
-    <div class="empty-card">
-      <div class="mark">𝄞</div>
+    <div class="empty-card" id="emptyCard" role="button" tabindex="0" aria-label="載入樂譜">
+      <div class="mark">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      </div>
       <p class="empty-title">點擊「載入樂譜」開始使用</p>
       <p class="empty-sub">支援 Sibelius / Finale / MuseScore 匯出之 MusicXML(.xml / .mxl)</p>
       <button id="trySampleBtn" class="link-btn">或先試用範例樂譜看看 →</button>
@@ -740,9 +748,16 @@ const SAMPLE_MUSICXML = `<?xml version="1.0" encoding="UTF-8"?>
     </measure>
   </part>
 </score-partwise>`;
-$("trySampleBtn").addEventListener("click", () => {
+$("trySampleBtn").addEventListener("click", (e) => {
+  e.stopPropagation(); // 避免同時觸發外層 emptyCard 的上傳點擊
   const file = new File([SAMPLE_MUSICXML], "範例樂譜-小星星.musicxml", { type: "application/vnd.recordare.musicxml+xml" });
   loadScoreFile(file);
+});
+
+/* 整張空狀態卡片都可以點擊觸發上傳,不用精準點到小按鈕(手機上更好按) */
+$("emptyCard").addEventListener("click", () => $("fileInput").click());
+$("emptyCard").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("fileInput").click(); }
 });
 
 function openSettingsSheet(){
