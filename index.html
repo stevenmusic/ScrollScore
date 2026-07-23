@@ -150,15 +150,6 @@ input[type=range]::-webkit-slider-thumb{
 .switch input:checked + .switch-track::after{transform:translateX(16px);background:var(--gold)}
 .switch input:focus-visible + .switch-track{outline:2px solid var(--gold);outline-offset:2px}
 .switch input:disabled + .switch-track{opacity:.35;cursor:not-allowed}
-/* A-B 設定的三顆按鈕合併成一條分段控制器,而不是三個各自獨立的圓形按鈕 */
-.segmented{display:inline-flex;border:1px solid var(--gold);border-radius:999px;overflow:hidden;flex:none}
-.segmented button{
-  border:none;background:transparent;color:var(--gold);cursor:pointer;
-  font-family:inherit;font-size:13px;font-weight:500;height:34px;padding:0 14px;
-}
-.segmented button+button{border-left:1px solid var(--gold)}
-.segmented button:active{background:var(--gold);color:var(--bg)}
-.segmented button:disabled{opacity:.35;cursor:not-allowed}
 /* ── 樂譜視窗 ───────────────────── */
 #stage{
   flex:1;position:relative;overflow:hidden;min-height:110px;
@@ -277,8 +268,6 @@ footer{
 /* 視覺上維持細線,但實際可觸控/點擊區域上下各多抓 12px,手機上更容易拖到 */
 #progressbar::before{content:"";position:absolute;left:0;right:0;top:-12px;bottom:-12px}
 #progressfill{height:100%;width:0%;background:var(--gold);transition:width .1s linear;border-radius:2px;pointer-events:none}
-#loopRegion{position:absolute;top:0;bottom:0;background:rgba(201,162,75,.3);display:none;pointer-events:none}
-.loop-marker{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--gold-bright);display:none;pointer-events:none;box-shadow:0 0 4px rgba(239,212,138,.8)}
 /* 拖曳進度條時,滑塊正上方即時顯示精確時間碼 */
 #seekTooltip{
   position:absolute;bottom:calc(100% + 10px);left:0;transform:translateX(-50%);
@@ -457,14 +446,6 @@ input[type=file]{display:none}
     <label class="switch-row">
       <span class="switch"><input type="checkbox" id="legatoPedal" checked><span class="switch-track"></span></span>圓滑/踏板效果
     </label>
-    <label class="switch-row" title="在下方進度條標出 A、B 兩點,循環播放時只會反覆這個區間,方便針對特定段落練習">
-      <span class="switch"><input type="checkbox" id="loopEnabled"><span class="switch-track"></span></span>區間循環
-    </label>
-    <div class="segmented">
-      <button id="loopSetA" disabled title="請先載入樂譜">設 A</button>
-      <button id="loopSetB" disabled title="請先載入樂譜">設 B</button>
-      <button id="loopClear" disabled title="請先載入樂譜">清除</button>
-    </div>
   </div>
 
   <div class="settings-group">
@@ -579,8 +560,7 @@ input[type=file]{display:none}
 <footer>
   <span id="status">尚未載入樂譜</span>
   <div id="progressbar">
-    <div id="progressfill"></div><div id="loopRegion"></div>
-    <div id="loopMarkerA" class="loop-marker"></div><div id="loopMarkerB" class="loop-marker"></div>
+    <div id="progressfill"></div>
     <div id="seekTooltip">0:00.0</div>
   </div>
   <div class="time-jump">
@@ -605,7 +585,6 @@ let slurRanges = [], pedalRanges = [], repeatChordRanges = [];
 let articMap = {};
 let isDrumScore = false;
 let scoreTimeSig = null; // {beats, beatType, isCompound},用來估算預備拍要敲幾下(預設抓拍號分子,抓不到就用4下)
-let loopAWhole = null, loopBWhole = null; // A-B 循環練習區間,存全音符位置(跟調速無關,不會因為改BPM而跑掉)
 let importedAudioBuffer = null; // 使用者匯入的音檔(解碼後),有值時播放/匯出都改用這個,不再合成/取樣
 let importedAudioName = null;
 let crossNoteheadEntries = {}; // midi(取整數) -> 已排序的 {t,v} 陣列,記錄哪些時間點是打叉符頭(rim click等特殊擊法),用 findNearestEntry 容許誤差比對
@@ -808,11 +787,6 @@ async function loadScoreFile(file){
     }
     transposeSemitones = 0;
     updateTransposeLabel();
-    // A-B 循環區間是「這首曲子」的練習設定,只有真的載入新樂譜才需要清掉;
-    // 之前誤放在 renderScore() 裡,結果移調、切換顯示速度記號這些「重繪同一首曲子」的操作
-    // 也會跟著把使用者剛設好的 A/B 點洗掉,變成怎麼設都像沒作用
-    loopAWhole = loopBWhole = null;
-    $("loopEnabled").checked = false;
     const parsed = parseXmlTimeline(xmlText);
     slurRanges = parsed.slurRanges;
     pedalRanges = parsed.pedalRanges;
@@ -1019,12 +993,8 @@ async function renderScore(xmlText){
   $("exportBtn").disabled = false;
   $("transUp").disabled = false;
   $("transDown").disabled = false;
-  $("loopSetA").disabled = false;
-  $("loopSetB").disabled = false;
-  $("loopClear").disabled = false;
-  for (const id of ["recBtn", "exportBtn", "transUp", "transDown", "loopSetA", "loopSetB", "loopClear"]) $(id).removeAttribute("title");
+  for (const id of ["recBtn", "exportBtn", "transUp", "transDown"]) $(id).removeAttribute("title");
   $("calibStartBtn").disabled = false;
-  updateLoopMarkers();
   updateTimeLabel(0);
 }
 
@@ -1537,10 +1507,6 @@ function totalSec(){
   if ($("useCalibration").checked && calibrationMap.length >= 2) return calibrationMap[calibrationMap.length-1].realSec;
   return wholeToSec(totalWhole);
 }
-/* 秒數 → 全音符位置(A-B 循環標記存這個單位,才不會被中途調速搞亂區間) */
-function secToWholeAny(sec){ return useCalib() ? calibSecToWhole(sec) : sec * bpm() / 240; }
-function wholeToSecAny(w){ return useCalib() ? calibToSec(w) : wholeToSec(w); }
-
 /* ── 校準時間換算(tap-along / 自動拍點偵測共用) ── */
 function calibToSec(w){
   const m = calibrationMap;
@@ -1740,7 +1706,6 @@ $("tempo").addEventListener("input", () => {
     startAudioFrom(cur);
   }
   updateTimeLabel(playing ? currentSec() : pausedAtSec);
-  updateLoopMarkers(); // A/B 標記是用全音符位置存的,秒數換算會隨 BPM 改變,要重新算百分比位置
 });
 
 /* 套用一個新的 BPM 數值:同步滑桿/數字框/小按鈕顯示,播放中的話從目前位置以新速度重新排程 */
@@ -1755,7 +1720,6 @@ function applyTempo(t){
     startAudioFrom(cur);
   }
   updateTimeLabel(playing ? currentSec() : pausedAtSec);
-  updateLoopMarkers();
 }
 
 // 速度數字改成可以直接點擊輸入,不用只靠拖曳滑桿(滑桿範圍 40~400 橫跨很大,拖曳很難精準停在某個特定數字上)
@@ -1896,24 +1860,9 @@ function playCountIn(){
     setTimeout(resolve, (0.05 + n * interval) * 1000);
   });
 }
-/* A-B 循環區間(秒),沒設定或區間太小就回傳 null;tick()/beginPlayback()/loopEnabled 切換都共用同一份判斷,
-   避免各處各自算一套導致行為不一致 */
-function loopRangeSec(){
-  if (loopAWhole == null || loopBWhole == null) return null;
-  const a = wholeToSecAny(Math.min(loopAWhole, loopBWhole));
-  const b = wholeToSecAny(Math.max(loopAWhole, loopBWhole));
-  if (b - a <= 0.15) return null;
-  return { a, b };
-}
 let countInCancelled = false, countingIn = false;
 async function beginPlayback(fromSec){
   if (countingIn) return; // 已經在倒數中,避免重複點擊疊加倒數
-  // 開啟區間循環時,不管目前播放頭停在哪,按播放一律先跳到 A 點開始 ── 不然要等這一輪播完、
-  // 真的經過 B 點一次才會第一次循環,體感上像是「沒有真的啟用」
-  if ($("loopEnabled").checked) {
-    const range = loopRangeSec();
-    if (range && (fromSec < range.a || fromSec >= range.b)) fromSec = range.a;
-  }
   if ($("countIn").checked) {
     countInCancelled = false;
     countingIn = true;
@@ -3013,15 +2962,6 @@ function xAtSec(sec){
 
 function tick(){
   const sec = currentSec();
-  if ($("loopEnabled").checked) {
-    const range = loopRangeSec();
-    if (range && sec >= range.b) {
-      stopAudioOnly();
-      startAudioFrom(range.a);
-      rafId = requestAnimationFrame(tick);
-      return;
-    }
-  }
   if (sec >= totalSec()) { stopPlayback(); return; }
   const x = xAtSec(sec);
   $("scroller").style.transform = "translateX(" + (playlineX() - x) + "px)";
@@ -3039,7 +2979,7 @@ function resetScroll(){
 function fmt(s){ s=Math.max(0,Math.floor(s)); return Math.floor(s/60)+":"+String(s%60).padStart(2,"0"); }
 function updateTimeLabel(sec){ $("timeLabel").textContent = fmt(sec) + " / " + fmt(totalSec()); }
 
-/* ── 進度條拖曳/點擊直接跳到該位置,同時支援 A-B 循環標記 ─── */
+/* ── 進度條拖曳/點擊直接跳到該位置 ─── */
 function seekTo(sec){
   if (!events.length) return;
   sec = Math.max(0, Math.min(totalSec(), sec));
@@ -3122,50 +3062,6 @@ document.addEventListener("click", e => {
   closeSeekPopover();
 });
 
-function updateLoopMarkers(){
-  const total = totalSec();
-  const mA = $("loopMarkerA"), mB = $("loopMarkerB"), region = $("loopRegion");
-  if (loopAWhole != null && total > 0) {
-    mA.style.display = "block";
-    mA.style.left = Math.min(100, Math.max(0, wholeToSecAny(loopAWhole) / total * 100)) + "%";
-  } else mA.style.display = "none";
-  if (loopBWhole != null && total > 0) {
-    mB.style.display = "block";
-    mB.style.left = Math.min(100, Math.max(0, wholeToSecAny(loopBWhole) / total * 100)) + "%";
-  } else mB.style.display = "none";
-  if (loopAWhole != null && loopBWhole != null && total > 0) {
-    const aPct = Math.min(100, Math.max(0, wholeToSecAny(Math.min(loopAWhole, loopBWhole)) / total * 100));
-    const bPct = Math.min(100, Math.max(0, wholeToSecAny(Math.max(loopAWhole, loopBWhole)) / total * 100));
-    region.style.display = "block";
-    region.style.left = aPct + "%";
-    region.style.width = Math.max(0, bPct - aPct) + "%";
-  } else region.style.display = "none";
-}
-$("loopSetA").addEventListener("click", () => {
-  if (!events.length) return;
-  loopAWhole = secToWholeAny(playing ? currentSec() : pausedAtSec);
-  updateLoopMarkers();
-});
-$("loopSetB").addEventListener("click", () => {
-  if (!events.length) return;
-  loopBWhole = secToWholeAny(playing ? currentSec() : pausedAtSec);
-  updateLoopMarkers();
-});
-/* 開啟區間循環開關時,如果播放頭目前不在 A-B 區間內,立刻跳過去,
-   讓使用者一開開關就能馬上看到/聽到反應,而不是要等按了播放、繞一圈才生效 */
-$("loopEnabled").addEventListener("change", () => {
-  if (!$("loopEnabled").checked) return;
-  const range = loopRangeSec();
-  if (!range) return;
-  const cur = playing ? currentSec() : pausedAtSec;
-  if (cur < range.a || cur >= range.b) seekTo(range.a);
-});
-$("loopClear").addEventListener("click", () => {
-  loopAWhole = loopBWhole = null;
-  $("loopEnabled").checked = false;
-  updateLoopMarkers();
-});
-
 /* ── 錄影模式 ─────────────────────────────── */
 $("recBtn").addEventListener("click", () => {
   stopPlayback();
@@ -3218,13 +3114,11 @@ $("exportBtn").addEventListener("click", () => {
 });
 $("fmtCancel").addEventListener("click", () => $("formatOverlay").classList.remove("show"));
 
-/* 進入「匯出區間」這一步時,如果使用者已經設好 A-B 練習區間,直接帶入,不用重新選一次 */
 function enterRangeStep(){
-  const hasLoop = loopAWhole != null && loopBWhole != null;
-  $("exportRangeToggle").checked = hasLoop;
-  $("exportRangeInputs").style.display = hasLoop ? "flex" : "none";
-  $("exportStartInput").value = fmt(hasLoop ? wholeToSecAny(Math.min(loopAWhole, loopBWhole)) : 0);
-  $("exportEndInput").value = fmt(hasLoop ? wholeToSecAny(Math.max(loopAWhole, loopBWhole)) : totalSec());
+  $("exportRangeToggle").checked = false;
+  $("exportRangeInputs").style.display = "none";
+  $("exportStartInput").value = fmt(0);
+  $("exportEndInput").value = fmt(totalSec());
   showFmtStep("range");
 }
 $("fmtTypeScore").addEventListener("click", () => { chosenIncludeKeyboard = false; enterRangeStep(); });
@@ -3449,7 +3343,7 @@ async function exportVideo(cfg){
     rec.start(3000); // 每3秒分段一次:避免資料完全不釋放而累積過多記憶體,又不會像每秒切一次那麼頻繁
 
     const calib = useCalib();
-    // 匯出區間(來自 A-B 循環或手動輸入的開始/結束時間);沒指定就是整首曲子,跟以前行為一樣
+    // 匯出區間(手動輸入的開始/結束時間);沒指定就是整首曲子,跟以前行為一樣
     const rangeStart = cfg.startSec != null ? Math.max(0, cfg.startSec) : 0;
     const rangeEnd = cfg.endSec != null ? Math.min(totalSec(), cfg.endSec) : totalSec();
 
