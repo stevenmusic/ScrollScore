@@ -1939,25 +1939,53 @@ function currentInstrument(){ return $("instrument").value; }
 /* ── 真實樂器取樣(取代合成音色) ─────────────── */
 const SAMPLE_BASE = "https://nbrosowsky.github.io/tonejs-instruments/samples/";
 const PIANO_BASE = "https://tonejs.github.io/audio/salamander/"; // Tone.js 官方託管的完整版 Salamander 鋼琴取樣,音質/延音都比一般鏡像版本好
-/* 每個樂器實際收錄的取樣點,在同一個取樣庫(nbrosowsky/tonejs-instruments)裡差異很大,
-   不是每一種樂器都剛好在每個八度都有 C/D#/F#/A(預設四個取樣點)這四個音的錄音;
-   套用不存在的取樣點只會讓抓取全部落空、整段退回合成音色。以下 minOct/maxOct/notes
-   都是逐一實際 fetch 驗證過(HTTP 200)才定案,盡量讓每個樂器都真的用上真實錄音 */
+const NOTE_SEMITONE = { C:0, Cs:1, D:2, Ds:3, E:4, F:5, Fs:6, G:7, Gs:8, A:9, As:10, B:11 };
+/* exactList:每個樂器取樣庫(nbrosowsky/tonejs-instruments,鋼琴則是 Salamander)實際收錄的
+   每一個(音名,八度),逐一 fetch 驗證過(HTTP 200)才收錄進來,不是套公式帶入每個八度固定
+   幾個音——因為同一個取樣庫裡,不同樂器實際錄了哪些音差異很大(甚至同一樂器不同八度的
+   涵蓋範圍都不規則),套用不存在的組合只會讓抓取落空、整段退回合成音色。這樣才能保證
+   100% 命中,同時也讓每個音都盡量用上最近的真實錄音,不必大幅度變調 */
 const REAL_INSTRUMENTS = {
-  piano:    { folder: "piano",           minOct: 0, maxOct: 8, base: PIANO_BASE },
-  // violin 這個取樣庫只在 C/E/G/A 這四個音有錄音(不是 C/D#/F#/A),3 八度以下完全沒有錄音
-  strings:  { folder: "violin",          minOct: 3, maxOct: 7, notes: [["C",0],["E",4],["G",7],["A",9]] },
-  // cello 收錄很完整(3-4 八度幾乎每個半音都有),但 1 八度完全沒有錄音,原本白白抓了一輪
-  cello:    { folder: "cello",           minOct: 2, maxOct: 5 },
-  // flute 這個取樣庫只在 C/E/A 三個音有錄音,3 八度以下完全沒有,4 八度以上開始才有
-  flute:    { folder: "flute",           minOct: 4, maxOct: 7, notes: [["C",0],["E",4],["A",9]] },
-  // guitar-acoustic 收錄範圍到 5 八度就結束了,6 八度完全沒有錄音,原本白白抓了一輪
-  guitar:   { folder: "guitar-acoustic", minOct: 2, maxOct: 5 },
-  // guitar-nylon 完全沒有任何一個 C 音的錄音,D# 也只有一個,改用這個取樣庫實際
-  // 涵蓋 2-5 八度都存在的 D/E/F#/A;6 八度以上這個取樣庫完全沒有錄音
-  guitarnylon: { folder: "guitar-nylon", minOct: 2, maxOct: 5, notes: [["D",2],["E",4],["Fs",6],["A",9]] },
-  // clarinet 這個取樣庫只在 D/F/A# 三個音有錄音(完全沒有 C、D#、F#、A),2 八度以下沒有錄音
-  clarinet: { folder: "clarinet",        minOct: 3, maxOct: 6, notes: [["D",2],["F",5],["As",10]] }
+  piano: { folder: "piano", base: PIANO_BASE, exactList: [
+    ["A",0],
+    ["C",1],["Ds",1],["Fs",1],["A",1],
+    ["C",2],["Ds",2],["Fs",2],["A",2],
+    ["C",3],["Ds",3],["Fs",3],["A",3],
+    ["C",4],["Ds",4],["Fs",4],["A",4],
+    ["C",5],["Ds",5],["Fs",5],["A",5],
+    ["C",6],["Ds",6],["Fs",6],["A",6],
+    ["C",7],["Ds",7],["Fs",7],["A",7],
+    ["C",8]
+  ]},
+  strings: { folder: "violin", exactList: [
+    ["A",3],["C",4],["E",4],["G",4],["A",4],["C",5],["E",5],["G",5],
+    ["A",5],["C",6],["E",6],["G",6],["A",6],["C",7]
+  ]},
+  cello: { folder: "cello", exactList: [
+    ["C",2],["D",2],["Ds",2],["E",2],["F",2],["G",2],["Gs",2],["A",2],["As",2],["B",2],
+    ["C",3],["Cs",3],["D",3],["Ds",3],["E",3],["F",3],["Fs",3],["G",3],["Gs",3],["A",3],["As",3],["B",3],
+    ["C",4],["Cs",4],["D",4],["Ds",4],["E",4],["F",4],["Fs",4],["G",4],["Gs",4],["A",4],["B",4],
+    ["C",5]
+  ]},
+  flute: { folder: "flute", exactList: [
+    ["C",4],["E",4],["A",4],["C",5],["E",5],["A",5],["C",6],["E",6],["A",6],["C",7]
+  ]},
+  guitar: { folder: "guitar-acoustic", exactList: [
+    ["D",2],["Ds",2],["E",2],["F",2],["Fs",2],["G",2],["Gs",2],["A",2],["As",2],["B",2],
+    ["C",3],["Cs",3],["D",3],["Ds",3],["E",3],["F",3],["Fs",3],["G",3],["Gs",3],["A",3],["As",3],["B",3],
+    ["C",4],["Cs",4],["D",4],["E",4],["F",4],["Fs",4],["G",4],["Gs",4],["A",4],["As",4],["B",4],
+    ["C",5],["Cs",5],["D",5]
+  ]},
+  guitarnylon: { folder: "guitar-nylon", exactList: [
+    ["B",1],
+    ["D",2],["E",2],["Fs",2],["Gs",2],["A",2],["B",2],
+    ["Cs",3],["D",3],["E",3],["Fs",3],["G",3],["A",3],["B",3],
+    ["Cs",4],["Ds",4],["E",4],["Fs",4],["Gs",4],["A",4],["B",4],
+    ["Cs",5],["D",5],["E",5],["Fs",5],["Gs",5],["A",5],["As",5]
+  ]},
+  clarinet: { folder: "clarinet", exactList: [
+    ["D",3],["F",3],["As",3],["D",4],["F",4],["As",4],["D",5],["F",5],["As",5],["D",6],["Fs",6]
+  ]}
 };
 const instrumentBuffers = {};   // instKey -> [{midi, buffer}]
 const instrumentLoading = {};   // instKey -> Promise
@@ -1967,20 +1995,18 @@ function loadInstrumentSamples(instKey){
   if (!cfg) return Promise.resolve();
   if (instrumentBuffers[instKey] || instrumentLoading[instKey]) return instrumentLoading[instKey] || Promise.resolve();
   ensureAudio();
-  const notes = cfg.notes || [["C",0],["Ds",3],["Fs",6],["A",9]];
   const list = [];
   const jobs = [];
-  for (let oct = cfg.minOct; oct <= cfg.maxOct; oct++) {
-    for (const [letter, idx] of notes) {
-      const midi = (oct + 1) * 12 + idx;
-      const url = cfg.base ? (cfg.base + letter + oct + ".mp3") : (SAMPLE_BASE + cfg.folder + "/" + letter + oct + ".mp3");
-      jobs.push(
-        fetch(url).then(r => { if (!r.ok) throw new Error("404"); return r.arrayBuffer(); })
-          .then(arr => audioCtx.decodeAudioData(arr))
-          .then(buf => { list.push({ midi, buffer: buf }); })
-          .catch(() => {}) // 該取樣缺失就跳過,不影響其他音符
-      );
-    }
+  for (const [letter, oct] of cfg.exactList) {
+    const idx = NOTE_SEMITONE[letter];
+    const midi = (oct + 1) * 12 + idx;
+    const url = cfg.base ? (cfg.base + letter + oct + ".mp3") : (SAMPLE_BASE + cfg.folder + "/" + letter + oct + ".mp3");
+    jobs.push(
+      fetch(url).then(r => { if (!r.ok) throw new Error("404"); return r.arrayBuffer(); })
+        .then(arr => audioCtx.decodeAudioData(arr))
+        .then(buf => { list.push({ midi, buffer: buf }); })
+        .catch(() => {}) // 該取樣缺失就跳過,不影響其他音符
+    );
   }
   setStatus("載入" + instKey + "真實音色中…");
   instrumentLoading[instKey] = Promise.all(jobs).then(() => {
