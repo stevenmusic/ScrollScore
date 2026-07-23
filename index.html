@@ -1974,11 +1974,11 @@ let KB_WHITE_KEYS = [], KB_WHITE_IDX = {};
    每個鍵就會被擠得又窄又長、比例完全跑掉。改成依「目前實際畫面寬度 ÷ 可見白鍵數」反推出
    符合真實比例的高度,畫布高度動態跟著調,而不是每個裝置寬度都套同一個寫死的高度 */
 const WHITE_KEY_ASPECT = 5.2;
-const KB_MIN_H = 54, KB_MAX_H = 170;
-function computeKeyboardHeight(containerWidth){
+const KB_MIN_H = 54, KB_MAX_H = 170; // 給現場畫面用的預設上下限(校準過的螢幕實際尺寸);匯出影片畫布大很多,呼叫時會另外傳入合適的上下限
+function computeKeyboardHeight(containerWidth, minH = KB_MIN_H, maxH = KB_MAX_H){
   const n = Math.max(KB_WHITE_KEYS.length, 1);
   const whiteW = containerWidth / n;
-  return Math.min(KB_MAX_H, Math.max(KB_MIN_H, whiteW * WHITE_KEY_ASPECT));
+  return Math.min(maxH, Math.max(minH, whiteW * WHITE_KEY_ASPECT));
 }
 function rebuildKeyboardRange(){
   let lowest = Infinity, highest = -Infinity;
@@ -3339,7 +3339,13 @@ async function exportVideo(cfg){
       : cfg.align === "top" ? margin
       : cfg.align === "bottom" ? (H - SCORE_H - margin)
       : (H - SCORE_H) / 2;
-    const kbH = cfg.includeKeyboard ? (H - topY - SCORE_H) : 0;
+    const availableKbH = cfg.includeKeyboard ? (H - topY - SCORE_H) : 0;
+    // 鼓組面板沒有「白鍵長寬比」這個限制,照舊撐滿剩餘空間顯示最大最清楚;
+    // 鋼琴鍵盤才需要比照真實琴鍵比例縮小,不然匯出的影片跟現場預覽一樣會又細又長,
+    // 縮小後鍵盤仍然貼齊畫面最底部,樂譜跟鍵盤之間多出來的空間就當作留白
+    const kbH = (cfg.includeKeyboard && currentInstrument() !== "drum")
+      ? computeKeyboardHeight(W, Math.min(availableKbH, H * 0.03), availableKbH)
+      : availableKbH;
     const plX = W * PLAYLINE_RATIO;
     const { tiles, scale } = await rasterizeScore(SCORE_H);
 
