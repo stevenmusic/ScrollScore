@@ -3882,6 +3882,17 @@ function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
       ctx.restore();
     }
   }
+  // 樂譜點陣化後的 tile 背景是透明的(只有黑色音符線條不透明),如果背景圖片很花俏、
+  // 直接疊在音符後面,音符會完全被蓋過去看不清楚。所以樂譜這一整條(topY~topY+SCORE_H)
+  // 固定鋪一層接近不透明的米色襯底,不受「背景透明度」滑桿影響,音符對比度永遠有保障;
+  // 襯底範圍以外(上下留白處)才會維持使用者設定的透明度,完整看到背景圖片
+  if (customBgImage) {
+    ctx.save();
+    ctx.globalAlpha = 0.88;
+    ctx.fillStyle = "#FFFDF6";
+    ctx.fillRect(0, topY, W, SCORE_H);
+    ctx.restore();
+  }
   const off = plX - xAtSec(songSec) * scale;
   for (const tl of tiles) {
     const dx = off + tl.x;
@@ -3915,16 +3926,33 @@ function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
     const wmPadY = Math.max(Math.round(titleFontSize * 0.55), 16);
     ctx.save();
     ctx.textBaseline = "top";
+    // 標題/浮水印原本的深金色跟深炭灰只在「素色米白底」上才夠對比;現在背後可能是花俏的
+    // 背景圖片,深色文字很容易被蓋過去。所以先鋪一塊固定深色的半透明底板(跟網頁本身的深色
+    // 面板同一套視覺),文字改用亮金色/米白色,不管背後圖片顏色多雜都保證讀得清楚
+    const drawBacking = (text, x, y, align) => {
+      const m = ctx.measureText(text);
+      const fs = parseInt(ctx.font, 10);
+      const padX = fs * 0.5, padY = fs * 0.32;
+      const boxX = align === "left" ? x - padX : x - m.width - padX;
+      const boxY = y - padY;
+      const boxW = m.width + padX * 2;
+      const boxH = fs * 1.2 + padY * 2;
+      ctx.fillStyle = "rgba(10,8,5,0.68)";
+      if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(boxX, boxY, boxW, boxH, boxH * 0.22); ctx.fill(); }
+      else ctx.fillRect(boxX, boxY, boxW, boxH);
+    };
     if (cfg.title) {
       ctx.font = titleFontSize + "px 'Noto Serif TC', serif";
-      ctx.fillStyle = "#8B6508"; // 深金色,對比度5.2:1(網頁標頭的--gold只有2.36:1,WCAG連大字級3:1都不過)
       ctx.textAlign = "left";
+      drawBacking(cfg.title, wmPadX, wmPadY, "left");
+      ctx.fillStyle = "#EFD48A"; // 亮金色,對深色底板保證高對比,不受背景圖片顏色影響
       ctx.fillText(cfg.title, wmPadX, wmPadY);
     }
     if (cfg.channel) {
       ctx.font = channelFontSize + "px 'Noto Serif TC', serif";
-      ctx.fillStyle = "rgba(42,42,42,0.85)"; // 深炭灰,85%不透明度,比標題低調但對比度依然夠高(8.7:1)
       ctx.textAlign = "right";
+      drawBacking(cfg.channel, W - wmPadX, wmPadY, "right");
+      ctx.fillStyle = "#F4ECDA"; // 米白色,同樣對深色底板保證高對比
       ctx.fillText(cfg.channel, W - wmPadX, wmPadY);
     }
     ctx.restore();
