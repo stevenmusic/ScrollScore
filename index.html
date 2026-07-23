@@ -808,6 +808,11 @@ async function loadScoreFile(file){
     }
     transposeSemitones = 0;
     updateTransposeLabel();
+    // A-B 循環區間是「這首曲子」的練習設定,只有真的載入新樂譜才需要清掉;
+    // 之前誤放在 renderScore() 裡,結果移調、切換顯示速度記號這些「重繪同一首曲子」的操作
+    // 也會跟著把使用者剛設好的 A/B 點洗掉,變成怎麼設都像沒作用
+    loopAWhole = loopBWhole = null;
+    $("loopEnabled").checked = false;
     const parsed = parseXmlTimeline(xmlText);
     slurRanges = parsed.slurRanges;
     pedalRanges = parsed.pedalRanges;
@@ -1019,8 +1024,6 @@ async function renderScore(xmlText){
   $("loopClear").disabled = false;
   for (const id of ["recBtn", "exportBtn", "transUp", "transDown", "loopSetA", "loopSetB", "loopClear"]) $(id).removeAttribute("title");
   $("calibStartBtn").disabled = false;
-  loopAWhole = loopBWhole = null;
-  $("loopEnabled").checked = false;
   updateLoopMarkers();
   updateTimeLabel(0);
 }
