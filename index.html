@@ -1939,18 +1939,25 @@ function currentInstrument(){ return $("instrument").value; }
 /* ── 真實樂器取樣(取代合成音色) ─────────────── */
 const SAMPLE_BASE = "https://nbrosowsky.github.io/tonejs-instruments/samples/";
 const PIANO_BASE = "https://tonejs.github.io/audio/salamander/"; // Tone.js 官方託管的完整版 Salamander 鋼琴取樣,音質/延音都比一般鏡像版本好
+/* 每個樂器實際收錄的取樣點,在同一個取樣庫(nbrosowsky/tonejs-instruments)裡差異很大,
+   不是每一種樂器都剛好在每個八度都有 C/D#/F#/A(預設四個取樣點)這四個音的錄音;
+   套用不存在的取樣點只會讓抓取全部落空、整段退回合成音色。以下 minOct/maxOct/notes
+   都是逐一實際 fetch 驗證過(HTTP 200)才定案,盡量讓每個樂器都真的用上真實錄音 */
 const REAL_INSTRUMENTS = {
   piano:    { folder: "piano",           minOct: 0, maxOct: 8, base: PIANO_BASE },
-  strings:  { folder: "violin",          minOct: 2, maxOct: 7 },
-  cello:    { folder: "cello",           minOct: 1, maxOct: 5 },
-  flute:    { folder: "flute",           minOct: 3, maxOct: 7 },
-  guitar:   { folder: "guitar-acoustic", minOct: 2, maxOct: 6 },
-  // guitar-nylon 這個取樣庫實際收錄的音不是每個八度都有 C/D#/F#/A(預設四個取樣點),
-  // 尤其完全沒有任何一個 C 音,套用預設取樣點會抓不到檔案、幾乎整段退回合成音色。
-  // 改成這個取樣庫實際涵蓋 2-5 八度都存在的 D/E/F#/A,音色才會真的用上真實錄音
-  // (已逐一 fetch 驗證存在;6 八度以上這個取樣庫完全沒有錄音,所以上限收到 5)
+  // violin 這個取樣庫只在 C/E/G/A 這四個音有錄音(不是 C/D#/F#/A),3 八度以下完全沒有錄音
+  strings:  { folder: "violin",          minOct: 3, maxOct: 7, notes: [["C",0],["E",4],["G",7],["A",9]] },
+  // cello 收錄很完整(3-4 八度幾乎每個半音都有),但 1 八度完全沒有錄音,原本白白抓了一輪
+  cello:    { folder: "cello",           minOct: 2, maxOct: 5 },
+  // flute 這個取樣庫只在 C/E/A 三個音有錄音,3 八度以下完全沒有,4 八度以上開始才有
+  flute:    { folder: "flute",           minOct: 4, maxOct: 7, notes: [["C",0],["E",4],["A",9]] },
+  // guitar-acoustic 收錄範圍到 5 八度就結束了,6 八度完全沒有錄音,原本白白抓了一輪
+  guitar:   { folder: "guitar-acoustic", minOct: 2, maxOct: 5 },
+  // guitar-nylon 完全沒有任何一個 C 音的錄音,D# 也只有一個,改用這個取樣庫實際
+  // 涵蓋 2-5 八度都存在的 D/E/F#/A;6 八度以上這個取樣庫完全沒有錄音
   guitarnylon: { folder: "guitar-nylon", minOct: 2, maxOct: 5, notes: [["D",2],["E",4],["Fs",6],["A",9]] },
-  clarinet: { folder: "clarinet",        minOct: 2, maxOct: 6 }
+  // clarinet 這個取樣庫只在 D/F/A# 三個音有錄音(完全沒有 C、D#、F#、A),2 八度以下沒有錄音
+  clarinet: { folder: "clarinet",        minOct: 3, maxOct: 6, notes: [["D",2],["F",5],["As",10]] }
 };
 const instrumentBuffers = {};   // instKey -> [{midi, buffer}]
 const instrumentLoading = {};   // instKey -> Promise
