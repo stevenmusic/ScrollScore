@@ -273,12 +273,42 @@ footer{
   border-top:1px solid var(--line);background:var(--panel);
   font-size:12px;color:var(--muted-bright);display:flex;gap:12px;align-items:center;
 }
-#progressbar{flex:1;height:3px;background:var(--line);border-radius:2px;position:relative;cursor:pointer}
-#progressfill{height:100%;width:0%;background:var(--gold);transition:width .1s linear;border-radius:2px}
+#progressbar{flex:1;height:3px;background:var(--line);border-radius:2px;position:relative;cursor:pointer;touch-action:none}
+/* 視覺上維持細線,但實際可觸控/點擊區域上下各多抓 12px,手機上更容易拖到 */
+#progressbar::before{content:"";position:absolute;left:0;right:0;top:-12px;bottom:-12px}
+#progressfill{height:100%;width:0%;background:var(--gold);transition:width .1s linear;border-radius:2px;pointer-events:none}
 #loopRegion{position:absolute;top:0;bottom:0;background:rgba(201,162,75,.3);display:none;pointer-events:none}
 .loop-marker{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--gold-bright);display:none;pointer-events:none;box-shadow:0 0 4px rgba(239,212,138,.8)}
+/* 拖曳進度條時,滑塊正上方即時顯示精確時間碼 */
+#seekTooltip{
+  position:absolute;bottom:calc(100% + 10px);left:0;transform:translateX(-50%);
+  background:var(--panel);border:1px solid var(--gold);border-radius:6px;
+  padding:3px 8px;font-size:11px;color:var(--gold-bright);white-space:nowrap;
+  pointer-events:none;opacity:0;transition:opacity .12s;font-variant-numeric:tabular-nums;
+}
+#seekTooltip.show{opacity:1}
 #status{white-space:nowrap;max-width:55%;overflow:hidden;text-overflow:ellipsis}
-#timeLabel{font-variant-numeric:tabular-nums}
+.time-jump{position:relative;flex:none}
+#timeLabel{font-variant-numeric:tabular-nums;cursor:pointer;border-bottom:1px dotted var(--muted);padding-bottom:1px}
+#seekPopover{
+  position:absolute;bottom:calc(100% + 10px);right:0;z-index:60;
+  display:flex;gap:6px;align-items:center;
+  background:rgba(22,18,9,.92);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  border:1px solid var(--gold);border-radius:12px;padding:8px 10px;
+  box-shadow:0 10px 24px rgba(0,0,0,.5);
+  opacity:0;transform:translateY(-4px);pointer-events:none;transition:opacity .15s,transform .15s;
+}
+#seekPopover.open{opacity:1;transform:translateY(0);pointer-events:auto}
+#seekInput{
+  width:70px;background:var(--bg);color:var(--gold-bright);border:1px solid var(--line);
+  border-radius:6px;padding:4px 6px;font-family:inherit;font-size:13px;
+  text-align:center;font-variant-numeric:tabular-nums;
+}
+#seekInput:focus{outline:none;border-color:var(--gold)}
+#seekGoBtn{
+  background:var(--gold);color:var(--bg);border:none;border-radius:6px;
+  padding:4px 10px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;
+}
 #kbdHint{flex:none;font-size:13px;opacity:.6;cursor:help}
 /* ── 錄影模式 ───────────────────── */
 body.recording header, body.recording footer{display:none}
@@ -522,9 +552,19 @@ input[type=file]{display:none}
 
 <footer>
   <span id="status">尚未載入樂譜</span>
-  <div id="progressbar"><div id="progressfill"></div><div id="loopRegion"></div><div id="loopMarkerA" class="loop-marker"></div><div id="loopMarkerB" class="loop-marker"></div></div>
-  <span id="timeLabel">0:00 / 0:00</span>
-  <span id="kbdHint" title="快捷鍵:Space 播放/暫停、Esc 或 R 停止、↑↓ 調整速度">⌨️</span>
+  <div id="progressbar">
+    <div id="progressfill"></div><div id="loopRegion"></div>
+    <div id="loopMarkerA" class="loop-marker"></div><div id="loopMarkerB" class="loop-marker"></div>
+    <div id="seekTooltip">0:00.0</div>
+  </div>
+  <div class="time-jump">
+    <span id="timeLabel" title="點擊輸入精確時間跳轉">0:00 / 0:00</span>
+    <div id="seekPopover">
+      <input type="text" id="seekInput" inputmode="decimal" placeholder="0:16">
+      <button id="seekGoBtn">跳轉</button>
+    </div>
+  </div>
+  <span id="kbdHint" title="快捷鍵:Space 播放/暫停、Esc 或 R 停止、↑↓ 調整速度、←→ 跳轉5秒">⌨️</span>
 </footer>
 
 <script>
@@ -702,6 +742,7 @@ $("trySampleBtn").addEventListener("click", () => {
 
 function openSettingsSheet(){
   $("tempoPopover").classList.remove("open");
+  closeSeekPopover();
   $("settingsPanel").classList.add("open");
   $("settingsBackdrop").classList.add("open");
 }
@@ -718,6 +759,7 @@ $("settingsBackdrop").addEventListener("click", closeSettingsSheet);
 $("tempoToggle").addEventListener("click", e => {
   e.stopPropagation();
   closeSettingsSheet();
+  closeSeekPopover();
   $("tempoPopover").classList.toggle("open");
 });
 document.addEventListener("click", e => {
@@ -1672,7 +1714,7 @@ $("tempoVal").addEventListener("change", () => {
 });
 
 /* ── 鍵盤快捷鍵:方便放在譜架/桌上練習時不用點螢幕 ──────────
-   Space 播放/暫停、Esc 或 R 停止回到開頭、↑↓ 微調 BPM */
+   Space 播放/暫停、Esc 或 R 停止回到開頭、↑↓ 微調 BPM、←→ 跳轉5秒 */
 document.addEventListener("keydown", e => {
   const tag = document.activeElement ? document.activeElement.tagName : "";
   if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
@@ -1691,6 +1733,12 @@ document.addEventListener("keydown", e => {
   } else if (e.code === "ArrowDown") {
     e.preventDefault();
     applyTempo(bpm() - 1);
+  } else if (e.code === "ArrowRight") {
+    e.preventDefault();
+    seekTo((playing ? currentSec() : pausedAtSec) + 5);
+  } else if (e.code === "ArrowLeft") {
+    e.preventDefault();
+    seekTo((playing ? currentSec() : pausedAtSec) - 5);
   }
 });
 
@@ -2937,10 +2985,75 @@ function seekTo(sec){
   updateTimeLabel(sec);
   drawKeyboardLive(sec);
 }
-$("progressbar").addEventListener("click", e => {
+function fmtPrecise(s){ s = Math.max(0, s); return Math.floor(s/60) + ":" + (s%60).toFixed(1).padStart(4, "0"); }
+
+/* 支援拖曳滑動(不只是點擊),拖曳中滑塊正上方即時顯示精確時間碼 */
+let scrubbing = false;
+function scrubFromEvent(e){
   const rect = $("progressbar").getBoundingClientRect();
   const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+  $("seekTooltip").style.left = (frac * 100) + "%";
+  $("seekTooltip").textContent = fmtPrecise(frac * totalSec());
   seekTo(frac * totalSec());
+}
+$("progressbar").addEventListener("pointerdown", e => {
+  if (!events.length) return;
+  scrubbing = true;
+  $("progressbar").setPointerCapture(e.pointerId);
+  $("seekTooltip").classList.add("show");
+  scrubFromEvent(e);
+});
+$("progressbar").addEventListener("pointermove", e => {
+  if (!scrubbing) return;
+  scrubFromEvent(e);
+});
+$("progressbar").addEventListener("pointerup", () => {
+  scrubbing = false;
+  $("seekTooltip").classList.remove("show");
+});
+$("progressbar").addEventListener("pointercancel", () => {
+  scrubbing = false;
+  $("seekTooltip").classList.remove("show");
+});
+
+/* 點擊時間碼文字,直接輸入精確時間跳轉(比滑桿更適合大範圍精準定位) */
+function openSeekPopover(){
+  if (!events.length) return;
+  closeSettingsSheet();
+  $("tempoPopover").classList.remove("open");
+  $("seekInput").value = fmt(playing ? currentSec() : pausedAtSec);
+  $("seekPopover").classList.add("open");
+  $("seekInput").focus();
+  $("seekInput").select();
+}
+function closeSeekPopover(){ $("seekPopover").classList.remove("open"); }
+function parseTimeInput(str){
+  str = str.trim();
+  if (!str) return null;
+  if (str.includes(":")) {
+    const [m, s] = str.split(":");
+    const mm = parseInt(m, 10), ss = parseFloat(s);
+    if (isNaN(mm) || isNaN(ss)) return null;
+    return mm * 60 + ss;
+  }
+  const v = parseFloat(str);
+  return isNaN(v) ? null : v;
+}
+function submitSeekInput(){
+  const sec = parseTimeInput($("seekInput").value);
+  if (sec != null) seekTo(sec);
+  closeSeekPopover();
+}
+$("timeLabel").addEventListener("click", e => { e.stopPropagation(); openSeekPopover(); });
+$("seekGoBtn").addEventListener("click", submitSeekInput);
+$("seekInput").addEventListener("keydown", e => {
+  if (e.key === "Enter") submitSeekInput();
+  else if (e.key === "Escape") closeSeekPopover();
+});
+document.addEventListener("click", e => {
+  if (!$("seekPopover").classList.contains("open")) return;
+  if ($("seekPopover").contains(e.target) || e.target === $("timeLabel")) return;
+  closeSeekPopover();
 });
 
 function updateLoopMarkers(){
