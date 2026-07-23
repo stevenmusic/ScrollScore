@@ -460,6 +460,19 @@ input[type=file]{display:none}
     <label class="switch-row">
       <span class="switch"><input type="checkbox" id="showTempoMarks"><span class="switch-track"></span></span>顯示速度記號
     </label>
+    <label class="switch-row">
+      <span class="switch"><input type="checkbox" id="exportWatermarkToggle"><span class="switch-track"></span></span>匯出時加上標題/浮水印
+    </label>
+    <div id="exportWatermarkFields" style="display:none;flex-direction:column;gap:8px;width:100%;margin:2px 0 6px">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="width:56px;font-size:13px;color:var(--muted);flex:none">標題</span>
+        <input type="text" id="exportTitleInput" class="range-time-input" style="text-align:left" placeholder="樂曲標題(左上)">
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="width:56px;font-size:13px;color:var(--muted);flex:none">浮水印</span>
+        <input type="text" id="exportWatermarkInput" class="range-time-input" style="text-align:left" placeholder="頻道名稱(右上)">
+      </div>
+    </div>
     <div style="display:flex;flex-direction:column;gap:6px;width:100%">
       <div style="display:flex;gap:10px;flex-wrap:wrap">
         <button class="btn" id="recBtn" disabled title="請先載入樂譜">錄影模式</button>
@@ -825,6 +838,8 @@ async function loadScoreFile(file){
     } else if (currentInstrument() === "drum") {
       $("instrument").value = "piano";
     }
+    // 匯出影片標題浮水印預設值:優先用樂譜內建的標題,沒有的話退回檔名(去掉副檔名),使用者仍可自行修改
+    $("exportTitleInput").value = parsed.scoreTitle || file.name.replace(/\.(xml|musicxml|mxl)$/i, "");
     arpMap = parsed.arpMap;
     articEntries = buildSortedEntries(articMap);
     arpEntries = buildSortedEntries(arpMap);
@@ -1051,7 +1066,11 @@ function parseXmlTimeline(xmlText){
         timeSig = { beats, beatType, isCompound };
       }
     }
-    if (!bestPart) return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, arpMap: {}, soundTempo, timeSig, isDrumScore: false, crossNoteheadMap: {}, measureRanges: [], guitarTechMap: {}, vibratoRanges: [] };
+    // 樂曲標題:優先抓 <work><work-title>,其次 <movement-title>,給匯出影片的標題浮水印當預設值用
+    const workTitleEl = doc.getElementsByTagName("work-title")[0];
+    const movementTitleEl = doc.getElementsByTagName("movement-title")[0];
+    const scoreTitle = (workTitleEl && workTitleEl.textContent.trim()) || (movementTitleEl && movementTitleEl.textContent.trim()) || null;
+    if (!bestPart) return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, arpMap: {}, soundTempo, timeSig, isDrumScore: false, crossNoteheadMap: {}, measureRanges: [], guitarTechMap: {}, vibratoRanges: [], scoreTitle };
     // 判斷這份樂譜是不是打擊樂記譜:直接看譜表有沒有用「打擊譜號」(<clef><sign>percussion</sign></clef>),
     // 這是所有記譜軟體匯出鼓譜都會寫的標準記號,比音符物件上某些欄位的預設值可靠多了(不會誤判成一般樂器)
     const isDrumScore = Array.from(bestPart.getElementsByTagName("clef")).some(c => {
@@ -1292,10 +1311,10 @@ function parseXmlTimeline(xmlText){
     const measureRanges = measureBoundaries.map((start, i) => ({
       start, end: i + 1 < measureBoundaries.length ? measureBoundaries[i + 1] : cursor
     }));
-    return { slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges, articMap, arpMap, soundTempo, timeSig, isDrumScore, crossNoteheadMap, measureRanges, guitarTechMap, vibratoRanges: outWavyLines };
+    return { slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges, articMap, arpMap, soundTempo, timeSig, isDrumScore, crossNoteheadMap, measureRanges, guitarTechMap, vibratoRanges: outWavyLines, scoreTitle };
   } catch (e) {
     console.error("讀取踏板/圓滑線資訊失敗:", e);
-    return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, arpMap: {}, soundTempo: null, timeSig: null, isDrumScore: false, crossNoteheadMap: {}, measureRanges: [], guitarTechMap: {}, vibratoRanges: [] };
+    return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, arpMap: {}, soundTempo: null, timeSig: null, isDrumScore: false, crossNoteheadMap: {}, measureRanges: [], guitarTechMap: {}, vibratoRanges: [], scoreTitle: null };
   }
 }
 /* 偵測某一手(譜表)裡,音符是否精確循環重複(例如分解和弦C-E-G-C-E-G...),
@@ -1935,6 +1954,25 @@ $("transDown").addEventListener("click", () => applyTranspose(-1));
 $("scoreBgOpacity").addEventListener("input", () => {
   $("scoreBgOpacityVal").textContent = $("scoreBgOpacity").value;
   $("scoreBg").style.opacity = $("scoreBgOpacity").value / 100;
+});
+
+/* 匯出浮水印:頻道名稱跟「是否加上標題/浮水印」這個開關存在 localStorage,
+   每首曲子、每次重新打開網頁都不用再輸入一次;標題則是每首曲子各自的資訊,不存進 localStorage */
+const WATERMARK_STORAGE_KEY = "scrollscore_watermark_channel";
+const WATERMARK_TOGGLE_KEY = "scrollscore_watermark_enabled";
+try {
+  const savedChannel = localStorage.getItem(WATERMARK_STORAGE_KEY);
+  if (savedChannel) $("exportWatermarkInput").value = savedChannel;
+  const savedToggle = localStorage.getItem(WATERMARK_TOGGLE_KEY) === "1";
+  $("exportWatermarkToggle").checked = savedToggle;
+  $("exportWatermarkFields").style.display = savedToggle ? "flex" : "none";
+} catch (e) {} // localStorage 在部分隱私模式下可能無法存取,失敗就當作沒有存過,不影響其他功能
+$("exportWatermarkToggle").addEventListener("change", () => {
+  $("exportWatermarkFields").style.display = $("exportWatermarkToggle").checked ? "flex" : "none";
+  try { localStorage.setItem(WATERMARK_TOGGLE_KEY, $("exportWatermarkToggle").checked ? "1" : "0"); } catch (e) {}
+});
+$("exportWatermarkInput").addEventListener("input", () => {
+  try { localStorage.setItem(WATERMARK_STORAGE_KEY, $("exportWatermarkInput").value); } catch (e) {}
 });
 
 $("showTempoMarks").addEventListener("change", async () => {
@@ -3480,13 +3518,21 @@ $("alignCenter").addEventListener("click", () => { chosenAlign = "center"; showF
 $("alignBottom").addEventListener("click", () => { chosenAlign = "bottom"; showFmtStep("format"); });
 
 $("fmtBackFromFormat").addEventListener("click", () => showFmtStep("align"));
+function watermarkCfg(){
+  const enabled = $("exportWatermarkToggle").checked;
+  return {
+    watermarkEnabled: enabled,
+    title: enabled ? $("exportTitleInput").value.trim() : "",
+    channel: enabled ? $("exportWatermarkInput").value.trim() : ""
+  };
+}
 $("fmtLandscape").addEventListener("click", () => {
   $("formatOverlay").classList.remove("show");
-  exportVideo({ W: 1920, H: 1080, scoreH: 560, align: chosenAlign, bitrate: 5000000, fps: exportFps, includeKeyboard: chosenIncludeKeyboard, startSec: chosenStartSec, endSec: chosenEndSec });
+  exportVideo(Object.assign({ W: 1920, H: 1080, scoreH: 560, align: chosenAlign, bitrate: 5000000, fps: exportFps, includeKeyboard: chosenIncludeKeyboard, startSec: chosenStartSec, endSec: chosenEndSec }, watermarkCfg()));
 });
 $("fmtPortrait").addEventListener("click", () => {
   $("formatOverlay").classList.remove("show");
-  exportVideo({ W: 1080, H: 1920, scoreH: 480, align: chosenAlign, bitrate: 5000000, fps: exportFps, includeKeyboard: chosenIncludeKeyboard, startSec: chosenStartSec, endSec: chosenEndSec });
+  exportVideo(Object.assign({ W: 1080, H: 1920, scoreH: 480, align: chosenAlign, bitrate: 5000000, fps: exportFps, includeKeyboard: chosenIncludeKeyboard, startSec: chosenStartSec, endSec: chosenEndSec }, watermarkCfg()));
 });
 $("exportCancel").addEventListener("click", () => { exportCancelled = true; });
 
@@ -3735,6 +3781,20 @@ async function exportVideo(cfg){
             const active = getActiveNotesAt(songSec + KB_LOOKAHEAD_SEC, calib);
             drawKeyboard(ctx, 0, kbY, W, kbH, active);
           }
+        }
+        // 標題/浮水印:畫在最上層,才會真的燒錄進匯出的影片畫面裡(不是疊在網頁上的HTML文字);
+        // 字級依畫面高度等比例縮放(高度的2.5%),不管輸出1080p還是其他解析度,字體大小跟邊距比例都一致
+        if (cfg.watermarkEnabled && (cfg.title || cfg.channel)) {
+          const wmFontSize = Math.round(H * 0.025);
+          const wmPadX = Math.round(W * 0.02);
+          const wmPadY = Math.max(Math.round(wmFontSize * 1.3), 20);
+          ctx.save();
+          ctx.font = wmFontSize + "px 'Noto Serif TC', serif";
+          ctx.fillStyle = "rgba(51,51,51,0.75)"; // 深炭灰,70~80%透明度,白色譜面上清楚可讀但不搶音符注意力
+          ctx.textBaseline = "top";
+          if (cfg.title) { ctx.textAlign = "left"; ctx.fillText(cfg.title, wmPadX, wmPadY); }
+          if (cfg.channel) { ctx.textAlign = "right"; ctx.fillText(cfg.channel, W - wmPadX, wmPadY); }
+          ctx.restore();
         }
         $("exportTime").textContent = fmt(sec) + " / " + fmt(total);
         $("exportFill").style.width = (sec/total*100).toFixed(1) + "%";
