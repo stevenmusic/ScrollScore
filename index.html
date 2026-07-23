@@ -589,7 +589,7 @@ function setStatus(msg){ statusEl.textContent = msg; }
 
 let osmd = null;
 let events = [];        // {tWhole, x, notes:[{freq,durWhole}], legato, pedalOn}
-let slurRanges = [], pedalRanges = [], repeatChordRanges = [];
+let slurRanges = [], pedalRanges = [], repeatChordRanges = [], measureRanges = [];
 let articMap = {};
 let isDrumScore = false;
 let scoreTimeSig = null; // {beats, beatType, isCompound},用來估算預備拍要敲幾下(預設抓拍號分子,抓不到就用4下)
@@ -806,6 +806,7 @@ async function loadScoreFile(file){
     slurRanges = parsed.slurRanges;
     pedalRanges = parsed.pedalRanges;
     repeatChordRanges = parsed.repeatRanges;
+    measureRanges = parsed.measureRanges;
     articMap = parsed.articMap;
     isDrumScore = parsed.isDrumScore;
     crossNoteheadEntries = {};
@@ -1058,6 +1059,7 @@ function parseXmlTimeline(xmlText){
     const outSlurs = [];
     const pedalStack = [];
     const outPedals = [];
+    const measureBoundaries = []; // 每個小節開始時的 cursor(全音符定位),給吉他同弦延音判斷用
     const staffOnsets = {}; // staffNum -> [{tWhole, durWhole, pcs:Set}], 給重複音型偵測用
     const articMap = {}; // tWhole(定點字串) -> {accent,strongAccent,staccato,staccatissimo,tenuto,detachedLegato,spiccato,softAccent,fermata}
     const arpMap = {}; // tWhole(定點字串) -> "up"/"down",分解和弦(琶音)標記
@@ -1108,6 +1110,7 @@ function parseXmlTimeline(xmlText){
     }
 
     for (const measure of Array.from(bestPart.getElementsByTagName("measure"))) {
+      measureBoundaries.push(cursor);
       for (const child of Array.from(measure.children)) {
         if (child.tagName === "attributes") {
           const d = child.getElementsByTagName("divisions")[0];
@@ -1227,10 +1230,14 @@ function parseXmlTimeline(xmlText){
     for (const staffNum of Object.keys(staffOnsets)) {
       repeatRanges = repeatRanges.concat(detectRepeatingChordRanges(staffOnsets[staffNum]));
     }
-    return { slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges, articMap, arpMap, soundTempo, timeSig, isDrumScore, crossNoteheadMap };
+    // 把小節起點清單接成 [start,end) 範圍,最後一小節的結尾就是整份樂譜結束的 cursor
+    const measureRanges = measureBoundaries.map((start, i) => ({
+      start, end: i + 1 < measureBoundaries.length ? measureBoundaries[i + 1] : cursor
+    }));
+    return { slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges, articMap, arpMap, soundTempo, timeSig, isDrumScore, crossNoteheadMap, measureRanges };
   } catch (e) {
     console.error("讀取踏板/圓滑線資訊失敗:", e);
-    return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, arpMap: {}, soundTempo: null, timeSig: null, isDrumScore: false, crossNoteheadMap: {} };
+    return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, arpMap: {}, soundTempo: null, timeSig: null, isDrumScore: false, crossNoteheadMap: {}, measureRanges: [] };
   }
 }
 /* 偵測某一手(譜表)裡,音符是否精確循環重複(例如分解和弦C-E-G-C-E-G...),
@@ -1479,6 +1486,61 @@ function buildTimeline(){
   totalWhole = (lastEv ? lastEv.tWhole : 0) + lastDur;
   endX = lastX + 120;
   cursor.hide();
+  computeGuitarStringRinging();
+}
+
+/* ── 吉他同弦延音判斷(古典吉他/民謠吉他共用)──────────────────────
+   真實吉他上,一個音符(尤其空弦或按住不放的低音)會一直共鳴,直到:
+   (a) 同一條弦被彈第二次(不管是空弦重彈還是按新的品格)才會止音,或
+   (b) 這個小節結束(換小節基本上等於指法要重新安排)。
+   跟鋼琴踏板不同,吉他沒辦法讓兩個音共用同一條弦同時響,所以延音與否要看
+   同一小節裡「後面的音符是不是都落在別條弦上」——這正是使用者描述的规則。
+   這裡不管目前選的是不是吉他樂器都會算(反正很便宜),只有播放吉他/古典吉他時才會用到。 */
+const GUITAR_OPEN_STRINGS = [40, 45, 50, 55, 59, 64]; // 標準調弦,第6弦(最低)到第1弦(最高):E2 A2 D3 G3 B3 E4
+const GUITAR_MAX_FRET = 12; // 一般記譜極少用到12格以上的把位,超過的話视为無法用這條弦彈,不列入候選
+function computeGuitarStringRinging(){
+  for (const ev of events) {
+    for (const n of ev.notes) n.guitarRingEndWhole = null; // 先清空,非吉他音符/超出音域的音符維持 null(不套用延音)
+  }
+  if (!measureRanges.length) return;
+  for (const m of measureRanges) {
+    // 收集這個小節內所有音符(依時間排序;同一時刻多個音由低到高,模擬先按低音再按高音的指法習慣)
+    const items = [];
+    for (const ev of events) {
+      if (ev.tWhole < m.start || ev.tWhole >= m.end) continue;
+      for (const n of ev.notes) {
+        if (n.drum || !n.freq) continue;
+        items.push({ n, tWhole: ev.tWhole, midi: Math.round(freqToMidi(n.freq)) });
+      }
+    }
+    items.sort((a, b) => a.tWhole - b.tWhole || a.midi - b.midi);
+    const stringOccupant = new Array(6).fill(null); // 目前佔用該弦、還在響的音符 item
+    for (const item of items) {
+      const candidates = [];
+      for (let s = 0; s < 6; s++) {
+        const fret = item.midi - GUITAR_OPEN_STRINGS[s];
+        if (fret >= 0 && fret <= GUITAR_MAX_FRET) candidates.push(s);
+      }
+      if (!candidates.length) continue; // 超出吉他把位範圍(太低或太高),不套用延音判斷
+      // 優先挑「目前沒有音在響」的候選弦;如果每條候選弦都還在響(和絃音多、把位擠),
+      // 就選品格最低的那條(最自然的指法),同時代表原本佔用那條弦的音符在這一刻被止音
+      let chosen = candidates.find(s => !stringOccupant[s]);
+      if (chosen === undefined) {
+        chosen = candidates.reduce((best, s) =>
+          (item.midi - GUITAR_OPEN_STRINGS[s]) < (item.midi - GUITAR_OPEN_STRINGS[best]) ? s : best
+        );
+      }
+      const prev = stringOccupant[chosen];
+      if (prev) prev.n.guitarRingEndWhole = item.tWhole; // 同一條弦被新音佔用,前一個音就在這一刻被止音
+      stringOccupant[chosen] = item;
+      item.string = chosen;
+    }
+    // 小節結束時,還在響(沒被同弦後續音符止音)的音符,可以延音到小節結尾
+    for (let s = 0; s < 6; s++) {
+      const occ = stringOccupant[s];
+      if (occ && occ.n.guitarRingEndWhole == null) occ.n.guitarRingEndWhole = m.end;
+    }
+  }
 }
 
 /* ── 鼓譜偵測 ─────────────────────────────── */
@@ -1916,6 +1978,7 @@ function startAudioFrom(fromSec){
     const t = calib ? calibToSec(ev.tWhole) : wholeToSec(ev.tWhole);
     if (t < fromSec - 0.02) continue;
     const chordAnchors = {};
+    const isGuitar = currentInstrument() === "guitar" || currentInstrument() === "guitarnylon";
     const harmonyEndSec = ev.harmonyEndWhole != null
       ? startCtxTime + (calib ? calibToSec(ev.harmonyEndWhole) : wholeToSec(ev.harmonyEndWhole))
       : null;
@@ -1923,8 +1986,12 @@ function startAudioFrom(fromSec){
       try {
         const rollT = (n.rollIndex || 0) * computeArpEffectiveGap(ev, t, calib);
         const durSec = calib ? Math.max(calibToSec(ev.tWhole + n.durWhole) - t, 0.05) : wholeToSec(n.durWhole);
+        // 吉他:同弦延音範圍(guitarRingEndWhole)取代一般和聲延長判斷,才符合「其他音符要在別條弦上才能延音」的物理限制
+        const noteHarmonyEndSec = (isGuitar && n.guitarRingEndWhole != null)
+          ? startCtxTime + (calib ? calibToSec(n.guitarRingEndWhole) : wholeToSec(n.guitarRingEndWhole))
+          : harmonyEndSec;
         if (n.drum) scheduleDrum(n.key, startCtxTime + t + rollT);
-        else scheduleNote(n.freq, startCtxTime + t + rollT, durSec, ev.legato, ev.pedalOn, chordAnchors, harmonyEndSec, ev.artic);
+        else scheduleNote(n.freq, startCtxTime + t + rollT, durSec, ev.legato, ev.pedalOn, chordAnchors, noteHarmonyEndSec, ev.artic);
       } catch (e) {
         errCount++; lastErr = e;
         console.error("排程音符失敗:", e);
@@ -2569,8 +2636,8 @@ function scheduleNote(freq, when, dur, legato, pedal, chordAnchors, harmonyEndSe
     case "strings":  scheduleStrings(freq, when, dur); break;
     case "cello":    scheduleStrings(freq, when, dur); break;
     case "flute":    scheduleFlute(freq, when, dur); break;
-    case "guitar":   scheduleGuitar(freq, when, dur); break;
-    case "guitarnylon": scheduleGuitar(freq, when, dur); break;
+    case "guitar":   scheduleGuitar(freq, when, dur, harmonyEndSec); break;
+    case "guitarnylon": scheduleGuitar(freq, when, dur, harmonyEndSec); break;
     case "clarinet": scheduleClarinet(freq, when, dur); break;
     default:         schedulePiano(freq, when, dur, legato, pedal, harmonyEndSec, artic);
   }
@@ -2702,11 +2769,12 @@ function scheduleFlute(freq, when, dur){
 }
 
 /* 木吉他/撥奏:快速起音、快速衰減,方波+三角波堆疊高次泛音 */
-function scheduleGuitar(freq, when, dur){
+function scheduleGuitar(freq, when, dur, harmonyEndSec){
   const g = audioCtx.createGain();
   const lp = audioCtx.createBiquadFilter();
   lp.type = "lowpass"; lp.frequency.value = Math.min(freq * 8, 9000);
-  const decay = Math.max(dur * 0.8, 0.3);
+  // 有算出同弦延音範圍(harmonyEndSec)時,用它取代單純的音符時值,模擬空弦/低音持續共鳴到被下一個同弦音止音為止
+  const decay = harmonyEndSec != null ? Math.max(harmonyEndSec - when, dur * 0.8, 0.3) : Math.max(dur * 0.8, 0.3);
   g.gain.setValueAtTime(0.4, when);
   g.gain.exponentialRampToValueAtTime(0.0001, when + decay);
   const o = audioCtx.createOscillator();
@@ -3436,6 +3504,7 @@ async function exportVideo(cfg){
     if (importedAudioBuffer) {
       scheduleImportedAudio(startCtxTime, rangeStart); // 有匯入音檔就整段用它,不逐音符排程合成/取樣音色
     } else {
+      const isGuitar = currentInstrument() === "guitar" || currentInstrument() === "guitarnylon";
       for (const ev of events) {
         const t = calib ? calibToSec(ev.tWhole) : wholeToSec(ev.tWhole);
         if (t < rangeStart - 0.02 || t >= rangeEnd + 0.02) continue; // 只排程落在匯出區間內的音符
@@ -3446,8 +3515,11 @@ async function exportVideo(cfg){
         for (const n of ev.notes) {
           const rollT = (n.rollIndex || 0) * computeArpEffectiveGap(ev, t, calib);
           const durSec = calib ? Math.max(calibToSec(ev.tWhole + n.durWhole) - t, 0.05) : wholeToSec(n.durWhole);
+          const noteHarmonyEndSec = (isGuitar && n.guitarRingEndWhole != null)
+            ? startCtxTime + ((calib ? calibToSec(n.guitarRingEndWhole) : wholeToSec(n.guitarRingEndWhole)) - rangeStart)
+            : harmonyEndSec;
           if (n.drum) scheduleDrum(n.key, startCtxTime + (t - rangeStart) + rollT);
-          else scheduleNote(n.freq, startCtxTime + (t - rangeStart) + rollT, durSec, ev.legato, ev.pedalOn, chordAnchors, harmonyEndSec, ev.artic);
+          else scheduleNote(n.freq, startCtxTime + (t - rangeStart) + rollT, durSec, ev.legato, ev.pedalOn, chordAnchors, noteHarmonyEndSec, ev.artic);
         }
       }
     }
