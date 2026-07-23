@@ -521,7 +521,7 @@ input[type=file]{display:none}
           <span><b>純樂譜</b><br><small>滿版1920×1080 或 1080×1920</small></span>
         </button>
         <button class="fmt" id="fmtTypeWithKeyboard">
-          <span><b>樂譜+鍵盤</b><br><small>畫面下方加上鍵盤或鼓組面板高亮顯示(依照樂器選單而定)</small></span>
+          <span><b>樂譜+樂器</b><br><small>畫面下方加上鍵盤或鼓組面板高亮顯示(依照樂器選單而定)</small></span>
         </button>
         <button class="btn" id="fmtCancel">取消</button>
       </div>
@@ -1064,7 +1064,7 @@ function parseXmlTimeline(xmlText){
       return signEl && signEl.textContent.trim().toLowerCase() === "percussion";
     });
 
-    let divisions = 1, cursor = 0, lastStaff = 1;
+    let divisions = 1, cursor = 0, lastStaff = 1, chordBaseCursor = 0;
     const slurStarts = {};
     const outSlurs = [];
     const pedalStack = [];
@@ -1146,6 +1146,12 @@ function parseXmlTimeline(xmlText){
           const isGrace = !!child.getElementsByTagName("grace")[0];
           const durEl = child.getElementsByTagName("duration")[0];
           const durWhole = durEl ? (parseFloat(durEl.textContent) / divisions) / 4 : 0;
+          // 和絃裡除了第一個音以外的疊音符(<chord/>),要用「這組和絃開始」的時間點記標記,
+          // 不能直接用 cursor ── cursor 這時候已經被同一組和絃的第一個音符推進過了,
+          // 會害琶音/圓滑線/演奏記號被記到錯的時間點,跟和絃其他音對不上(這正是琶音會被誤判成
+          // 只有一個音、乾脆整組一起彈而不滾奏的原因)
+          const noteCursor = isChord ? chordBaseCursor : cursor;
+          if (!isChord) chordBaseCursor = cursor;
           // 打叉符頭:在鼓譜裡,snare 那條線用打叉符頭記譜,慣例上代表 rim click(邊擊/側擊),
           // 而不是一般擊面。直接從原始XML讀<notehead>元素判斷,比透過OSMD物件模型的內部欄位更準確可靠。
           // MusicXML 的 notehead-value 列舉裡「x」才是標準值,「cross」是少數記譜軟體會另外用的值,
@@ -1156,7 +1162,7 @@ function parseXmlTimeline(xmlText){
             if (midiForHead !== null) {
               const mk = String(Math.round(midiForHead));
               if (!crossNoteheadMap[mk]) crossNoteheadMap[mk] = {};
-              crossNoteheadMap[mk][cursor.toFixed(6)] = true;
+              crossNoteheadMap[mk][noteCursor.toFixed(6)] = true;
             }
           }
           // 譜表(左右手)判斷提前到這裡,琶音標記要用到,分辨同一時間點左右手彈相同音高但只有一手標記的情況
@@ -1168,9 +1174,9 @@ function parseXmlTimeline(xmlText){
             for (const s of Array.from(notations.getElementsByTagName("slur"))) {
               const num = s.getAttribute("number") || "1";
               const type = s.getAttribute("type");
-              if (type === "start") slurStarts[num] = cursor;
+              if (type === "start") slurStarts[num] = noteCursor;
               else if (type === "stop" && slurStarts[num] !== undefined) {
-                outSlurs.push({ start: slurStarts[num], end: cursor + durWhole });
+                outSlurs.push({ start: slurStarts[num], end: noteCursor + durWhole });
                 delete slurStarts[num];
               }
             }
@@ -1189,7 +1195,7 @@ function parseXmlTimeline(xmlText){
             }
             if (notations.getElementsByTagName("fermata")[0]) flags.fermata = true;
             if (Object.keys(flags).length) {
-              const key = cursor.toFixed(6);
+              const key = noteCursor.toFixed(6);
               const existing = articMap[key] || {};
               articMap[key] = Object.assign(existing, flags);
             }
@@ -1200,7 +1206,7 @@ function parseXmlTimeline(xmlText){
             if (arpEl) {
               const noteMidiForArp = midiFromNote(child);
               if (noteMidiForArp !== null) {
-                const key = cursor.toFixed(6);
+                const key = noteCursor.toFixed(6);
                 const groupNum = arpEl.getAttribute("number") || "1";
                 if (!arpMap[key]) arpMap[key] = { groups: {} };
                 if (!arpMap[key].groups[groupNum]) {
@@ -1425,7 +1431,9 @@ function buildTimeline(){
         arpCount = maxSize;
       }
       if (arpCount > 0) {
-        arpGapBeforeWhole = tWhole - (events.length ? events[events.length - 1].tWhole : tWhole);
+        // 曲子開頭第一個和絃就是琶音時,前面沒有任何音符可以拿來當「可用空間」的基準,
+        // 用 null(=不限制)而不是 0,不然滾奏間隔會被誤夾成 0,聽起來又變成全部音一起彈
+        arpGapBeforeWhole = events.length ? (tWhole - events[events.length - 1].tWhole) : null;
       }
     }
     events.push({ tWhole, x, notes, arpCount, arpGapBeforeWhole, arpGapAfterWhole: null });
@@ -1870,9 +1878,24 @@ function playCountIn(){
     setTimeout(resolve, (0.05 + n * interval) * 1000);
   });
 }
+/* A-B 循環區間(秒),沒設定或區間太小就回傳 null;tick()/beginPlayback()/loopEnabled 切換都共用同一份判斷,
+   避免各處各自算一套導致行為不一致 */
+function loopRangeSec(){
+  if (loopAWhole == null || loopBWhole == null) return null;
+  const a = wholeToSecAny(Math.min(loopAWhole, loopBWhole));
+  const b = wholeToSecAny(Math.max(loopAWhole, loopBWhole));
+  if (b - a <= 0.15) return null;
+  return { a, b };
+}
 let countInCancelled = false, countingIn = false;
 async function beginPlayback(fromSec){
   if (countingIn) return; // 已經在倒數中,避免重複點擊疊加倒數
+  // 開啟區間循環時,不管目前播放頭停在哪,按播放一律先跳到 A 點開始 ── 不然要等這一輪播完、
+  // 真的經過 B 點一次才會第一次循環,體感上像是「沒有真的啟用」
+  if ($("loopEnabled").checked) {
+    const range = loopRangeSec();
+    if (range && (fromSec < range.a || fromSec >= range.b)) fromSec = range.a;
+  }
   if ($("countIn").checked) {
     countInCancelled = false;
     countingIn = true;
@@ -2972,12 +2995,11 @@ function xAtSec(sec){
 
 function tick(){
   const sec = currentSec();
-  if ($("loopEnabled").checked && loopAWhole != null && loopBWhole != null) {
-    const aSec = wholeToSecAny(Math.min(loopAWhole, loopBWhole));
-    const bSec = wholeToSecAny(Math.max(loopAWhole, loopBWhole));
-    if (bSec - aSec > 0.15 && sec >= bSec) {
+  if ($("loopEnabled").checked) {
+    const range = loopRangeSec();
+    if (range && sec >= range.b) {
       stopAudioOnly();
-      startAudioFrom(aSec);
+      startAudioFrom(range.a);
       rafId = requestAnimationFrame(tick);
       return;
     }
@@ -3110,6 +3132,15 @@ $("loopSetB").addEventListener("click", () => {
   if (!events.length) return;
   loopBWhole = secToWholeAny(playing ? currentSec() : pausedAtSec);
   updateLoopMarkers();
+});
+/* 開啟區間循環開關時,如果播放頭目前不在 A-B 區間內,立刻跳過去,
+   讓使用者一開開關就能馬上看到/聽到反應,而不是要等按了播放、繞一圈才生效 */
+$("loopEnabled").addEventListener("change", () => {
+  if (!$("loopEnabled").checked) return;
+  const range = loopRangeSec();
+  if (!range) return;
+  const cur = playing ? currentSec() : pausedAtSec;
+  if (cur < range.a || cur >= range.b) seekTo(range.a);
 });
 $("loopClear").addEventListener("click", () => {
   loopAWhole = loopBWhole = null;
