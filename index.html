@@ -388,6 +388,24 @@ input[type=file]{display:none}
 .ratio{border:1.5px solid var(--gold);border-radius:3px;flex:none}
 .ratio-l{width:34px;height:19px}
 .ratio-p{width:19px;height:34px;margin:0 7.5px}
+/* ── 匯出預覽 ───────────────────── */
+#previewOverlay{
+  position:absolute;inset:0;z-index:46;display:none;
+  align-items:center;justify-content:center;
+  background:rgba(12,10,7,.9);backdrop-filter:blur(3px);
+}
+#previewOverlay.show{display:flex}
+#previewOverlay .box{
+  text-align:center;padding:20px;border:1px solid var(--gold);
+  border-radius:14px;background:var(--panel);width:min(94vw,640px);
+  max-height:92vh;overflow-y:auto;box-sizing:border-box;
+}
+#previewOverlay .title{
+  font-family:"Noto Serif TC",serif;font-size:19px;color:var(--gold);
+  letter-spacing:.1em;margin-bottom:14px;
+}
+#previewImg{max-width:100%;display:block;margin:0 auto 14px;border-radius:8px;border:1px solid var(--line)}
+#previewOverlay p{font-size:12px;color:var(--muted);line-height:1.7;margin-bottom:16px}
 </style>
 </head>
 <body>
@@ -463,6 +481,12 @@ input[type=file]{display:none}
   <div class="settings-group">
     <div class="settings-group-title">顯示與匯出</div>
     <div class="tempo-box">背景透明度 <input type="range" id="scoreBgOpacity" min="0" max="100" value="0"><b id="scoreBgOpacityVal">0</b></div>
+    <div class="tempo-box">
+      <button class="btn" id="bgImageBtn">匯入背景圖片</button>
+      <input type="file" id="bgImageFile" accept="image/*">
+      <span id="bgImageStatus" style="font-size:12px;opacity:0.75">尚未匯入背景圖片</span>
+      <button class="btn" id="bgImageClearBtn" style="padding:4px 10px" disabled>移除</button>
+    </div>
     <label class="switch-row">
       <span class="switch"><input type="checkbox" id="showTempoMarks"><span class="switch-track"></span></span>顯示速度記號
     </label>
@@ -583,6 +607,17 @@ input[type=file]{display:none}
       <div id="exportBar"><div id="exportFill"></div></div>
       <p>請勿切換分頁或切到背景,螢幕也請不要熄滅。<br>輸出時間 = 樂曲長度,完成後自動下載。</p>
       <button class="btn" id="exportCancel">取消</button>
+    </div>
+  </div>
+  <div id="previewOverlay">
+    <div class="box">
+      <div class="title">預覽畫面</div>
+      <img id="previewImg" alt="匯出預覽">
+      <p>實際匯出畫面(以目前播放位置為準),確認樂譜對齊、標題浮水印、背景都正確再開始匯出。</p>
+      <div style="display:flex;gap:10px;justify-content:center">
+        <button class="btn" id="previewBackBtn">返回</button>
+        <button class="btn primary" id="previewConfirmBtn">開始匯出</button>
+      </div>
     </div>
   </div>
 </div>
@@ -2867,6 +2902,37 @@ $("audioImportClearBtn").addEventListener("click", () => {
   if (playing) { stopAudioOnly(); startAudioFrom(currentSec()); }
 });
 
+/* ── 匯入背景圖片:放在樂譜後面,跟現有「背景透明度」共用同一個透明度控制,現場畫面跟匯出影片都會用到 ── */
+let customBgImage = null; // 解碼完成的 Image 物件,匯出時直接畫進 canvas
+$("bgImageBtn").addEventListener("click", () => $("bgImageFile").click());
+$("bgImageFile").addEventListener("change", async e => {
+  const file = e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  setStatus("讀取背景圖片中…");
+  try {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    await new Promise((res, rej) => { img.onload = res; img.onerror = () => rej(new Error("圖片讀取失敗")); img.src = url; });
+    customBgImage = img;
+    $("scoreBg").style.backgroundImage = "url(" + url + ")";
+    $("scoreBg").style.backgroundSize = "cover";
+    $("scoreBg").style.backgroundPosition = "center";
+    $("bgImageStatus").textContent = "已匯入:" + file.name;
+    $("bgImageClearBtn").disabled = false;
+    setStatus("背景圖片已套用,可用「背景透明度」調整深淺");
+  } catch (err) {
+    setStatus("背景圖片讀取失敗:" + (err.message || err));
+  }
+});
+$("bgImageClearBtn").addEventListener("click", () => {
+  customBgImage = null;
+  $("scoreBg").style.backgroundImage = "";
+  $("bgImageStatus").textContent = "尚未匯入背景圖片";
+  $("bgImageClearBtn").disabled = true;
+  setStatus("已移除背景圖片");
+});
+
 function schedulePiano(freq, when, dur, legato, pedal, harmonyEndSec, artic){
   const osc = audioCtx.createOscillator();
   const osc2 = audioCtx.createOscillator();
@@ -3566,13 +3632,36 @@ function watermarkCfg(){
     channel: enabled ? $("exportWatermarkInput").value.trim() : ""
   };
 }
-$("fmtLandscape").addEventListener("click", () => {
+let pendingExportCfg = null;
+/* 匯出前先算一張跟實際匯出完全同一套邏輯畫出來的靜態預覽圖(用目前播放位置當代表畫面),
+   讓使用者確認樂譜對齊、標題浮水印、背景圖片都對了,再決定要不要真的花時間匯出整支影片 */
+async function showExportPreview(cfg){
+  pendingExportCfg = cfg;
   $("formatOverlay").classList.remove("show");
-  exportVideo(Object.assign({ W: 1920, H: 1080, scoreH: 560, align: chosenAlign, bitrate: 5000000, fps: exportFps, includeKeyboard: chosenIncludeKeyboard, startSec: chosenStartSec, endSec: chosenEndSec }, watermarkCfg()));
+  const layout = computeExportLayout(cfg);
+  const { tiles, scale } = await rasterizeScore(cfg.scoreH);
+  const cv = document.createElement("canvas");
+  cv.width = cfg.W; cv.height = cfg.H;
+  const ctx = cv.getContext("2d");
+  const calib = useCalib();
+  const previewSongSec = cfg.startSec != null ? cfg.startSec : (playing ? currentSec() : pausedAtSec);
+  drawExportFrame(ctx, layout, cfg, tiles, scale, previewSongSec, calib);
+  $("previewImg").src = cv.toDataURL("image/png");
+  $("previewOverlay").classList.add("show");
+}
+$("fmtLandscape").addEventListener("click", () => {
+  showExportPreview(Object.assign({ W: 1920, H: 1080, scoreH: 560, align: chosenAlign, bitrate: 5000000, fps: exportFps, includeKeyboard: chosenIncludeKeyboard, startSec: chosenStartSec, endSec: chosenEndSec }, watermarkCfg()));
 });
 $("fmtPortrait").addEventListener("click", () => {
-  $("formatOverlay").classList.remove("show");
-  exportVideo(Object.assign({ W: 1080, H: 1920, scoreH: 480, align: chosenAlign, bitrate: 5000000, fps: exportFps, includeKeyboard: chosenIncludeKeyboard, startSec: chosenStartSec, endSec: chosenEndSec }, watermarkCfg()));
+  showExportPreview(Object.assign({ W: 1080, H: 1920, scoreH: 480, align: chosenAlign, bitrate: 5000000, fps: exportFps, includeKeyboard: chosenIncludeKeyboard, startSec: chosenStartSec, endSec: chosenEndSec }, watermarkCfg()));
+});
+$("previewBackBtn").addEventListener("click", () => {
+  $("previewOverlay").classList.remove("show");
+  $("formatOverlay").classList.add("show");
+});
+$("previewConfirmBtn").addEventListener("click", () => {
+  $("previewOverlay").classList.remove("show");
+  exportVideo(pendingExportCfg);
 });
 $("exportCancel").addEventListener("click", () => { exportCancelled = true; });
 
@@ -3710,6 +3799,101 @@ document.addEventListener("visibilitychange", async () => {
   if ((exporting || playing) && document.visibilityState === "visible" && !wakeLockRef) await acquireWakeLock();
 });
 
+/* 匯出畫面版面計算,匯出跟預覽共用同一套邏輯,確保預覽看到的就是實際匯出的樣子 */
+function computeExportLayout(cfg){
+  const W = cfg.W, H = cfg.H, SCORE_H = cfg.scoreH;
+  const margin = H * 0.05;
+  // 有包含鼓組/鍵盤面板時,面板高度上限只抓「上下對稱留白後的可用空間」的八成,
+  // 刻意保留兩成當緩衝,這樣扣掉面板後留給樂譜移動的空間才不會被面板吃光
+  // (不然面板一撐滿剩餘空間,樂譜就沒有多餘空間可以靠上/置中/靠下,三種對齊會長得一樣);
+  // 鼓組面板沒有「白鍵長寬比」這個限制,照舊撐滿這個上限顯示最大最清楚,
+  // 鋼琴鍵盤才需要比照真實琴鍵比例縮小,不然匯出的影片跟現場預覽一樣會又細又長
+  const fullAvailableKbH = cfg.includeKeyboard ? Math.max(0, H - margin * 2 - SCORE_H) : 0;
+  const kbMaxH = fullAvailableKbH * 0.8;
+  const kbH = (cfg.includeKeyboard && currentInstrument() !== "drum")
+    ? computeKeyboardHeight(W, Math.min(kbMaxH, H * 0.03), kbMaxH)
+    : kbMaxH;
+  // 樂器面板永遠貼齊畫面最底部,不會因為靠上/置中/靠下而移動;
+  // 靠上/置中/靠下只影響樂譜本身在「扣掉面板後剩餘的空間」裡怎麼擺放
+  const scoreAreaH = H - kbH;
+  const topY = cfg.align === "top" ? margin
+    : cfg.align === "bottom" ? (scoreAreaH - SCORE_H - margin)
+    : (scoreAreaH - SCORE_H) / 2;
+  const plX = W * PLAYLINE_RATIO;
+  return { W, H, SCORE_H, margin, kbH, scoreAreaH, topY, plX };
+}
+/* 依照 CSS background-size:cover 的邏輯裁切/縮放圖片,填滿指定區域不變形 */
+function drawImageCover(ctx, img, x, y, w, h){
+  const imgRatio = img.width / img.height, boxRatio = w / h;
+  let sw, sh, sx, sy;
+  if (imgRatio > boxRatio) { sh = img.height; sw = sh * boxRatio; sx = (img.width - sw) / 2; sy = 0; }
+  else { sw = img.width; sh = sw / boxRatio; sx = 0; sy = (img.height - sh) / 2; }
+  ctx.drawImage(img, sx, sy, sw, sh, x, y, w, h);
+}
+/* 畫單一影格:背景圖片/樂譜/播放線/鍵盤或鼓組/標題浮水印,匯出的每一幀跟預覽都呼叫這個函式,
+   確保兩邊畫面完全一致 */
+function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
+  const { W, H, SCORE_H, kbH, topY, plX } = layout;
+  ctx.fillStyle = "#FFFDF6";
+  ctx.fillRect(0, 0, W, H);
+  if (customBgImage) {
+    const bgOpacity = $("scoreBgOpacity").value / 100;
+    if (bgOpacity > 0) {
+      ctx.save();
+      ctx.globalAlpha = bgOpacity;
+      drawImageCover(ctx, customBgImage, 0, 0, W, H);
+      ctx.restore();
+    }
+  }
+  const off = plX - xAtSec(songSec) * scale;
+  for (const tl of tiles) {
+    const dx = off + tl.x;
+    if (dx < W && dx + tl.canvas.width > 0) ctx.drawImage(tl.canvas, dx, topY);
+  }
+  // 播放軸上下平均縮短(原本8%~92%,現在13%~87%),留出上方空間給放大後的標題,不會疊在一起
+  ctx.strokeStyle = "#B8860B"; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(plX, H*0.13); ctx.lineTo(plX, H*0.87); ctx.stroke();
+  ctx.fillStyle = "#B8860B";
+  ctx.beginPath();
+  ctx.moveTo(plX-9, H*0.13-2); ctx.lineTo(plX+9, H*0.13-2); ctx.lineTo(plX, H*0.13+13);
+  ctx.closePath(); ctx.fill();
+  if (cfg.includeKeyboard) {
+    const kbY = H - kbH;
+    if (currentInstrument() === "drum") {
+      const active = getActiveDrumHitsAt(songSec + KB_LOOKAHEAD_SEC, calib);
+      drawDrumKit(ctx, 0, kbY, W, kbH, active);
+    } else {
+      const active = getActiveNotesAt(songSec + KB_LOOKAHEAD_SEC, calib);
+      drawKeyboard(ctx, 0, kbY, W, kbH, active);
+    }
+  }
+  // 標題/浮水印:畫在最上層,才會真的燒錄進匯出的影片畫面裡(不是疊在網頁上的HTML文字);
+  // 字級以 min(W,H) 為基準(不是直接用 H)──直式影片 H 是橫式的將近兩倍,照樣用 H 算字級的話
+  // 直式標題會變成橫式的兩倍大、留白比例整個跑掉;左上標題用網頁同一套金色、字級比右上浮水印大
+  if (cfg.watermarkEnabled && (cfg.title || cfg.channel)) {
+    const wmRef = Math.min(W, H);
+    const titleFontSize = Math.round(wmRef * 0.055);
+    const channelFontSize = Math.round(wmRef * 0.038);
+    const wmPadX = Math.round(W * 0.02);
+    const wmPadY = Math.max(Math.round(titleFontSize * 0.55), 16);
+    ctx.save();
+    ctx.textBaseline = "top";
+    if (cfg.title) {
+      ctx.font = titleFontSize + "px 'Noto Serif TC', serif";
+      ctx.fillStyle = "#8B6508"; // 深金色,對比度5.2:1(網頁標頭的--gold只有2.36:1,WCAG連大字級3:1都不過)
+      ctx.textAlign = "left";
+      ctx.fillText(cfg.title, wmPadX, wmPadY);
+    }
+    if (cfg.channel) {
+      ctx.font = channelFontSize + "px 'Noto Serif TC', serif";
+      ctx.fillStyle = "rgba(42,42,42,0.85)"; // 深炭灰,85%不透明度,比標題低調但對比度依然夠高(8.7:1)
+      ctx.textAlign = "right";
+      ctx.fillText(cfg.channel, W - wmPadX, wmPadY);
+    }
+    ctx.restore();
+  }
+}
+
 async function exportVideo(cfg){
   if (!events.length || exporting) return;
   exporting = true; exportCancelled = false;
@@ -3720,25 +3904,8 @@ async function exportVideo(cfg){
   $("exportOverlay").classList.add("show");
   let aDest = null;
   try {
-    const W = cfg.W, H = cfg.H, SCORE_H = cfg.scoreH;
-    const margin = H * 0.05;
-    // 有包含鼓組/鍵盤面板時,面板高度上限只抓「上下對稱留白後的可用空間」的八成,
-    // 刻意保留兩成當緩衝,這樣扣掉面板後留給樂譜移動的空間才不會被面板吃光
-    // (不然面板一撐滿剩餘空間,樂譜就沒有多餘空間可以靠上/置中/靠下,三種對齊會長得一樣);
-    // 鼓組面板沒有「白鍵長寬比」這個限制,照舊撐滿這個上限顯示最大最清楚,
-    // 鋼琴鍵盤才需要比照真實琴鍵比例縮小,不然匯出的影片跟現場預覽一樣會又細又長
-    const fullAvailableKbH = cfg.includeKeyboard ? Math.max(0, H - margin * 2 - SCORE_H) : 0;
-    const kbMaxH = fullAvailableKbH * 0.8;
-    const kbH = (cfg.includeKeyboard && currentInstrument() !== "drum")
-      ? computeKeyboardHeight(W, Math.min(kbMaxH, H * 0.03), kbMaxH)
-      : kbMaxH;
-    // 樂器面板永遠貼齊畫面最底部,不會因為靠上/置中/靠下而移動;
-    // 靠上/置中/靠下只影響樂譜本身在「扣掉面板後剩餘的空間」裡怎麼擺放
-    const scoreAreaH = H - kbH;
-    const topY = cfg.align === "top" ? margin
-      : cfg.align === "bottom" ? (scoreAreaH - SCORE_H - margin)
-      : (scoreAreaH - SCORE_H) / 2;
-    const plX = W * PLAYLINE_RATIO;
+    const layout = computeExportLayout(cfg);
+    const { W, H, SCORE_H, kbH, topY, plX } = layout;
     const { tiles, scale } = await rasterizeScore(SCORE_H);
 
     const cv = document.createElement("canvas");
@@ -3799,57 +3966,7 @@ async function exportVideo(cfg){
         const el = audioCtx.currentTime - t0;
         const sec = Math.min(Math.max(el - LEAD, 0), total);
         const songSec = sec + rangeStart; // 匯出片段內的相對時間 → 換算回整首曲子的實際位置,拿來對應樂譜捲動/鍵盤高亮
-        ctx.fillStyle = "#FFFDF6";
-        ctx.fillRect(0, 0, W, H);
-        const off = plX - xAtSec(songSec) * scale;
-        for (const tl of tiles) {
-          const dx = off + tl.x;
-          if (dx < W && dx + tl.canvas.width > 0) ctx.drawImage(tl.canvas, dx, topY);
-        }
-        // 播放軸上下平均縮短(原本8%~92%,現在13%~87%),留出上方空間給放大後的標題,不會疊在一起
-        ctx.strokeStyle = "#B8860B"; ctx.lineWidth = 3;
-        ctx.beginPath(); ctx.moveTo(plX, H*0.13); ctx.lineTo(plX, H*0.87); ctx.stroke();
-        ctx.fillStyle = "#B8860B";
-        ctx.beginPath();
-        ctx.moveTo(plX-9, H*0.13-2); ctx.lineTo(plX+9, H*0.13-2); ctx.lineTo(plX, H*0.13+13);
-        ctx.closePath(); ctx.fill();
-        if (cfg.includeKeyboard) {
-          const kbY = H - kbH;
-          if (currentInstrument() === "drum") {
-            const active = getActiveDrumHitsAt(songSec + KB_LOOKAHEAD_SEC, calib);
-            drawDrumKit(ctx, 0, kbY, W, kbH, active);
-          } else {
-            const active = getActiveNotesAt(songSec + KB_LOOKAHEAD_SEC, calib);
-            drawKeyboard(ctx, 0, kbY, W, kbH, active);
-          }
-        }
-        // 標題/浮水印:畫在最上層,才會真的燒錄進匯出的影片畫面裡(不是疊在網頁上的HTML文字);
-        // 字級依畫面高度等比例縮放,不管輸出1080p還是其他解析度,字體大小跟邊距比例都一致。
-        // 左上標題用網頁同一套金色、字級比右上浮水印大,播放軸也已經上下縮短,兩者不會疊在一起
-        if (cfg.watermarkEnabled && (cfg.title || cfg.channel)) {
-          // 手機瀏覽影片時畫面通常會被縮得比原始解析度小很多(動態消息、嵌入播放器等),
-          // 實際模擬縮小到常見手機動態消息寬度(約480px)檢視過,字級要抓更大一點才看得清楚,
-          // 尤其右上角浮水印字體本來就比標題小,更容易在縮小後糊掉;字級抓大後跟播放軸還是有留足夠間距
-          const titleFontSize = Math.round(H * 0.055);
-          const channelFontSize = Math.round(H * 0.038);
-          const wmPadX = Math.round(W * 0.02);
-          const wmPadY = Math.max(Math.round(titleFontSize * 0.55), 16);
-          ctx.save();
-          ctx.textBaseline = "top";
-          if (cfg.title) {
-            ctx.font = titleFontSize + "px 'Noto Serif TC', serif";
-            ctx.fillStyle = "#8B6508"; // 深金色;網頁標頭的--gold(#C9A24B)實測對比度只有2.36:1(WCAG連大字級3:1都不過),換成這個對比度5.2:1才夠清楚
-            ctx.textAlign = "left";
-            ctx.fillText(cfg.title, wmPadX, wmPadY);
-          }
-          if (cfg.channel) {
-            ctx.font = channelFontSize + "px 'Noto Serif TC', serif";
-            ctx.fillStyle = "rgba(42,42,42,0.85)"; // 深炭灰,85%不透明度,比標題低調但對比度依然夠高(8.7:1)
-            ctx.textAlign = "right";
-            ctx.fillText(cfg.channel, W - wmPadX, wmPadY);
-          }
-          ctx.restore();
-        }
+        drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib);
         $("exportTime").textContent = fmt(sec) + " / " + fmt(total);
         const exportPct = Math.min(100, Math.round(sec / total * 100));
         $("exportFill").style.width = exportPct + "%";
