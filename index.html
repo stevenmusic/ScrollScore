@@ -1434,16 +1434,18 @@ function buildTimeline(){
         // 曲子開頭第一個和絃就是琶音時,前面沒有任何音符可以拿來當「可用空間」的基準,
         // 用 null(=不限制)而不是 0,不然滾奏間隔會被誤夾成 0,聽起來又變成全部音一起彈。
         //
-        // 一般情況(前一個音符準時彈完、下一個和絃緊接著開始,樂譜上最常見的寫法)還是用「起拍距離」算,
-        // 提前一點點搶拍是正常的滾奏彈法,不會造成問題。只有前一個音符的音符長度「真的跨過」這個
-        // 琶音的拍點(常見於不同聲部疊在一起,例如低音部長音還沒結束、高音部就開始彈琶音)才需要
-        // 改用它結束的時間當基準,避免提前搶拍蓋過那個還在響的音。曾經試過一律用結束時間當基準,
-        // 但這樣幾乎每個琶音前面都會卡到「準時彈完」的音符,滾奏效果整個消失,所以只在真的重疊時才收緊。
+        // 「前一個音符要先響過多久,琶音才能開始提前搶拍」用它自己音符長度的一半當門檻,
+        // 而不是全有全無地用「完全結束」或「完全不管」:
+        // - 前一個音符夠長(四分音符以上)時,響過一半通常已經足夠讓耳朵聽清楚,琶音正常提前展開;
+        // - 前一個音符很短(十六分音符這種)時,響過一半也只是很小的時間,琶音會被限制得比較晚才開始,
+        //   不會一開始就搶拍蓋滿它幾乎整個音長、把它整個吃掉聽不見。
+        // (先前試過「一律用完全結束的時間」當門檻,結果幾乎每個緊接著彈的和絃前面都會被卡到 0,
+        // 滾奏效果整個消失;改用一半當折衷,兩種情況都能兼顧。)
         if (events.length) {
           const prevEv = events[events.length - 1];
           const prevOnsetWhole = prevEv.tWhole;
-          const prevEndWhole = prevOnsetWhole + Math.max(0, ...prevEv.notes.map(n => n.durWhole || 0));
-          arpGapBeforeWhole = tWhole - (prevEndWhole > tWhole ? prevEndWhole : prevOnsetWhole);
+          const prevDurWhole = Math.max(0, ...prevEv.notes.map(n => n.durWhole || 0));
+          arpGapBeforeWhole = tWhole - (prevOnsetWhole + prevDurWhole * 0.5);
         } else {
           arpGapBeforeWhole = null;
         }
