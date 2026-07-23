@@ -376,6 +376,12 @@ input[type=file]{display:none}
   transition:border-color .2s;
 }
 .fmt:active{border-color:var(--gold)}
+.range-time-input{
+  flex:1;background:var(--bg);color:var(--gold-bright);border:1px solid var(--line);
+  border-radius:6px;padding:6px 8px;font-family:inherit;font-size:13px;
+  text-align:center;font-variant-numeric:tabular-nums;
+}
+.range-time-input:focus{outline:none;border-color:var(--gold)}
 .fmt b{color:var(--gold-bright);font-size:15px}
 .fmt small{color:var(--muted);font-size:12px}
 .ratio{border:1.5px solid var(--gold);border-radius:3px;flex:none}
@@ -518,6 +524,26 @@ input[type=file]{display:none}
           <span><b>樂譜+鍵盤</b><br><small>畫面下方加上鍵盤或鼓組面板高亮顯示(依照樂器選單而定)</small></span>
         </button>
         <button class="btn" id="fmtCancel">取消</button>
+      </div>
+      <div id="fmtStepRange" class="fmt-step" style="display:none">
+        <label class="switch-row" style="justify-content:space-between;width:100%;margin-bottom:14px">
+          只匯出片段區間
+          <span class="switch"><input type="checkbox" id="exportRangeToggle"><span class="switch-track"></span></span>
+        </label>
+        <div id="exportRangeInputs" style="display:none;flex-direction:column;gap:10px;margin-bottom:8px">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="width:36px;font-size:13px;color:var(--muted)">開始</span>
+            <input type="text" id="exportStartInput" class="range-time-input" placeholder="0:00">
+            <button class="btn" id="exportStartNowBtn" style="padding:4px 10px;font-size:12px">目前位置</button>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="width:36px;font-size:13px;color:var(--muted)">結束</span>
+            <input type="text" id="exportEndInput" class="range-time-input" placeholder="0:16">
+            <button class="btn" id="exportEndNowBtn" style="padding:4px 10px;font-size:12px">目前位置</button>
+          </div>
+        </div>
+        <button class="btn" id="fmtBackFromRange">返回</button>
+        <button class="btn primary" id="fmtNextFromRange" style="margin-top:10px">下一步</button>
       </div>
       <div id="fmtStepAlign" class="fmt-step" style="display:none">
         <button class="fmt" id="alignTop"><span><b>樂譜靠上</b></span></button>
@@ -3127,9 +3153,11 @@ function scheduleFrame(fn, fps){
 }
 let chosenAlign = "center";
 let chosenIncludeKeyboard = false;
+let chosenStartSec = null, chosenEndSec = null; // null = 匯出全曲
 
 function showFmtStep(step){
   $("fmtStepType").style.display = step === "type" ? "flex" : "none";
+  $("fmtStepRange").style.display = step === "range" ? "flex" : "none";
   $("fmtStepAlign").style.display = step === "align" ? "flex" : "none";
   $("fmtStepFormat").style.display = step === "format" ? "flex" : "none";
 }
@@ -3141,10 +3169,47 @@ $("exportBtn").addEventListener("click", () => {
 });
 $("fmtCancel").addEventListener("click", () => $("formatOverlay").classList.remove("show"));
 
-$("fmtTypeScore").addEventListener("click", () => { chosenIncludeKeyboard = false; showFmtStep("align"); });
-$("fmtTypeWithKeyboard").addEventListener("click", () => { chosenIncludeKeyboard = true; showFmtStep("align"); });
+/* 進入「匯出區間」這一步時,如果使用者已經設好 A-B 練習區間,直接帶入,不用重新選一次 */
+function enterRangeStep(){
+  const hasLoop = loopAWhole != null && loopBWhole != null;
+  $("exportRangeToggle").checked = hasLoop;
+  $("exportRangeInputs").style.display = hasLoop ? "flex" : "none";
+  $("exportStartInput").value = fmt(hasLoop ? wholeToSecAny(Math.min(loopAWhole, loopBWhole)) : 0);
+  $("exportEndInput").value = fmt(hasLoop ? wholeToSecAny(Math.max(loopAWhole, loopBWhole)) : totalSec());
+  showFmtStep("range");
+}
+$("fmtTypeScore").addEventListener("click", () => { chosenIncludeKeyboard = false; enterRangeStep(); });
+$("fmtTypeWithKeyboard").addEventListener("click", () => { chosenIncludeKeyboard = true; enterRangeStep(); });
 
-$("fmtBackFromAlign").addEventListener("click", () => showFmtStep("type"));
+$("exportRangeToggle").addEventListener("change", () => {
+  $("exportRangeInputs").style.display = $("exportRangeToggle").checked ? "flex" : "none";
+});
+$("exportStartNowBtn").addEventListener("click", () => {
+  $("exportStartInput").value = fmt(playing ? currentSec() : pausedAtSec);
+});
+$("exportEndNowBtn").addEventListener("click", () => {
+  $("exportEndInput").value = fmt(playing ? currentSec() : pausedAtSec);
+});
+
+$("fmtBackFromRange").addEventListener("click", () => showFmtStep("type"));
+$("fmtNextFromRange").addEventListener("click", () => {
+  if ($("exportRangeToggle").checked) {
+    const s = parseTimeInput($("exportStartInput").value);
+    const e = parseTimeInput($("exportEndInput").value);
+    if (s == null || e == null || e - s < 0.5) {
+      setStatus("匯出區間不正確,請確認開始/結束時間(結束需晚於開始至少0.5秒)");
+      return;
+    }
+    chosenStartSec = Math.max(0, s);
+    chosenEndSec = Math.min(totalSec(), e);
+  } else {
+    chosenStartSec = null;
+    chosenEndSec = null;
+  }
+  showFmtStep("align");
+});
+
+$("fmtBackFromAlign").addEventListener("click", () => showFmtStep("range"));
 $("alignTop").addEventListener("click", () => { chosenAlign = "top"; showFmtStep("format"); });
 $("alignCenter").addEventListener("click", () => { chosenAlign = "center"; showFmtStep("format"); });
 $("alignBottom").addEventListener("click", () => { chosenAlign = "bottom"; showFmtStep("format"); });
@@ -3152,11 +3217,11 @@ $("alignBottom").addEventListener("click", () => { chosenAlign = "bottom"; showF
 $("fmtBackFromFormat").addEventListener("click", () => showFmtStep("align"));
 $("fmtLandscape").addEventListener("click", () => {
   $("formatOverlay").classList.remove("show");
-  exportVideo({ W: 1920, H: 1080, scoreH: 560, align: chosenAlign, bitrate: 5000000, fps: exportFps, includeKeyboard: chosenIncludeKeyboard });
+  exportVideo({ W: 1920, H: 1080, scoreH: 560, align: chosenAlign, bitrate: 5000000, fps: exportFps, includeKeyboard: chosenIncludeKeyboard, startSec: chosenStartSec, endSec: chosenEndSec });
 });
 $("fmtPortrait").addEventListener("click", () => {
   $("formatOverlay").classList.remove("show");
-  exportVideo({ W: 1080, H: 1920, scoreH: 480, align: chosenAlign, bitrate: 5000000, fps: exportFps, includeKeyboard: chosenIncludeKeyboard });
+  exportVideo({ W: 1080, H: 1920, scoreH: 480, align: chosenAlign, bitrate: 5000000, fps: exportFps, includeKeyboard: chosenIncludeKeyboard, startSec: chosenStartSec, endSec: chosenEndSec });
 });
 $("exportCancel").addEventListener("click", () => { exportCancelled = true; });
 
@@ -3334,38 +3399,44 @@ async function exportVideo(cfg){
     const stopped = new Promise(res => rec.onstop = res);
     rec.start(3000); // 每3秒分段一次:避免資料完全不釋放而累積過多記憶體,又不會像每秒切一次那麼頻繁
 
+    const calib = useCalib();
+    // 匯出區間(來自 A-B 循環或手動輸入的開始/結束時間);沒指定就是整首曲子,跟以前行為一樣
+    const rangeStart = cfg.startSec != null ? Math.max(0, cfg.startSec) : 0;
+    const rangeEnd = cfg.endSec != null ? Math.min(totalSec(), cfg.endSec) : totalSec();
+
     const LEAD = 0.4, TAIL = 0.6;
     const t0 = audioCtx.currentTime + 0.1;
     startCtxTime = t0 + LEAD;
     scheduled = [];
     if (importedAudioBuffer) {
-      scheduleImportedAudio(startCtxTime, 0); // 有匯入音檔就整段用它,不逐音符排程合成/取樣音色
+      scheduleImportedAudio(startCtxTime, rangeStart); // 有匯入音檔就整段用它,不逐音符排程合成/取樣音色
     } else {
-      const calib = useCalib();
       for (const ev of events) {
         const t = calib ? calibToSec(ev.tWhole) : wholeToSec(ev.tWhole);
+        if (t < rangeStart - 0.02 || t >= rangeEnd + 0.02) continue; // 只排程落在匯出區間內的音符
         const chordAnchors = {};
         const harmonyEndSec = ev.harmonyEndWhole != null
-          ? startCtxTime + (calib ? calibToSec(ev.harmonyEndWhole) : wholeToSec(ev.harmonyEndWhole))
+          ? startCtxTime + ((calib ? calibToSec(ev.harmonyEndWhole) : wholeToSec(ev.harmonyEndWhole)) - rangeStart)
           : null;
         for (const n of ev.notes) {
           const rollT = (n.rollIndex || 0) * computeArpEffectiveGap(ev, t, calib);
           const durSec = calib ? Math.max(calibToSec(ev.tWhole + n.durWhole) - t, 0.05) : wholeToSec(n.durWhole);
-          if (n.drum) scheduleDrum(n.key, startCtxTime + t + rollT);
-          else scheduleNote(n.freq, startCtxTime + t + rollT, durSec, ev.legato, ev.pedalOn, chordAnchors, harmonyEndSec, ev.artic);
+          if (n.drum) scheduleDrum(n.key, startCtxTime + (t - rangeStart) + rollT);
+          else scheduleNote(n.freq, startCtxTime + (t - rangeStart) + rollT, durSec, ev.legato, ev.pedalOn, chordAnchors, harmonyEndSec, ev.artic);
         }
       }
     }
-    const total = totalSec();
+    const total = rangeEnd - rangeStart;
 
     await new Promise(resolve => {
       const draw = () => {
         if (exportCancelled) { resolve(); return; }
         const el = audioCtx.currentTime - t0;
         const sec = Math.min(Math.max(el - LEAD, 0), total);
+        const songSec = sec + rangeStart; // 匯出片段內的相對時間 → 換算回整首曲子的實際位置,拿來對應樂譜捲動/鍵盤高亮
         ctx.fillStyle = "#FFFDF6";
         ctx.fillRect(0, 0, W, H);
-        const off = plX - xAtSec(sec) * scale;
+        const off = plX - xAtSec(songSec) * scale;
         for (const tl of tiles) {
           const dx = off + tl.x;
           if (dx < W && dx + tl.canvas.width > 0) ctx.drawImage(tl.canvas, dx, topY);
@@ -3378,10 +3449,10 @@ async function exportVideo(cfg){
         ctx.closePath(); ctx.fill();
         if (cfg.includeKeyboard) {
           if (currentInstrument() === "drum") {
-            const active = getActiveDrumHitsAt(sec + KB_LOOKAHEAD_SEC, calib);
+            const active = getActiveDrumHitsAt(songSec + KB_LOOKAHEAD_SEC, calib);
             drawDrumKit(ctx, 0, H - kbH, W, kbH, active);
           } else {
-            const active = getActiveNotesAt(sec + KB_LOOKAHEAD_SEC, calib);
+            const active = getActiveNotesAt(songSec + KB_LOOKAHEAD_SEC, calib);
             drawKeyboard(ctx, 0, H - kbH, W, kbH, active);
           }
         }
@@ -3399,9 +3470,10 @@ async function exportVideo(cfg){
     if (!exportCancelled) {
       const blob = new Blob(chunks, { type: mime || "video/webm" });
       const ext = (mime && mime.indexOf("mp4") >= 0) ? "mp4" : "webm";
+      const rangeTag = cfg.startSec != null ? "-" + fmt(rangeStart).replace(":","m") + "s-" + fmt(rangeEnd).replace(":","m") + "s" : "";
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = "scrollscore-" + W + "x" + H + "." + ext;
+      a.download = "scrollscore-" + W + "x" + H + rangeTag + "." + ext;
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(()=>URL.revokeObjectURL(a.href), 30000);
       setStatus("影片輸出完成(" + (blob.size/1048576).toFixed(1) + " MB)");
