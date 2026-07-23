@@ -3332,20 +3332,22 @@ async function exportVideo(cfg){
   try {
     const W = cfg.W, H = cfg.H, SCORE_H = cfg.scoreH;
     const margin = H * 0.05;
-    // 有包含鼓組/鍵盤面板時,樂譜固定貼齊上方留白,鼓組面板直接緊接在樂譜下方、
-    // 一路延伸到畫面最底部(不留下方留白),避免樂譜與面板之間出現一截背景色的白色縫隙,
-    // 同時鼓組面板也因此拿到最大可用高度,顯示會更大更清楚
-    const topY = cfg.includeKeyboard ? margin
-      : cfg.align === "top" ? margin
-      : cfg.align === "bottom" ? (H - SCORE_H - margin)
-      : (H - SCORE_H) / 2;
-    const availableKbH = cfg.includeKeyboard ? (H - topY - SCORE_H) : 0;
-    // 鼓組面板沒有「白鍵長寬比」這個限制,照舊撐滿剩餘空間顯示最大最清楚;
-    // 鋼琴鍵盤才需要比照真實琴鍵比例縮小,不然匯出的影片跟現場預覽一樣會又細又長,
-    // 縮小後鍵盤仍然貼齊畫面最底部,樂譜跟鍵盤之間多出來的空間就當作留白
+    // 有包含鼓組/鍵盤面板時,面板高度上限只抓「上下對稱留白後的可用空間」的八成,
+    // 刻意保留兩成當緩衝,這樣樂譜+面板這個區塊的總高度才會小於整個可用空間,
+    // 靠上/置中/靠下才有實際能移動的範圍(不然面板一撐滿剩餘空間,三種對齊看起來都一樣);
+    // 鼓組面板沒有「白鍵長寬比」這個限制,照舊撐滿這個上限顯示最大最清楚,
+    // 鋼琴鍵盤才需要比照真實琴鍵比例縮小,不然匯出的影片跟現場預覽一樣會又細又長
+    const fullAvailableKbH = cfg.includeKeyboard ? Math.max(0, H - margin * 2 - SCORE_H) : 0;
+    const kbMaxH = fullAvailableKbH * 0.8;
     const kbH = (cfg.includeKeyboard && currentInstrument() !== "drum")
-      ? computeKeyboardHeight(W, Math.min(availableKbH, H * 0.03), availableKbH)
-      : availableKbH;
+      ? computeKeyboardHeight(W, Math.min(kbMaxH, H * 0.03), kbMaxH)
+      : kbMaxH;
+    // 樂譜+面板算成一個整體區塊來套用靠上/置中/靠下,面板永遠緊接在樂譜正下方(不留縫隙),
+    // 這樣使用者選「置中」時,樂譜+面板才會真的一起置中,而不是樂譜貼齊上方、只有面板在動
+    const blockH = SCORE_H + kbH;
+    const topY = cfg.align === "top" ? margin
+      : cfg.align === "bottom" ? (H - blockH - margin)
+      : (H - blockH) / 2;
     const plX = W * PLAYLINE_RATIO;
     const { tiles, scale } = await rasterizeScore(SCORE_H);
 
@@ -3415,12 +3417,13 @@ async function exportVideo(cfg){
         ctx.moveTo(plX-9, H*0.08-2); ctx.lineTo(plX+9, H*0.08-2); ctx.lineTo(plX, H*0.08+13);
         ctx.closePath(); ctx.fill();
         if (cfg.includeKeyboard) {
+          const kbY = topY + SCORE_H;
           if (currentInstrument() === "drum") {
             const active = getActiveDrumHitsAt(songSec + KB_LOOKAHEAD_SEC, calib);
-            drawDrumKit(ctx, 0, H - kbH, W, kbH, active);
+            drawDrumKit(ctx, 0, kbY, W, kbH, active);
           } else {
             const active = getActiveNotesAt(songSec + KB_LOOKAHEAD_SEC, calib);
-            drawKeyboard(ctx, 0, H - kbH, W, kbH, active);
+            drawKeyboard(ctx, 0, kbY, W, kbH, active);
           }
         }
         $("exportTime").textContent = fmt(sec) + " / " + fmt(total);
