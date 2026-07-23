@@ -377,6 +377,12 @@ input[type=file]{display:none}
   text-align:center;font-variant-numeric:tabular-nums;
 }
 .range-time-input:focus{outline:none;border-color:var(--gold)}
+.range-time-select{
+  flex:1;background:var(--bg);color:var(--gold-bright);border:1px solid var(--line);
+  border-radius:6px;padding:6px 4px;font-family:inherit;font-size:13px;
+  text-align:center;text-align-last:center;font-variant-numeric:tabular-nums;
+}
+.range-time-select:focus{outline:none;border-color:var(--gold)}
 .fmt b{color:var(--gold-bright);font-size:15px}
 .fmt small{color:var(--muted);font-size:12px}
 .ratio{border:1.5px solid var(--gold);border-radius:3px;flex:none}
@@ -534,13 +540,17 @@ input[type=file]{display:none}
         </label>
         <div id="exportRangeInputs" style="display:none;flex-direction:column;gap:10px;margin-bottom:8px">
           <div style="display:flex;align-items:center;gap:8px">
-            <span style="width:36px;font-size:13px;color:var(--muted)">開始</span>
-            <input type="text" id="exportStartInput" class="range-time-input" placeholder="0:00">
+            <span style="width:36px;font-size:13px;color:var(--muted);flex:none">開始</span>
+            <select id="exportStartMin" class="range-time-select"></select>
+            <span style="color:var(--muted)">:</span>
+            <select id="exportStartSec" class="range-time-select"></select>
             <button class="btn" id="exportStartNowBtn" style="padding:4px 10px;font-size:12px">目前位置</button>
           </div>
           <div style="display:flex;align-items:center;gap:8px">
-            <span style="width:36px;font-size:13px;color:var(--muted)">結束</span>
-            <input type="text" id="exportEndInput" class="range-time-input" placeholder="0:16">
+            <span style="width:36px;font-size:13px;color:var(--muted);flex:none">結束</span>
+            <select id="exportEndMin" class="range-time-select"></select>
+            <span style="color:var(--muted)">:</span>
+            <select id="exportEndSec" class="range-time-select"></select>
             <button class="btn" id="exportEndNowBtn" style="padding:4px 10px;font-size:12px">目前位置</button>
           </div>
         </div>
@@ -568,10 +578,10 @@ input[type=file]{display:none}
   </div>
   <div id="exportOverlay">
     <div class="box">
-      <div class="title">影片輸出中</div>
+      <div class="title" id="exportOverlayTitle">合成中 0%</div>
       <div id="exportTime">0:00 / 0:00</div>
       <div id="exportBar"><div id="exportFill"></div></div>
-      <p>請保持此頁面在前景、螢幕不要熄滅。<br>輸出時間 = 樂曲長度,完成後自動下載。</p>
+      <p>請勿切換分頁或切到背景,螢幕也請不要熄滅。<br>輸出時間 = 樂曲長度,完成後自動下載。</p>
       <button class="btn" id="exportCancel">取消</button>
     </div>
   </div>
@@ -3474,11 +3484,41 @@ $("exportBtn").addEventListener("click", () => {
 });
 $("fmtCancel").addEventListener("click", () => $("formatOverlay").classList.remove("show"));
 
+// 分鐘/秒數各自獨立下拉選單,取代自由輸入文字(避免手動輸入時中間的「:」被誤刪導致格式錯誤)
+function fillMinuteOptions(sel, maxMin){
+  sel.innerHTML = "";
+  for (let m = 0; m <= maxMin; m++) {
+    const opt = document.createElement("option");
+    opt.value = m; opt.textContent = m;
+    sel.appendChild(opt);
+  }
+}
+function fillSecondOptions(sel){
+  sel.innerHTML = "";
+  for (let s = 0; s < 60; s++) {
+    const opt = document.createElement("option");
+    opt.value = s; opt.textContent = String(s).padStart(2, "0");
+    sel.appendChild(opt);
+  }
+}
+function setTimeSelects(minSel, secSel, sec){
+  sec = Math.max(0, Math.floor(sec));
+  minSel.value = Math.floor(sec / 60);
+  secSel.value = sec % 60;
+}
+function readTimeSelects(minSel, secSel){
+  return parseInt(minSel.value, 10) * 60 + parseInt(secSel.value, 10);
+}
 function enterRangeStep(){
   $("exportRangeToggle").checked = false;
   $("exportRangeInputs").style.display = "none";
-  $("exportStartInput").value = fmt(0);
-  $("exportEndInput").value = fmt(totalSec());
+  const maxMin = Math.max(0, Math.ceil(totalSec() / 60));
+  fillMinuteOptions($("exportStartMin"), maxMin);
+  fillMinuteOptions($("exportEndMin"), maxMin);
+  fillSecondOptions($("exportStartSec"));
+  fillSecondOptions($("exportEndSec"));
+  setTimeSelects($("exportStartMin"), $("exportStartSec"), 0);
+  setTimeSelects($("exportEndMin"), $("exportEndSec"), totalSec());
   showFmtStep("range");
 }
 $("fmtTypeScore").addEventListener("click", () => { chosenIncludeKeyboard = false; enterRangeStep(); });
@@ -3488,18 +3528,18 @@ $("exportRangeToggle").addEventListener("change", () => {
   $("exportRangeInputs").style.display = $("exportRangeToggle").checked ? "flex" : "none";
 });
 $("exportStartNowBtn").addEventListener("click", () => {
-  $("exportStartInput").value = fmt(playing ? currentSec() : pausedAtSec);
+  setTimeSelects($("exportStartMin"), $("exportStartSec"), playing ? currentSec() : pausedAtSec);
 });
 $("exportEndNowBtn").addEventListener("click", () => {
-  $("exportEndInput").value = fmt(playing ? currentSec() : pausedAtSec);
+  setTimeSelects($("exportEndMin"), $("exportEndSec"), playing ? currentSec() : pausedAtSec);
 });
 
 $("fmtBackFromRange").addEventListener("click", () => showFmtStep("type"));
 $("fmtNextFromRange").addEventListener("click", () => {
   if ($("exportRangeToggle").checked) {
-    const s = parseTimeInput($("exportStartInput").value);
-    const e = parseTimeInput($("exportEndInput").value);
-    if (s == null || e == null || e - s < 0.5) {
+    const s = readTimeSelects($("exportStartMin"), $("exportStartSec"));
+    const e = readTimeSelects($("exportEndMin"), $("exportEndSec"));
+    if (e - s < 0.5) {
       setStatus("匯出區間不正確,請確認開始/結束時間(結束需晚於開始至少0.5秒)");
       return;
     }
@@ -3798,20 +3838,22 @@ async function exportVideo(cfg){
           ctx.textBaseline = "top";
           if (cfg.title) {
             ctx.font = titleFontSize + "px 'Noto Serif TC', serif";
-            ctx.fillStyle = "#C9A24B"; // 網頁標頭同一組金色(--gold)
+            ctx.fillStyle = "#8B6508"; // 深金色;網頁標頭的--gold(#C9A24B)實測對比度只有2.36:1(WCAG連大字級3:1都不過),換成這個對比度5.2:1才夠清楚
             ctx.textAlign = "left";
             ctx.fillText(cfg.title, wmPadX, wmPadY);
           }
           if (cfg.channel) {
             ctx.font = channelFontSize + "px 'Noto Serif TC', serif";
-            ctx.fillStyle = "rgba(51,51,51,0.75)"; // 深炭灰,70~80%透明度,比標題低調
+            ctx.fillStyle = "rgba(42,42,42,0.85)"; // 深炭灰,85%不透明度,比標題低調但對比度依然夠高(8.7:1)
             ctx.textAlign = "right";
             ctx.fillText(cfg.channel, W - wmPadX, wmPadY);
           }
           ctx.restore();
         }
         $("exportTime").textContent = fmt(sec) + " / " + fmt(total);
-        $("exportFill").style.width = (sec/total*100).toFixed(1) + "%";
+        const exportPct = Math.min(100, Math.round(sec / total * 100));
+        $("exportFill").style.width = exportPct + "%";
+        $("exportOverlayTitle").textContent = "合成中 " + exportPct + "%";
         if (el >= LEAD + total + TAIL) { resolve(); return; }
         scheduleFrame(draw, cfg.fps || 30);
       };
