@@ -60,8 +60,16 @@ header h1 span{color:var(--ivory);font-weight:600}
 .header-left .btn:disabled{display:none}
 .tempo-box{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);white-space:nowrap}
 .tempo-box b{color:var(--gold-bright);font-size:15px;min-width:34px;text-align:right;font-variant-numeric:tabular-nums}
-.tempo-box input[type=number]{color:var(--gold-bright);font-size:15px;width:52px;text-align:right;font-variant-numeric:tabular-nums;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:4px 4px;font-family:inherit}
+.tempo-box input[type=number]{
+  color:var(--gold-bright);font-size:15px;width:56px;height:32px;line-height:32px;
+  text-align:center;font-variant-numeric:tabular-nums;box-sizing:border-box;
+  background:var(--bg);border:1px solid var(--line);border-radius:8px;
+  padding:0 4px;font-family:inherit;-moz-appearance:textfield;
+}
 .tempo-box input[type=number]:focus{outline:none;border-color:var(--gold)}
+/* 拿掉瀏覽器內建的上下微調箭頭,不然數字會被擠向左邊、看起來沒有置中 */
+.tempo-box input[type=number]::-webkit-outer-spin-button,
+.tempo-box input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
 input[type=range]{
   -webkit-appearance:none;width:110px;height:3px;border-radius:2px;
   background:var(--line);outline:none;
@@ -93,9 +101,9 @@ input[type=range]::-webkit-slider-thumb{
 #settingsBackdrop.open{opacity:1;pointer-events:auto}
 #settingsPanel{
   position:fixed;left:0;right:0;bottom:0;z-index:59;
-  display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;
-  max-height:72vh;overflow-y:auto;
-  padding:20px 14px calc(16px + env(safe-area-inset-bottom));
+  display:flex;flex-direction:column;align-items:stretch;gap:12px;
+  max-height:78vh;overflow-y:auto;
+  padding:22px 14px calc(16px + env(safe-area-inset-bottom));
   border-top:1px solid var(--gold);border-radius:18px 18px 0 0;
   background:var(--panel);box-shadow:0 -10px 30px rgba(0,0,0,.55);
   transform:translateY(100%);pointer-events:none;
@@ -111,6 +119,43 @@ input[type=range]::-webkit-slider-thumb{
   border-radius:999px;padding:6px 12px;font-family:inherit;font-size:13px;
   min-height:34px;max-width:150px;
 }
+/* 三大分組:音色與調性 / 播放與練習 / 顯示與匯出,用淡淡卡片底色隔開,降低整片選單的資訊密度 */
+.settings-group{
+  display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;
+  padding:14px 16px;background:rgba(255,255,255,.035);
+  border:1px solid var(--line);border-radius:14px;
+}
+.settings-group-title{
+  width:100%;font-size:11px;letter-spacing:.14em;color:var(--muted);
+  text-transform:uppercase;font-weight:700;
+}
+/* 統一的金色 Toggle Switch,取代原生藍色勾選框 */
+.switch-row{display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none}
+.switch{position:relative;display:inline-flex;flex:none}
+.switch input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer;z-index:1}
+.switch-track{
+  display:inline-block; /* <span> 預設是 inline,不加這行寬高會被瀏覽器忽略,軌道等於沒畫出來 */
+  width:38px;height:22px;border-radius:999px;background:var(--bg);
+  border:1px solid var(--line);position:relative;flex:none;
+  transition:background .2s,border-color .2s;
+}
+.switch-track::after{
+  content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;
+  background:var(--muted);transition:transform .2s,background .2s;
+}
+.switch input:checked + .switch-track{background:rgba(201,162,75,.3);border-color:var(--gold)}
+.switch input:checked + .switch-track::after{transform:translateX(16px);background:var(--gold)}
+.switch input:focus-visible + .switch-track{outline:2px solid var(--gold);outline-offset:2px}
+.switch input:disabled + .switch-track{opacity:.35;cursor:not-allowed}
+/* A-B 設定的三顆按鈕合併成一條分段控制器,而不是三個各自獨立的圓形按鈕 */
+.segmented{display:inline-flex;border:1px solid var(--gold);border-radius:999px;overflow:hidden;flex:none}
+.segmented button{
+  border:none;background:transparent;color:var(--gold);cursor:pointer;
+  font-family:inherit;font-size:13px;font-weight:500;height:34px;padding:0 14px;
+}
+.segmented button+button{border-left:1px solid var(--gold)}
+.segmented button:active{background:var(--gold);color:var(--bg)}
+.segmented button:disabled{opacity:.35;cursor:not-allowed}
 /* ── 樂譜視窗 ───────────────────── */
 #stage{
   flex:1;position:relative;overflow:hidden;min-height:110px;
@@ -134,7 +179,7 @@ input[type=range]::-webkit-slider-thumb{
   .tempo-box{font-size:12px;gap:6px}
   .tempo-label{display:none}
   input[type=range]{width:64px}
-  .tempo-box input[type=number]{width:42px;padding:3px}
+  .tempo-box input[type=number]{width:44px;height:28px;line-height:28px;padding:0 3px}
   #keyboardCanvas{height:110px}
 }
 /* 螢幕更窄(iPhone SE 等):logo 縮到最小、按鈕間距再收緊,確保單排絕對放得下 */
@@ -150,7 +195,7 @@ input[type=range]::-webkit-slider-thumb{
   header h1{font-size:11px;letter-spacing:0}
   .btn{padding:0 7px}
   input[type=range]{width:34px}
-  .tempo-box input[type=number]{width:34px;padding:2px}
+  .tempo-box input[type=number]{width:34px;height:26px;line-height:26px;padding:0 2px}
 }
 /* 手機橫向 / 螢幕高度極矮:樂譜區最容易被擠不見,優先壓縮頂欄與鍵盤高度 */
 @media (max-height:420px){
@@ -336,38 +381,56 @@ input[type=file]{display:none}
 <div id="settingsBackdrop"></div>
 
 <div id="settingsPanel">
-  <div class="tempo-box">移調 <button class="btn" id="transDown" style="padding:4px 10px" disabled title="請先載入樂譜">−</button><b id="transVal">原調</b><button class="btn" id="transUp" style="padding:4px 10px" disabled title="請先載入樂譜">＋</button></div>
-  <div class="tempo-box">樂器
-    <select id="instrument">
-      <option value="piano">鋼琴</option>
-      <option value="strings">小提琴</option>
-      <option value="cello">大提琴</option>
-      <option value="flute">長笛</option>
-      <option value="guitar">木吉他(民謠)</option>
-      <option value="guitarnylon">古典吉他(尼龍弦)</option>
-      <option value="clarinet">單簧管</option>
-      <option value="drum">鼓組</option>
-    </select>
+  <div class="settings-group">
+    <div class="settings-group-title">音色與調性</div>
+    <div class="tempo-box">樂器
+      <select id="instrument">
+        <option value="piano">鋼琴</option>
+        <option value="strings">小提琴</option>
+        <option value="cello">大提琴</option>
+        <option value="flute">長笛</option>
+        <option value="guitar">木吉他(民謠)</option>
+        <option value="guitarnylon">古典吉他(尼龍弦)</option>
+        <option value="clarinet">單簧管</option>
+        <option value="drum">鼓組</option>
+      </select>
+    </div>
+    <div class="tempo-box">移調 <button class="btn" id="transDown" style="padding:4px 10px" disabled title="請先載入樂譜">−</button><b id="transVal">原調</b><button class="btn" id="transUp" style="padding:4px 10px" disabled title="請先載入樂譜">＋</button></div>
+    <div class="tempo-box">
+      <button class="btn" id="audioImportBtn">匯入音檔</button>
+      <input type="file" id="audioImportFile" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.flac">
+      <span id="audioImportStatus" style="font-size:12px;opacity:0.75">尚未匯入音檔(播放樂器合成音)</span>
+      <button class="btn" id="audioImportClearBtn" style="padding:4px 10px" disabled>移除</button>
+    </div>
   </div>
 
-  <div class="tempo-box">
-    <button class="btn" id="audioImportBtn">匯入音檔</button>
-    <input type="file" id="audioImportFile" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.flac">
-    <span id="audioImportStatus" style="font-size:12px;opacity:0.75">尚未匯入音檔(播放樂器合成音)</span>
-    <button class="btn" id="audioImportClearBtn" style="padding:4px 10px" disabled>移除</button>
+  <div class="settings-group">
+    <div class="settings-group-title">播放與練習</div>
+    <label class="switch-row" title="播放前先敲一小節節拍器,留時間把手放到樂器上">
+      <span class="switch"><input type="checkbox" id="countIn"><span class="switch-track"></span></span>預備拍
+    </label>
+    <label class="switch-row">
+      <span class="switch"><input type="checkbox" id="legatoPedal" checked><span class="switch-track"></span></span>圓滑/踏板效果
+    </label>
+    <label class="switch-row" title="在下方進度條標出 A、B 兩點,循環播放時只會反覆這個區間,方便針對特定段落練習">
+      <span class="switch"><input type="checkbox" id="loopEnabled"><span class="switch-track"></span></span>區間循環
+    </label>
+    <div class="segmented">
+      <button id="loopSetA" disabled title="請先載入樂譜">設 A</button>
+      <button id="loopSetB" disabled title="請先載入樂譜">設 B</button>
+      <button id="loopClear" disabled title="請先載入樂譜">清除</button>
+    </div>
   </div>
-  <div class="tempo-box"><label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="legatoPedal" checked style="width:16px;height:16px">圓滑/踏板效果</label></div>
-  <div class="tempo-box">背景透明度 <input type="range" id="scoreBgOpacity" min="0" max="100" value="0"><b id="scoreBgOpacityVal">0</b></div>
-  <div class="tempo-box"><label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="showTempoMarks" style="width:16px;height:16px">顯示速度記號</label></div>
-  <div class="tempo-box"><label style="display:flex;align-items:center;gap:6px;cursor:pointer" title="播放前先敲一小節節拍器,留時間把手放到樂器上"><input type="checkbox" id="countIn" style="width:16px;height:16px">預備拍</label></div>
-  <div class="tempo-box">
-    <label style="display:flex;align-items:center;gap:6px;cursor:pointer" title="在下方進度條標出 A、B 兩點,循環播放時只會反覆這個區間,方便針對特定段落練習"><input type="checkbox" id="loopEnabled" style="width:16px;height:16px">區間循環</label>
-    <button class="btn" id="loopSetA" style="padding:4px 10px" disabled title="請先載入樂譜">設 A</button>
-    <button class="btn" id="loopSetB" style="padding:4px 10px" disabled title="請先載入樂譜">設 B</button>
-    <button class="btn" id="loopClear" style="padding:4px 10px" disabled title="請先載入樂譜">清除</button>
+
+  <div class="settings-group">
+    <div class="settings-group-title">顯示與匯出</div>
+    <div class="tempo-box">背景透明度 <input type="range" id="scoreBgOpacity" min="0" max="100" value="0"><b id="scoreBgOpacityVal">0</b></div>
+    <label class="switch-row">
+      <span class="switch"><input type="checkbox" id="showTempoMarks"><span class="switch-track"></span></span>顯示速度記號
+    </label>
+    <button class="btn" id="recBtn" disabled title="請先載入樂譜">錄影模式</button>
+    <button class="btn primary" id="exportBtn" disabled title="請先載入樂譜"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m-5-5l5 5 5-5M4 21h16"/></svg>匯出影片</button>
   </div>
-  <button class="btn" id="recBtn" disabled title="請先載入樂譜">錄影模式</button>
-  <button class="btn" id="exportBtn" disabled title="請先載入樂譜"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m-5-5l5 5 5-5M4 21h16"/></svg>匯出影片</button>
 </div>
 
 <div style="display:none">
