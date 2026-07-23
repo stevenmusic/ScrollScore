@@ -1981,7 +1981,9 @@ const REAL_INSTRUMENTS = {
     ["D",2],["E",2],["Fs",2],["Gs",2],["A",2],["B",2],
     ["Cs",3],["D",3],["E",3],["Fs",3],["G",3],["A",3],["B",3],
     ["Cs",4],["Ds",4],["E",4],["Fs",4],["Gs",4],["A",4],["B",4],
-    ["Cs",5],["D",5],["E",5],["Fs",5],["Gs",5],["A",5],["As",5]
+    // 這個取樣庫裡檔名叫 D5.mp3 的檔案,實際錄音音高經比對驗證其實是 D#5(比檔名標示高一個半音),
+    // 不是真的 D5——用第三個欄位覆蓋成正確的半音(Ds=3),而不是照檔名誤判成 D 導致播放時整體升半音
+    ["Cs",5],["D",5,NOTE_SEMITONE.Ds],["E",5],["Fs",5],["Gs",5],["A",5],["As",5]
   ]},
   clarinet: { folder: "clarinet", exactList: [
     ["D",3],["F",3],["As",3],["D",4],["F",4],["As",4],["D",5],["F",5],["As",5],["D",6],["Fs",6]
@@ -1997,8 +1999,10 @@ function loadInstrumentSamples(instKey){
   ensureAudio();
   const list = [];
   const jobs = [];
-  for (const [letter, oct] of cfg.exactList) {
-    const idx = NOTE_SEMITONE[letter];
+  // 第三個(可省略)欄位是「這個檔案實際錄音的真實半音」,只有在檔名跟實際音高對不上時才需要填,
+  // 用來覆蓋掉從檔名字母推出來的半音(檔名本身不變,音準修正只影響拿去算 pitch-shift 用的 midi 值)
+  for (const [letter, oct, pitchOverride] of cfg.exactList) {
+    const idx = pitchOverride !== undefined ? pitchOverride : NOTE_SEMITONE[letter];
     const midi = (oct + 1) * 12 + idx;
     const url = cfg.base ? (cfg.base + letter + oct + ".mp3") : (SAMPLE_BASE + cfg.folder + "/" + letter + oct + ".mp3");
     jobs.push(
