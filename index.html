@@ -428,8 +428,13 @@ input[type=file]{display:none}
     <label class="switch-row">
       <span class="switch"><input type="checkbox" id="showTempoMarks"><span class="switch-track"></span></span>顯示速度記號
     </label>
-    <button class="btn" id="recBtn" disabled title="請先載入樂譜">錄影模式</button>
-    <button class="btn primary" id="exportBtn" disabled title="請先載入樂譜"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m-5-5l5 5 5-5M4 21h16"/></svg>匯出影片</button>
+    <div style="display:flex;flex-direction:column;gap:6px;width:100%">
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <button class="btn" id="recBtn" disabled title="請先載入樂譜">錄影模式</button>
+        <button class="btn primary" id="exportBtn" disabled title="請先載入樂譜"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m-5-5l5 5 5-5M4 21h16"/></svg>匯出影片</button>
+      </div>
+      <p style="font-size:11px;color:var(--muted);line-height:1.6;margin:0">匯出影片:自動產生可下載的影片檔。錄影模式:清空畫面成純樂譜視圖,方便你自行用手機/電腦內建的螢幕錄影工具錄製。</p>
+    </div>
   </div>
 </div>
 
