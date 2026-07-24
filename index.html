@@ -193,6 +193,9 @@ input[type=range]::-webkit-slider-thumb{
   #settingsPanel{padding:8px 10px;gap:8px 12px}
   .tempo-box{font-size:var(--fs-xs);gap:6px}
   .tempo-label{display:none}
+  /* "(附點四分音符)"這類單位提示手機寬度顯示不下,會把速度按鈕撐超寬,
+     連帶把停止鈕、設定鈕擠到自動換行,版面就亂了——窄螢幕直接隱藏,只留數字 */
+  #tempoUnitSuffix{display:none}
   input[type=range]{width:64px}
   .tempo-box input[type=number]{width:44px;height:28px;line-height:28px;padding:0 3px}
   #keyboardCanvas{height:110px}
@@ -460,7 +463,7 @@ input[type=file]{display:none}
   <div class="header-right">
     <div class="tempo-compact">
       <button class="btn" id="tempoToggle" aria-label="速度">
-        <span id="tempoDisplay">100 BPM</span><span class="caret">▾</span>
+        <span id="tempoDisplay">100 BPM</span><span id="tempoUnitSuffix"></span><span class="caret">▾</span>
       </button>
       <div id="tempoPopover">
         <div class="tempo-box"><span class="tempo-label">速度</span> <input type="range" id="tempo" min="40" max="400" value="100" step="1"><input type="number" id="tempoVal" min="40" max="400" value="100"></div>
@@ -898,7 +901,12 @@ document.addEventListener("click", e => {
   if ($("tempoPopover").contains(e.target)) return;
   $("tempoPopover").classList.remove("open");
 });
-function syncTempoDisplay(){ $("tempoDisplay").textContent = rawTempo() + " BPM" + (tempoDisplayUnitLabel ? " " + tempoDisplayUnitLabel : ""); }
+// 單位提示(如"(附點四分音符)")拆成獨立的span,手機寬度時用CSS隱藏它——
+// 不然這段文字會讓速度按鈕變超寬,把旁邊的停止鈕、設定鈕擠到自動換行,版面就跑掉了
+function syncTempoDisplay(){
+  $("tempoDisplay").textContent = rawTempo() + " BPM";
+  $("tempoUnitSuffix").textContent = tempoDisplayUnitLabel ? " " + tempoDisplayUnitLabel : "";
+}
 async function loadScoreFile(file){
   if (!file) return;
   stopPlayback();
