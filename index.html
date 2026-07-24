@@ -2062,7 +2062,8 @@ function useCalib(){ return $("useCalibration").checked && calibrationMap.length
       直接採用樂譜上明確的圓滑線(slur)結尾、fermata記號,這些是比數值模型更可靠、
       直接來自樂譜本身的證據,優先權最高。細節見下方 detectPhraseBoundaries()。
    1) 樂句拱形(phrase arch):Todd(1985)、KTH規則系統(Friberg/Bresin/Sundberg)的Phrase Arch
-      規則——樂句內段速度呈拱形,中段稍微加快、頭尾稍微放慢。
+      規則——樂句中段稍微加快,結尾則有明確的漸慢(Repp 1992分析Träumerei發現「每個樂段結尾」
+      都有明顯漸慢,不是只有整曲最後一個音才變慢),幅度預設走溫和路線(結尾約原速的85~90%)。
    2) 結尾漸慢(final ritardando):Friberg & Sundberg(1999)用跑者煞停的運動學實測,推導出結尾
       漸慢近似冪次曲線 v(x)=(1-x)^q,套用在整首曲子結尾以及樂譜上的fermata記號前。
    3) 音值重音(agogic accent):Repp(1992)分析Schumann《夢幻曲》28個錄音版本,發現重拍或被
@@ -2133,10 +2134,14 @@ function detectPhraseBoundaries(){
 function buildRubatoMap(){
   rubatoMap = [];
   if (!events.length) return;
-  const ARCH_AMOUNT = 0.07;    // 樂句拱形速度變化幅度(±7%)
+  const ARCH_AMOUNT = 0.07;        // 樂句拱形中段加速幅度(+7%)
+  const PHRASE_END_MIN_MULT = 0.875; // 每個樂句結尾漸慢到原速的87.5%(85~90%溫和幅度的中點)。
+                                      // Repp(1992)分析Träumerei發現「每個樂段結尾」都有明顯漸慢,
+                                      // 不是只有整曲最後一個音才變慢,舊版公式漏掉了這個效果
+  const PHRASE_END_EASE_POW = 3;     // 冪次越大,漸慢越集中在樂句最後一小段,不會整句都在慢
   const RITARD_Q = 2.2;        // 跑者煞停模型的冪次(Friberg & Sundberg論文常見範圍1.5~2.7)
   const RITARD_SPAN_WHOLE = 1; // 結尾/fermata前多少全音符範圍內開始漸慢(約一小節)
-  const RITARD_MIN_MULT = 0.4; // 漸慢最多放慢到原速的40%,避免趨近無限久
+  const RITARD_MIN_MULT = 0.4; // 全曲結尾/fermata的結構性漸慢,最多放慢到原速的40%
   const AGOGIC_AMOUNT = 0.05;  // 重音/延長記號的音值重音幅度
   const JITTER_AMOUNT = 0.015; // 微幅隨機抖動(±1.5%)
 
@@ -2162,7 +2167,10 @@ function buildRubatoMap(){
 
   function localTempoMult(i){
     const ev = events[i];
-    let mult = 1 + ARCH_AMOUNT * Math.sin(Math.PI * (posInPhrase[i] || 0));
+    const x = posInPhrase[i] || 0;
+    const archMult = 1 + ARCH_AMOUNT * Math.sin(Math.PI * x); // 樂句中段加速
+    const phraseEndRitard = 1 - (1 - PHRASE_END_MIN_MULT) * Math.pow(x, PHRASE_END_EASE_POW); // 樂句結尾漸慢
+    let mult = archMult * phraseEndRitard;
     while (ritardPtr < ritardTargets.length - 1 && ritardTargets[ritardPtr] < ev.tWhole) ritardPtr++;
     const ritardDist = Math.max(0, ritardTargets[ritardPtr] - ev.tWhole);
     if (ritardDist < RITARD_SPAN_WHOLE) {
