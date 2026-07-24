@@ -785,10 +785,12 @@ function seededRand01(seed){
   const x = Math.sin(seed * 12.9898) * 43758.5453;
   return x - Math.floor(x);
 }
-/* 琶音內部每顆音之間的間距不再是機械式的等距,故意打散一點,最後一顆音也不用死板地精準卡在
-   拍點上,聽起來更接近真人彈奏;但整組音符占用的時間範圍完全不超出 computeArpEffectiveGap()
-   原本就已經算好、對前一個音符安全的總長度([t0-safeTotalSpan, t0]),只是在這個既有的安全範圍
-   裡面重新打散分布,所以不會多吃到前一個音符的時間,也不會晚於拍點去影響下一個音符。 */
+/* 琶音展開的節奏不是靠亂數打散決定,而是根據已知的演奏研究資料:滾奏和絃時,音符之間的
+   間隔通常「先寬後窄」——開頭幾顆音之間隔得比較開,越接近落在拍點上的最後一顆音,間隔越
+   收攏、越密集,呈現指尖依序落下時自然加速收尾的傾向。這裡用等比衰減(ACCEL_RATIO)模擬
+   這個傾向,只疊加小幅度亂數(±10%)避免每組琶音都是機械式的完全等比,不讓亂數主導形狀。
+   整組音符占用的時間範圍仍完全不超出 computeArpEffectiveGap() 已算好、對前一個音符安全的
+   總長度([t0-safeTotalSpan, t0]),只是在這個既有的安全範圍裡面照這個加速曲線分布。 */
 function computeArpNoteOffsetSec(ev, note, t0, calib){
   const n = ev.arpCount;
   if (!n || n < 2) return 0;
@@ -797,29 +799,20 @@ function computeArpNoteOffsetSec(ev, note, t0, calib){
   const safeGap = computeArpEffectiveGap(ev, t0, calib);
   const safeTotalSpan = span * safeGap;
   const seed = ev.tWhole * 97.13;
-  // 前後各留一點隨機緩衝(安全總長度的一部分),第一顆、最後一顆音都不用剛好卡在邊界上。
-  // 開頭這端再收緊一點,讓起手更早一點;結尾這端(endBuffer)完全不動,不要跟著提早結束
-  const startBufferMax = safeTotalSpan * 0.12;
-  const startBuffer = startBufferMax * (0.3 + seededRand01(seed + 501) * 0.7);
-  const endBufferMax = safeTotalSpan * 0.15;
-  const endBuffer = seededRand01(seed + 502) * endBufferMax;
+  // 前後留一點小緩衝,第一顆、最後一顆音不用死板地剛好卡在邊界上;加速曲線本身已經提供了
+  // 自然的頭寬尾窄形狀,緩衝只需要很小幅度即可,不用像亂數打散時那樣依賴大緩衝製造變化。
+  const startBufferMax = safeTotalSpan * 0.05;
+  const startBuffer = startBufferMax * seededRand01(seed + 501);
+  const endBufferMax = safeTotalSpan * 0.08;
+  const endBuffer = endBufferMax * seededRand01(seed + 502);
   const usableSpan = Math.max(0, safeTotalSpan - startBuffer - endBuffer);
-  // span段間隔各自用偽隨機權重打散,總和固定等於usableSpan,不會超出安全範圍。
-  // 用分層抽樣(stratified sampling)取代單純各自獨立的亂數:把權重範圍切成span等份,
-  // 每一段各自抽一個值,保證這一組間隔一定會同時涵蓋到偏窄跟偏寬的落差,不會因為運氣不好
-  // 剛好抽到一群很接近的數字、讓這組琶音看起來還是很平均(這就是「有的地方很好、有的地方
-  // 不夠散」的原因——單純獨立亂數本來就有機率抽出集中的結果)。抽完再洗牌打亂順序,
-  // 不然權重會變成機械式的「越來越大」或「越來越小」,聽起來又太規律、不像真人彈奏。
-  const WEIGHT_MIN = 0.2, WEIGHT_MAX = 1.9;
-  const binSize = (WEIGHT_MAX - WEIGHT_MIN) / span;
+  // weights[k] 代表第k與第k+1顆音之間的間隔(k=0為最早的間隔),用等比衰減讓越早的間隔越長、
+  // 越接近拍點的間隔越短,疊加±10%的微幅亂數增加一點真人彈奏的不規則感。
+  const ACCEL_RATIO = 0.88;
   const weights = [];
   for (let k = 0; k < span; k++) {
-    const binLo = WEIGHT_MIN + k * binSize;
-    weights.push(binLo + seededRand01(seed + k * 13.37) * binSize);
-  }
-  for (let k = span - 1; k > 0; k--) {
-    const j = Math.floor(seededRand01(seed + 800 + k * 7.77) * (k + 1));
-    const tmp = weights[k]; weights[k] = weights[j]; weights[j] = tmp;
+    const jitter = 0.9 + seededRand01(seed + k * 13.37) * 0.2;
+    weights.push(Math.pow(ACCEL_RATIO, k) * jitter);
   }
   const weightSum = weights.reduce((a, b) => a + b, 0);
   const scale = weightSum > 0 ? usableSpan / weightSum : 0;
