@@ -510,6 +510,9 @@ input[type=file]{display:none}
     <label class="switch-row">
       <span class="switch"><input type="checkbox" id="legatoPedal" checked><span class="switch-track"></span></span>圓滑/踏板效果
     </label>
+    <label class="switch-row" title="模擬真人彈奏的節奏彈性(樂句抑揚、結尾漸慢、重音拉長),而非機械式的固定拍點。套用在整首曲子共用的主時間軸上,所有樂器/雙手會一起呼吸伸縮">
+      <span class="switch"><input type="checkbox" id="useRubato"><span class="switch-track"></span></span>彈性速度(Rubato)
+    </label>
   </div>
 
   <div class="settings-group">
@@ -772,7 +775,7 @@ function computeArpEffectiveGap(ev, t0, calib){
   const span = ev.arpCount - 1; // 全部音符都壓在拍點之前,最早的音符在拍點前 span 個間隔
   if (span <= 0) return baseGap;
   const prevSec = ev.arpGapBeforeWhole != null
-    ? (calib ? calibToSec(ev.tWhole - ev.arpGapBeforeWhole) : wholeToSec(ev.tWhole - ev.arpGapBeforeWhole))
+    ? posToSec(ev.tWhole - ev.arpGapBeforeWhole, calib)
     : -Infinity;
   const maxBefore = t0 - prevSec - ARP_SAFETY_SEC;
   const maxGapAllowed = maxBefore / span;
@@ -1910,6 +1913,7 @@ function buildTimeline(){
   endX = lastX + 120;
   cursor.hide();
   computeGuitarStringRinging();
+  buildRubatoMap();
 }
 
 /* ── 吉他同弦延音判斷(古典吉他/民謠吉他共用)──────────────────────
@@ -2007,6 +2011,7 @@ function bpm(){ return rawTempo() * tempoDisplayMultiplier; } // 播放引擎實
 function wholeToSec(w){ return w * 240 / bpm(); }   // 1 全音符 = 4 拍
 function totalSec(){
   if ($("useCalibration").checked && calibrationMap.length >= 2) return calibrationMap[calibrationMap.length-1].realSec;
+  if (rubatoEnabled()) return rubatoToSec(totalWhole);
   return wholeToSec(totalWhole);
 }
 /* ── 校準時間換算(tap-along / 自動拍點偵測共用) ── */
@@ -2047,6 +2052,121 @@ function calibSecToWhole(sec){
   return last.tWhole + (sec - last.realSec) * slope;
 }
 function useCalib(){ return $("useCalibration").checked && calibrationMap.length >= 2; }
+
+/* ── 彈性速度(Rubato)──────────────────────────────────────────────
+   套用已知的演奏學研究資料,模擬全曲的節奏彈性,而非機械式的固定拍點:
+   1) 樂句拱形(phrase arch):Todd(1985)、KTH規則系統(Friberg/Bresin/Sundberg)的Phrase Arch
+      規則——樂句內段速度呈拱形,中段稍微加快、頭尾稍微放慢。
+   2) 結尾漸慢(final ritardando):Friberg & Sundberg(1999)用跑者煞停的運動學實測,推導出結尾
+      漸慢近似冪次曲線 v(x)=(1-x)^q,套用在整首曲子結尾以及樂譜上的fermata記號前。
+   3) 音值重音(agogic accent):Repp(1992)分析Schumann《夢幻曲》28個錄音版本,發現重拍或被
+      強調(tenuto/accent/fermata)的音符常被演奏者稍微拉長。
+   4) 微幅隨機抖動:Repp的研究也發現即使同一位演奏者反覆彈奏同一段落,時值仍有小幅自然差異,
+      這裡疊加極小幅度的偽隨機抖動(用既有的seededRand01,可重現、非每次播放都不同)。
+   這套模型只調整整個樂團共用的主時間軸,所有樂器/雙手一起呼吸伸縮,不會各自獨立飄移脫拍。
+   rubatoMap 存的是「彈性速度換算後的等效全音符座標」而非秒數,實際秒數仍透過 wholeToSec()
+   依目前的tempo滑桿計算,所以调整tempo不需要重建這張表。 */
+let rubatoMap = []; // [{orig: 原始tWhole, warped: 換算後的等效全音符座標}],依orig遞增排序
+function rubatoEnabled(){ const el = $("useRubato"); return !!(el && el.checked && rubatoMap.length >= 2); }
+
+function buildRubatoMap(){
+  rubatoMap = [];
+  if (!events.length) return;
+  const REST_GAP_WHOLE = 0.25; // 事件間距超過一個四分音符的休止,視為樂句邊界
+  const ARCH_AMOUNT = 0.07;    // 樂句拱形速度變化幅度(±7%)
+  const RITARD_Q = 2.2;        // 跑者煞停模型的冪次(Friberg & Sundberg論文常見範圍1.5~2.7)
+  const RITARD_SPAN_WHOLE = 1; // 結尾/fermata前多少全音符範圍內開始漸慢(約一小節)
+  const RITARD_MIN_MULT = 0.4; // 漸慢最多放慢到原速的40%,避免趨近無限久
+  const AGOGIC_AMOUNT = 0.05;  // 重音/延長記號的音值重音幅度
+  const JITTER_AMOUNT = 0.015; // 微幅隨機抖動(±1.5%)
+
+  // 用休止或fermata把整首曲子切成樂句,段落太短(少於3個音)就併入前一段,避免拱形曲線太誇張
+  const phraseStarts = [0];
+  for (let i = 0; i < events.length - 1; i++) {
+    const ev = events[i], next = events[i + 1];
+    const evEnd = ev.tWhole + (ev.notes.length ? Math.max(...ev.notes.map(n => n.durWhole || 0)) : 0);
+    if ((next.tWhole - evEnd) >= REST_GAP_WHOLE || (ev.artic && ev.artic.fermata)) phraseStarts.push(i + 1);
+  }
+  phraseStarts.push(events.length);
+  const phrases = [];
+  for (let i = 0; i < phraseStarts.length - 1; i++) {
+    const s = phraseStarts[i], e = phraseStarts[i + 1];
+    if (phrases.length && (e - s) < 3) phrases[phrases.length - 1].end = e;
+    else phrases.push({ start: s, end: e });
+  }
+  const posInPhrase = new Array(events.length);
+  for (const ph of phrases) {
+    const span = Math.max(1, ph.end - ph.start - 1);
+    for (let i = ph.start; i < ph.end; i++) posInPhrase[i] = (i - ph.start) / span;
+  }
+
+  // 結尾漸慢的目標點:曲子真正的結尾,以及樂譜上每一個fermata
+  const ritardTargets = [totalWhole];
+  for (const ev of events) if (ev.artic && ev.artic.fermata) ritardTargets.push(ev.tWhole);
+  ritardTargets.sort((a, b) => a - b);
+  let ritardPtr = 0;
+
+  function localTempoMult(i){
+    const ev = events[i];
+    let mult = 1 + ARCH_AMOUNT * Math.sin(Math.PI * (posInPhrase[i] || 0));
+    while (ritardPtr < ritardTargets.length - 1 && ritardTargets[ritardPtr] < ev.tWhole) ritardPtr++;
+    const ritardDist = Math.max(0, ritardTargets[ritardPtr] - ev.tWhole);
+    if (ritardDist < RITARD_SPAN_WHOLE) {
+      const rx = 1 - ritardDist / RITARD_SPAN_WHOLE;
+      mult *= Math.max(RITARD_MIN_MULT, Math.pow(1 - rx, RITARD_Q));
+    }
+    const a = ev.artic;
+    if (a && (a.tenuto || a.fermata || a.accent || a.strongAccent)) mult *= (1 - AGOGIC_AMOUNT);
+    const jitter = 1 + (seededRand01(ev.tWhole * 53.73 + 707) - 0.5) * 2 * JITTER_AMOUNT;
+    mult *= jitter;
+    return Math.max(0.4, Math.min(1.7, mult));
+  }
+
+  let cumWarped = 0;
+  rubatoMap.push({ orig: events[0].tWhole, warped: 0 });
+  for (let i = 0; i < events.length - 1; i++) {
+    cumWarped += (events[i + 1].tWhole - events[i].tWhole) / localTempoMult(i);
+    rubatoMap.push({ orig: events[i + 1].tWhole, warped: cumWarped });
+  }
+  const tailWhole = totalWhole - events[events.length - 1].tWhole;
+  if (tailWhole > 0) {
+    cumWarped += tailWhole / localTempoMult(events.length - 1);
+    rubatoMap.push({ orig: totalWhole, warped: cumWarped });
+  }
+}
+
+// 二分搜尋 orig→warped(或反過來),跟 xAtSec() 用同樣的手法,確保長曲子也不會越播到後面越慢
+function rubatoInterp(map, key, val){
+  const other = key === "orig" ? "warped" : "orig";
+  if (val <= map[0][key]) {
+    const a = map[0], b = map[1];
+    const slope = (b[other] - a[other]) / Math.max(b[key] - a[key], 1e-6);
+    return a[other] + (val - a[key]) * slope;
+  }
+  const lastI = map.length - 1;
+  if (val >= map[lastI][key]) {
+    const a = map[lastI - 1], b = map[lastI];
+    const slope = (b[other] - a[other]) / Math.max(b[key] - a[key], 1e-6);
+    return b[other] + (val - b[key]) * slope;
+  }
+  let lo = 0, hi = lastI;
+  while (lo < hi - 1) {
+    const mid = (lo + hi) >> 1;
+    if (map[mid][key] <= val) lo = mid; else hi = mid;
+  }
+  const a = map[lo], b = map[hi];
+  const f = (val - a[key]) / Math.max(b[key] - a[key], 1e-6);
+  return a[other] + (b[other] - a[other]) * f;
+}
+function rubatoToSec(w){ return wholeToSec(rubatoInterp(rubatoMap, "orig", w)); }
+function rubatoSecToWhole(sec){ return rubatoInterp(rubatoMap, "warped", sec * bpm() / 240); }
+/* 樂曲上絕對位置(全音符座標)→秒數的統一入口:calibration(真實錄音的tap-along資料)優先權最高,
+   其次是rubato(合成的彈性速度模型),都沒有就照原本固定拍點換算 */
+function posToSec(w, calib){
+  if (calib) return calibToSec(w);
+  if (rubatoEnabled()) return rubatoToSec(w);
+  return wholeToSec(w);
+}
 
 /* ── 校準用的「現在時間」:有上傳錄音就跟著錄音播放位置走,否則用碼表 ── */
 function nowRealSec(){
@@ -2432,12 +2552,12 @@ function startAudioFrom(fromSec){
   const calib = useCalib();
   let errCount = 0, lastErr = null;
   for (const ev of events) {
-    const t = calib ? calibToSec(ev.tWhole) : wholeToSec(ev.tWhole);
+    const t = posToSec(ev.tWhole, calib);
     if (t < fromSec - 0.02) continue;
     const chordAnchors = {};
     const isGuitar = currentInstrument() === "guitar" || currentInstrument() === "guitarnylon";
     const harmonyEndSec = ev.harmonyEndWhole != null
-      ? startCtxTime + (calib ? calibToSec(ev.harmonyEndWhole) : wholeToSec(ev.harmonyEndWhole))
+      ? startCtxTime + (posToSec(ev.harmonyEndWhole, calib))
       : null;
     const tech = (isGuitar && ev.guitarTech) ? Object.assign({}, ev.guitarTech, { vibrato: ev.vibrato }) : (isGuitar && ev.vibrato ? { vibrato: true } : null);
     for (const n of ev.notes) {
@@ -2446,7 +2566,7 @@ function startAudioFrom(fromSec){
         const durSec = calib ? Math.max(calibToSec(ev.tWhole + n.durWhole) - t, 0.05) : wholeToSec(n.durWhole);
         // 吉他:同弦延音範圍(guitarRingEndWhole)取代一般和聲延長判斷,才符合「其他音符要在別條弦上才能延音」的物理限制
         const noteHarmonyEndSec = (isGuitar && n.guitarRingEndWhole != null)
-          ? startCtxTime + (calib ? calibToSec(n.guitarRingEndWhole) : wholeToSec(n.guitarRingEndWhole))
+          ? startCtxTime + (posToSec(n.guitarRingEndWhole, calib))
           : harmonyEndSec;
         const noteTech = (isGuitar && n.glissTargetFreq != null) ? Object.assign({}, tech, { glissTargetFreq: n.glissTargetFreq }) : tech;
         if (n.drum) scheduleDrum(n.key, startCtxTime + t + rollT);
@@ -2905,14 +3025,14 @@ function getActiveNotesAt(sec, calib){
   const map = new Map();
   const noteEndSec = (ev, n, t0) => {
     const rollT = computeArpNoteOffsetSec(ev, n, t0, calib);
-    const writtenEnd = calib ? calibToSec(ev.tWhole + n.durWhole) : wholeToSec(ev.tWhole + n.durWhole);
+    const writtenEnd = posToSec(ev.tWhole + n.durWhole, calib);
     return Math.max(writtenEnd + rollT, t0 + rollT + KB_MIN_VISUAL_SEC);
   };
   // 游標只往前推進,跳過已經完全結束(連最短可視時間都過了)的事件,
   // 避免每一幀都要從頭掃過整首樂曲,曲子越長、播到越後面才不會越算越久
   while (kbScanCursor < events.length) {
     const ev = events[kbScanCursor];
-    const t0 = calib ? calibToSec(ev.tWhole) : wholeToSec(ev.tWhole);
+    const t0 = posToSec(ev.tWhole, calib);
     if (t0 >= sec) break;
     let allExpired = true;
     for (const n of ev.notes) {
@@ -2924,7 +3044,7 @@ function getActiveNotesAt(sec, calib){
   }
   for (let i = kbScanCursor; i < events.length; i++) {
     const ev = events[i];
-    const t0 = calib ? calibToSec(ev.tWhole) : wholeToSec(ev.tWhole);
+    const t0 = posToSec(ev.tWhole, calib);
     if (t0 > sec) break;
     for (const n of ev.notes) {
       if (n.drum || !n.freq) continue;
@@ -2966,13 +3086,13 @@ function getActiveDrumHitsAt(sec, calib){
   const map = new Map(); // piece -> 0~1 的餘光強度,剛打下去是 1,隨時間衰減到 0
   while (drumScanCursor < events.length) {
     const ev = events[drumScanCursor];
-    const t0 = calib ? calibToSec(ev.tWhole) : wholeToSec(ev.tWhole);
+    const t0 = posToSec(ev.tWhole, calib);
     if (t0 + DRUM_FLASH_SEC >= sec) break;
     drumScanCursor++;
   }
   for (let i = drumScanCursor; i < events.length; i++) {
     const ev = events[i];
-    const t0 = calib ? calibToSec(ev.tWhole) : wholeToSec(ev.tWhole);
+    const t0 = posToSec(ev.tWhole, calib);
     if (t0 > sec) break;
     for (const n of ev.notes) {
       if (!n.drum) continue;
@@ -3741,7 +3861,7 @@ function stopPlayback(){
 function playlineX(){ return $("stage").clientWidth * PLAYLINE_RATIO; }
 
 function xAtSec(sec){
-  const w = useCalib() ? calibSecToWhole(sec) : sec * bpm() / 240; // sec → whole
+  const w = useCalib() ? calibSecToWhole(sec) : (rubatoEnabled() ? rubatoSecToWhole(sec) : sec * bpm() / 240); // sec → whole
   if (!events.length) return 0;
   if (w <= events[0].tWhole) return events[0].x;
   const lastEv = events[events.length - 1];
@@ -4334,18 +4454,18 @@ async function exportVideo(cfg){
     } else {
       const isGuitar = currentInstrument() === "guitar" || currentInstrument() === "guitarnylon";
       for (const ev of events) {
-        const t = calib ? calibToSec(ev.tWhole) : wholeToSec(ev.tWhole);
+        const t = posToSec(ev.tWhole, calib);
         if (t < rangeStart - 0.02 || t >= rangeEnd + 0.02) continue; // 只排程落在匯出區間內的音符
         const chordAnchors = {};
         const harmonyEndSec = ev.harmonyEndWhole != null
-          ? startCtxTime + ((calib ? calibToSec(ev.harmonyEndWhole) : wholeToSec(ev.harmonyEndWhole)) - rangeStart)
+          ? startCtxTime + ((posToSec(ev.harmonyEndWhole, calib)) - rangeStart)
           : null;
         const tech = (isGuitar && ev.guitarTech) ? Object.assign({}, ev.guitarTech, { vibrato: ev.vibrato }) : (isGuitar && ev.vibrato ? { vibrato: true } : null);
         for (const n of ev.notes) {
           const rollT = computeArpNoteOffsetSec(ev, n, t, calib);
           const durSec = calib ? Math.max(calibToSec(ev.tWhole + n.durWhole) - t, 0.05) : wholeToSec(n.durWhole);
           const noteHarmonyEndSec = (isGuitar && n.guitarRingEndWhole != null)
-            ? startCtxTime + ((calib ? calibToSec(n.guitarRingEndWhole) : wholeToSec(n.guitarRingEndWhole)) - rangeStart)
+            ? startCtxTime + ((posToSec(n.guitarRingEndWhole, calib)) - rangeStart)
             : harmonyEndSec;
           const noteTech = (isGuitar && n.glissTargetFreq != null) ? Object.assign({}, tech, { glissTargetFreq: n.glissTargetFreq }) : tech;
           if (n.drum) scheduleDrum(n.key, startCtxTime + (t - rangeStart) + rollT);
