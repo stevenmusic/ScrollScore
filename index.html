@@ -740,9 +740,9 @@ const PLAYLINE_RATIO = 0.25;
 /* 琶音滾奏間隔:跟著目前速度等比例調整(太慢的歌固定間隔會顯得脫節,太快的歌固定間隔會佔掉太多拍子),
    但設上下限避免極端速度時滾奏變得不自然 */
 // 琶音的最後一顆音固定貼在拍點上(rollIndex=0不受這個係數影響),其餘每顆音都在拍點之前
-// rollIndex*gap秒——把間隔縮小1%,等於把「開始」那顆音往拍點方向延後1%,聽起來不會那麼搶拍,
+// rollIndex*gap秒——把間隔縮小2%,等於把「開始」那顆音往拍點方向延後2%,聽起來不會那麼搶拍,
 // 拍點本身(最後一顆音)完全不動
-const ARP_START_DELAY_FACTOR = 0.99;
+const ARP_START_DELAY_FACTOR = 0.98;
 function arpGapSec(){
   const quarterSec = 60 / bpm(); // 一拍(四分音符)的實際秒數
   return Math.min(0.06, Math.max(0.02, quarterSec * 0.12)) * ARP_START_DELAY_FACTOR;
