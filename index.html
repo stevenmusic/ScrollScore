@@ -497,6 +497,9 @@ input[type=file]{display:none}
       <span class="switch"><input type="checkbox" id="showTempoMarks"><span class="switch-track"></span></span>顯示速度記號
     </label>
     <label class="switch-row">
+      <span class="switch"><input type="checkbox" id="mergeRestMeasures"><span class="switch-track"></span></span>合併連續整小節休止符
+    </label>
+    <label class="switch-row">
       <span class="switch"><input type="checkbox" id="exportWatermarkToggle"><span class="switch-track"></span></span>匯出時加上標題/浮水印
     </label>
     <div id="exportWatermarkFields" style="display:none;flex-direction:column;gap:8px;width:100%;margin:2px 0 6px">
@@ -1093,6 +1096,61 @@ function splitRestMeasures(xmlText){
   return changed ? new XMLSerializer().serializeToString(doc) : xmlText;
 }
 
+/* 跟 splitRestMeasures 相反:把連續的整小節休止符合併成一個多小節休止記號。
+   有些記譜軟體匯出時,連續整小節休止符只有部分被標成合併的多小節休止符
+   (例如4小節連續休止,卻寫成「1小節單獨+從第2小節開始的3小節群組」這種被切開的寫法),
+   這裡自己重新掃描整份樂譜:不管原本檔案怎麼分組,只要是連續的整小節休止(且不是被反覆
+   記號中斷),一律合併成一個小節群組,總數正確標在第一小節,其餘小節的分組標記清掉。 */
+function mergeRestMeasures(xmlText){
+  const doc = new DOMParser().parseFromString(xmlText, "text/xml");
+  let changed = false;
+  for (const part of Array.from(doc.getElementsByTagName("part"))) {
+    const measures = Array.from(part.getElementsByTagName("measure"));
+    let runStart = -1;
+    const flushRun = (endExclusive) => {
+      if (runStart < 0) return;
+      const runLen = endExclusive - runStart;
+      if (runLen >= 2) {
+        changed = true;
+        for (let i = runStart; i < endExclusive; i++) {
+          const m = measures[i];
+          let attrs = m.getElementsByTagName("attributes")[0];
+          if (i === runStart) {
+            if (!attrs) { attrs = doc.createElement("attributes"); m.insertBefore(attrs, m.firstChild); }
+            let ms = attrs.getElementsByTagName("measure-style")[0];
+            if (!ms) { ms = doc.createElement("measure-style"); attrs.appendChild(ms); }
+            let mr = ms.getElementsByTagName("multiple-rest")[0];
+            if (!mr) { mr = doc.createElement("multiple-rest"); ms.appendChild(mr); }
+            mr.textContent = String(runLen);
+          } else if (attrs) {
+            const ms = attrs.getElementsByTagName("measure-style")[0];
+            if (ms) {
+              const mr = ms.getElementsByTagName("multiple-rest")[0];
+              if (mr) ms.removeChild(mr);
+              if (!ms.hasChildNodes()) attrs.removeChild(ms);
+            }
+            if (!attrs.hasChildNodes()) m.removeChild(attrs);
+          }
+        }
+      }
+      runStart = -1;
+    };
+    measures.forEach((m, idx) => {
+      const hasRepeat = Array.from(m.getElementsByTagName("barline")).some(b => b.getElementsByTagName("repeat").length > 0);
+      const notes = Array.from(m.getElementsByTagName("note"));
+      const isRestMeasure = !hasRepeat && notes.length > 0 &&
+        notes.every(n => n.getElementsByTagName("rest").length > 0);
+      if (isRestMeasure) {
+        if (runStart < 0) runStart = idx;
+      } else {
+        flushRun(idx);
+      }
+    });
+    flushRun(measures.length);
+  }
+  return changed ? new XMLSerializer().serializeToString(doc) : xmlText;
+}
+
 /* ── 渲染 + 建立時間軸 ─────────────────────── */
 async function renderScore(xmlText){
   $("empty").style.display = "none";
@@ -1113,13 +1171,14 @@ async function renderScore(xmlText){
   osmd.EngravingRules.RenderSingleHorizontalStaffline = true;
   osmd.EngravingRules.PageTopMargin = 1;
   osmd.EngravingRules.PageBottomMargin = 1;
-  // 就算檔案裡完全沒有標多小節休止,OSMD預設也會自己把連續的整小節休止自動合併顯示;
-  // 這裡關掉,搭配下面 splitRestMeasures() 清掉檔案裡既有的合併標記,兩邊都不合併,
-  // 每個小節都各自畫出獨立的休止符
-  osmd.EngravingRules.AutoGenerateMultipleRestMeasuresFromRestMeasures = false;
+  // 是否合併連續整小節休止符由使用者的開關決定(預設拆開):合併時連OSMD自己「檔案沒標記
+  // 也會自動合併」的預設行為一起打開,拆開時則連這個預設行為也一併關掉,兩種模式都要澈底,
+  // 不會因為檔案標記方式不同而有時候看起來合併、有時候沒合併
+  const mergeRests = $("mergeRestMeasures").checked;
+  osmd.EngravingRules.AutoGenerateMultipleRestMeasuresFromRestMeasures = mergeRests;
 
   const transposedXml = transposeSemitones ? transposeMusicXML(xmlText, transposeSemitones) : xmlText;
-  const finalXml = splitRestMeasures(transposedXml);
+  const finalXml = mergeRests ? mergeRestMeasures(transposedXml) : splitRestMeasures(transposedXml);
   await osmd.load(finalXml);
   osmd.zoom = 0.9;
   osmd.render();
@@ -2113,6 +2172,18 @@ $("showTempoMarks").addEventListener("change", async () => {
   stopPlayback();
   await renderScore(lastXmlText);
   updatePlaylineExtent(); // 顯示/隱藏速度記號會改變樂譜高度,播放軸要重新貼齊
+  pausedAtSec = at;
+  updateTimeLabel(at);
+  if (wasPlaying) startPlayback(at);
+});
+
+$("mergeRestMeasures").addEventListener("change", async () => {
+  if (!lastXmlText) return;
+  const wasPlaying = playing;
+  const at = wasPlaying ? currentSec() : pausedAtSec;
+  stopPlayback();
+  await renderScore(lastXmlText);
+  updatePlaylineExtent(); // 合併/拆開休止小節會改變樂譜高度,播放軸要重新貼齊
   pausedAtSec = at;
   updateTimeLabel(at);
   if (wasPlaying) startPlayback(at);
