@@ -2055,6 +2055,12 @@ function useCalib(){ return $("useCalibration").checked && calibrationMap.length
 
 /* ── 彈性速度(Rubato)──────────────────────────────────────────────
    套用已知的演奏學研究資料,模擬全曲的節奏彈性,而非機械式的固定拍點:
+   0) 樂句邊界偵測(phrase segmentation):不是用單一固定的休止長度去猜,而是採用
+      Local Boundary Detection Model(LBDM,Cambouropoulos 2001)——這是GTTM
+      (Lerdahl & Jackendoff《A Generative Theory of Tonal Music》1983)分組偏好
+      規則(Grouping Preference Rules,GPR2鄰近/GPR3改變)的數學形式化版本。同時
+      直接採用樂譜上明確的圓滑線(slur)結尾、fermata記號,這些是比數值模型更可靠、
+      直接來自樂譜本身的證據,優先權最高。細節見下方 detectPhraseBoundaries()。
    1) 樂句拱形(phrase arch):Todd(1985)、KTH規則系統(Friberg/Bresin/Sundberg)的Phrase Arch
       規則——樂句內段速度呈拱形,中段稍微加快、頭尾稍微放慢。
    2) 結尾漸慢(final ritardando):Friberg & Sundberg(1999)用跑者煞停的運動學實測,推導出結尾
@@ -2069,10 +2075,64 @@ function useCalib(){ return $("useCalibration").checked && calibrationMap.length
 let rubatoMap = []; // [{orig: 原始tWhole, warped: 換算後的等效全音符座標}],依orig遞增排序
 function rubatoEnabled(){ const el = $("useRubato"); return !!(el && el.checked && rubatoMap.length >= 2); }
 
+/* Local Boundary Detection Model(LBDM,Cambouropoulos 2001):針對音高音程、IOI(音符間距)、
+   休止 三個面向各自算出一條「音程序列」,再用同一套規則抓出「變化劇烈」的位置(而不是絕對值
+   大小的位置),這樣才會是真的跟著樂句轉折走,不是單一固定門檻的猜測:
+   - Change rule:兩段相鄰音程的變化程度 r(i) = |x[i]-x[i+1]| / (x[i]+x[i+1])
+   - Proximity rule:邊界強度 s(i) = x[i] * (r(i-1) + r(i)),讓「這段本身夠大」且「前後變化夠大」
+     的地方邊界強度才高,避免在等距離的音群中間隨便切
+   三個面向正規化到[0,1]後,以 IOI/休止的知覺權重高於單純音高(LBDM文獻對節奏面向較敏感的
+   一致結論)加權合併,取強度落在前25%且是局部峰值的位置當作邊界。 */
+function detectPhraseBoundaries(){
+  const n = events.length;
+  const topMidi = events.map(ev => {
+    const pitched = ev.notes.filter(nn => nn.freq); // 和絃取最高音(旋律音)代表這個時間點的音高
+    return pitched.length ? Math.max(...pitched.map(nn => freqToMidi(nn.freq))) : null;
+  });
+  const pitchX = new Array(n).fill(0), ioiX = new Array(n).fill(0), restX = new Array(n).fill(0);
+  for (let i = 1; i < n; i++) {
+    const prev = events[i - 1], cur = events[i];
+    pitchX[i] = (topMidi[i] != null && topMidi[i - 1] != null) ? Math.abs(topMidi[i] - topMidi[i - 1]) : 0;
+    ioiX[i] = Math.max(1e-6, cur.tWhole - prev.tWhole);
+    const prevEnd = prev.tWhole + (prev.notes.length ? Math.max(...prev.notes.map(nn => nn.durWhole || 0)) : 0);
+    restX[i] = Math.max(0, cur.tWhole - prevEnd);
+  }
+  function boundaryStrength(x){
+    const r = new Array(x.length).fill(0);
+    for (let i = 1; i < x.length - 1; i++) {
+      const sum = x[i] + x[i + 1];
+      r[i] = sum > 1e-9 ? Math.abs(x[i] - x[i + 1]) / sum : 0;
+    }
+    const s = new Array(x.length).fill(0);
+    for (let i = 1; i < x.length - 1; i++) s[i] = x[i] * (r[i - 1] + r[i]);
+    const max = Math.max(...s, 1e-9);
+    return s.map(v => v / max); // 三個面向單位不同(半音/全音符/全音符),合併前先各自正規化
+  }
+  const sPitch = boundaryStrength(pitchX), sIoi = boundaryStrength(ioiX), sRest = boundaryStrength(restX);
+  const W_PITCH = 0.25, W_IOI = 0.5, W_REST = 0.25;
+  const S = new Array(n).fill(0);
+  for (let i = 0; i < n; i++) S[i] = W_PITCH * sPitch[i] + W_IOI * sIoi[i] + W_REST * sRest[i];
+
+  const slurEndAt = new Set(); // 樂譜上明確的圓滑線結尾:直接證據,不用猜
+  for (let i = 0; i < n - 1; i++) {
+    if (inRanges(events[i].tWhole, slurRanges) && !inRanges(events[i + 1].tWhole, slurRanges)) slurEndAt.add(i + 1);
+  }
+  const strengths = S.slice(1, n - 1).filter(v => v > 0).sort((a, b) => a - b);
+  const threshold = strengths.length ? strengths[Math.floor(strengths.length * 0.75)] : Infinity;
+
+  const starts = [0];
+  for (let i = 1; i < n - 1; i++) {
+    const isPeak = S[i] >= S[i - 1] && S[i] >= S[i + 1] && S[i] >= threshold;
+    const explicit = (events[i - 1].artic && events[i - 1].artic.fermata) || slurEndAt.has(i);
+    if (isPeak || explicit) starts.push(i);
+  }
+  starts.push(n);
+  return starts;
+}
+
 function buildRubatoMap(){
   rubatoMap = [];
   if (!events.length) return;
-  const REST_GAP_WHOLE = 0.25; // 事件間距超過一個四分音符的休止,視為樂句邊界
   const ARCH_AMOUNT = 0.07;    // 樂句拱形速度變化幅度(±7%)
   const RITARD_Q = 2.2;        // 跑者煞停模型的冪次(Friberg & Sundberg論文常見範圍1.5~2.7)
   const RITARD_SPAN_WHOLE = 1; // 結尾/fermata前多少全音符範圍內開始漸慢(約一小節)
@@ -2080,14 +2140,8 @@ function buildRubatoMap(){
   const AGOGIC_AMOUNT = 0.05;  // 重音/延長記號的音值重音幅度
   const JITTER_AMOUNT = 0.015; // 微幅隨機抖動(±1.5%)
 
-  // 用休止或fermata把整首曲子切成樂句,段落太短(少於3個音)就併入前一段,避免拱形曲線太誇張
-  const phraseStarts = [0];
-  for (let i = 0; i < events.length - 1; i++) {
-    const ev = events[i], next = events[i + 1];
-    const evEnd = ev.tWhole + (ev.notes.length ? Math.max(...ev.notes.map(n => n.durWhole || 0)) : 0);
-    if ((next.tWhole - evEnd) >= REST_GAP_WHOLE || (ev.artic && ev.artic.fermata)) phraseStarts.push(i + 1);
-  }
-  phraseStarts.push(events.length);
+  // 段落太短(少於3個音)就併入前一段,避免拱形曲線太誇張
+  const phraseStarts = detectPhraseBoundaries();
   const phrases = [];
   for (let i = 0; i < phraseStarts.length - 1; i++) {
     const s = phraseStarts[i], e = phraseStarts[i + 1];
