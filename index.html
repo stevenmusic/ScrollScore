@@ -763,6 +763,42 @@ function computeArpEffectiveGap(ev, t0, calib){
   return Math.max(0, Math.min(baseGap, maxGapAllowed));
 }
 
+/* 簡單、可重現的偽隨機數(不是真random):同一顆音符不管重播幾次、調速度或移調,算出來的
+   隨機值都固定一樣,不會每次播放聽起來都不同、也不會突然跳位置 */
+function seededRand01(seed){
+  const x = Math.sin(seed * 12.9898) * 43758.5453;
+  return x - Math.floor(x);
+}
+/* 琶音內部每顆音之間的間距不再是機械式的等距,故意打散一點,最後一顆音也不用死板地精準卡在
+   拍點上,聽起來更接近真人彈奏;但整組音符占用的時間範圍完全不超出 computeArpEffectiveGap()
+   原本就已經算好、對前一個音符安全的總長度([t0-safeTotalSpan, t0]),只是在這個既有的安全範圍
+   裡面重新打散分布,所以不會多吃到前一個音符的時間,也不會晚於拍點去影響下一個音符。 */
+function computeArpNoteOffsetSec(ev, note, t0, calib){
+  const n = ev.arpCount;
+  if (!n || n < 2) return 0;
+  const span = n - 1;
+  const i = (note.rollIndex || 0) + span; // 還原這顆音在組內的位置:0=最早,span=最後
+  const safeGap = computeArpEffectiveGap(ev, t0, calib);
+  const safeTotalSpan = span * safeGap;
+  const seed = ev.tWhole * 97.13;
+  // 前後各留一點隨機緩衝(安全總長度的一部分),第一顆、最後一顆音都不用剛好卡在邊界上
+  const edgeBufferMax = safeTotalSpan * 0.15;
+  const startBuffer = seededRand01(seed + 501) * edgeBufferMax;
+  const endBuffer = seededRand01(seed + 502) * edgeBufferMax;
+  const usableSpan = Math.max(0, safeTotalSpan - startBuffer - endBuffer);
+  // span段間隔各自用偽隨機權重打散,總和固定等於usableSpan,不會超出安全範圍
+  const weights = [];
+  let weightSum = 0;
+  for (let k = 0; k < span; k++) {
+    const w = 0.6 + seededRand01(seed + k * 13.37) * 0.8; // [0.6, 1.4]
+    weights.push(w); weightSum += w;
+  }
+  const scale = weightSum > 0 ? usableSpan / weightSum : 0;
+  let offset = -endBuffer; // 從最後一顆音(i=span)往回推算第i顆音的offset,負值=在拍點之前
+  for (let k = span - 1; k >= i; k--) offset -= weights[k] * scale;
+  return offset;
+}
+
 /* ── 載入檔案 ──────────────────────────────── */
 $("loadBtn").addEventListener("click", () => $("fileInput").click());
 
@@ -2378,7 +2414,7 @@ function startAudioFrom(fromSec){
     const tech = (isGuitar && ev.guitarTech) ? Object.assign({}, ev.guitarTech, { vibrato: ev.vibrato }) : (isGuitar && ev.vibrato ? { vibrato: true } : null);
     for (const n of ev.notes) {
       try {
-        const rollT = (n.rollIndex || 0) * computeArpEffectiveGap(ev, t, calib);
+        const rollT = computeArpNoteOffsetSec(ev, n, t, calib);
         const durSec = calib ? Math.max(calibToSec(ev.tWhole + n.durWhole) - t, 0.05) : wholeToSec(n.durWhole);
         // 吉他:同弦延音範圍(guitarRingEndWhole)取代一般和聲延長判斷,才符合「其他音符要在別條弦上才能延音」的物理限制
         const noteHarmonyEndSec = (isGuitar && n.guitarRingEndWhole != null)
@@ -2840,7 +2876,7 @@ function getActiveNotesAt(sec, calib){
   kbScanLastSec = sec;
   const map = new Map();
   const noteEndSec = (ev, n, t0) => {
-    const rollT = (n.rollIndex || 0) * computeArpEffectiveGap(ev, t0, calib);
+    const rollT = computeArpNoteOffsetSec(ev, n, t0, calib);
     const writtenEnd = calib ? calibToSec(ev.tWhole + n.durWhole) : wholeToSec(ev.tWhole + n.durWhole);
     return Math.max(writtenEnd + rollT, t0 + rollT + KB_MIN_VISUAL_SEC);
   };
@@ -2864,7 +2900,7 @@ function getActiveNotesAt(sec, calib){
     if (t0 > sec) break;
     for (const n of ev.notes) {
       if (n.drum || !n.freq) continue;
-      const rollT = (n.rollIndex || 0) * computeArpEffectiveGap(ev, t0, calib);
+      const rollT = computeArpNoteOffsetSec(ev, n, t0, calib);
       const t = t0 + rollT;
       const endSec = noteEndSec(ev, n, t0);
       if (sec >= t && sec < endSec) {
@@ -4278,7 +4314,7 @@ async function exportVideo(cfg){
           : null;
         const tech = (isGuitar && ev.guitarTech) ? Object.assign({}, ev.guitarTech, { vibrato: ev.vibrato }) : (isGuitar && ev.vibrato ? { vibrato: true } : null);
         for (const n of ev.notes) {
-          const rollT = (n.rollIndex || 0) * computeArpEffectiveGap(ev, t, calib);
+          const rollT = computeArpNoteOffsetSec(ev, n, t, calib);
           const durSec = calib ? Math.max(calibToSec(ev.tWhole + n.durWhole) - t, 0.05) : wholeToSec(n.durWhole);
           const noteHarmonyEndSec = (isGuitar && n.guitarRingEndWhole != null)
             ? startCtxTime + ((calib ? calibToSec(n.guitarRingEndWhole) : wholeToSec(n.guitarRingEndWhole)) - rangeStart)
