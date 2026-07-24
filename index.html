@@ -3942,12 +3942,16 @@ function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
     const dx = off + tl.x;
     if (dx < W && dx + tl.canvas.width > 0) ctx.drawImage(tl.canvas, dx, topY);
   }
-  // 播放軸上下平均縮短(原本8%~92%,現在13%~87%),留出上方空間給放大後的標題,不會疊在一起
-  ctx.strokeStyle = "#B8860B"; ctx.lineWidth = 3;
-  ctx.beginPath(); ctx.moveTo(plX, H*0.13); ctx.lineTo(plX, H*0.87); ctx.stroke();
+  // 播放軸長度改成貼著樂譜本身的實際範圍(topY~topY+SCORE_H)上下各留一點點空間,
+  // 不再用整個畫面高度的固定比例──樂譜縮小後,原本固定13%~87%的播放軸會比樂譜本身
+  // 長超多,看起來又粗又突兀;貼著樂譜量才會跟著樂譜大小自然縮放
+  const plPad = SCORE_H * 0.1;
+  const plTop = topY - plPad, plBottom = topY + SCORE_H + plPad;
+  ctx.strokeStyle = "#B8860B"; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.moveTo(plX, plTop); ctx.lineTo(plX, plBottom); ctx.stroke();
   ctx.fillStyle = "#B8860B";
   ctx.beginPath();
-  ctx.moveTo(plX-9, H*0.13-2); ctx.lineTo(plX+9, H*0.13-2); ctx.lineTo(plX, H*0.13+13);
+  ctx.moveTo(plX-9, plTop-2); ctx.lineTo(plX+9, plTop-2); ctx.lineTo(plX, plTop+13);
   ctx.closePath(); ctx.fill();
   if (cfg.includeKeyboard) {
     const kbY = H - kbH;
