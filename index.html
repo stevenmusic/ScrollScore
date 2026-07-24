@@ -2073,6 +2073,15 @@ function useCalib(){ return $("useCalibration").checked && calibrationMap.length
       強調(tenuto/accent/fermata)的音符常被演奏者稍微拉長。
    4) 微幅隨機抖動:Repp的研究也發現即使同一位演奏者反覆彈奏同一段落,時值仍有小幅自然差異,
       這裡疊加極小幅度的偽隨機抖動(用既有的seededRand01,可重現、非每次播放都不同)。
+   5) 主旋律/伴奏差異化:以上1)、2)提到的樂句拱形跟樂句結尾漸慢,原本是從古典獨奏曲的演奏
+      研究(Todd、Repp的素材都是古典曲目)歸納出來的,套用在流行歌編曲(常見右手主旋律+左手
+      分解和絃/固定伴奏音型的織度)上會有落差——伴奏教材與實務上一致的共識是伴奏聲部要負責
+      撐住穩定的律動(groove),不能跟著旋律一起大幅度伸縮,不然律動感會不見;另外groove/
+      微時間差研究(microtiming)顯示流行、放克這類節奏導向音樂裡人類自然的時間差通常只有
+      ±50毫秒等級,遠比古典浪漫派的樂句彈性小得多。因此樂句拱形、樂句結尾漸慢在「這個時間點
+      沒有主旋律音、純伴奏」時只保留三成幅度,大部分時間讓伴奏維持穩定律動,主旋律(右手/
+      staff1)則保留完整幅度,像人聲一樣自由呼吸。全曲結尾/fermata的結構性大漸慢不受此限制,
+      因為那是雙手一起放慢的完整停止動作,不是樂句呼吸。
    這套模型只調整整個樂團共用的主時間軸,所有樂器/雙手一起呼吸伸縮,不會各自獨立飄移脫拍。
    rubatoMap 存的是「彈性速度換算後的等效全音符座標」而非秒數,實際秒數仍透過 wholeToSec()
    依目前的tempo滑桿計算,所以调整tempo不需要重建這張表。 */
@@ -2171,6 +2180,14 @@ function buildRubatoMap(){
   const RITARD_MIN_MULT = 0.4; // 全曲結尾/fermata的結構性漸慢,最多放慢到原速的40%
   const AGOGIC_AMOUNT = 0.05;  // 重音/延長記號的音值重音幅度
   const JITTER_AMOUNT = 0.015; // 微幅隨機抖動(±1.5%)
+  // 流行歌編曲常見的織度是:右手主旋律像人聲一樣自由伸縮,左手則是分解和絃/固定音型負責撐住
+  // 律動(groove)。伴奏聲部如果跟著旋律的樂句呼吸一起大幅度伸縮,律動感就會不見,聽起來不像
+  // 流行歌伴奏,反而更像古典獨奏會全部聲部一起呼吸的彈法。這裡讓「這個時間點沒有旋律音、
+  // 純伴奏」的樂句拱形/樂句結尾漸慢幅度打折,只留三成,律動大部分時間維持穩定;有主旋律音的
+  // 時間點(通常也是雙手同時落下的時候)才用完整幅度,讓主旋律保有像人聲一樣的表情空間。
+  // 全曲結尾/fermata的結構性大漸慢不受此限制,因為那是整個樂團(雙手)一起放慢的完整停止動作。
+  const MELODY_STAFF = 1;
+  const ACCOMP_DAMPEN = 0.3;
 
   // 段落太短(少於3個音)就併入前一段,避免拱形曲線太誇張
   const phraseStarts = detectPhraseBoundaries();
@@ -2195,10 +2212,12 @@ function buildRubatoMap(){
   function localTempoMult(i){
     const ev = events[i];
     const x = posInPhrase[i] || 0;
-    const archMult = 1 + ARCH_AMOUNT * Math.sin(Math.PI * x); // 樂句中段加速
+    const isMelody = ev.notes.some(nn => nn.freq && (nn.staff || 1) === MELODY_STAFF);
+    const melodyWeight = isMelody ? 1 : ACCOMP_DAMPEN;
+    const archMult = 1 + ARCH_AMOUNT * Math.sin(Math.PI * x) * melodyWeight; // 樂句中段加速
     const ownDurWhole = ev.notes.length ? Math.max(...ev.notes.map(nn => nn.durWhole || 0)) : medianDurWhole;
     const lenDampen = Math.min(1, medianDurWhole / Math.max(ownDurWhole, medianDurWhole));
-    const phraseEndRitard = 1 - (1 - PHRASE_END_MIN_MULT) * Math.pow(x, PHRASE_END_EASE_POW) * lenDampen; // 樂句結尾漸慢(對長音打折)
+    const phraseEndRitard = 1 - (1 - PHRASE_END_MIN_MULT) * Math.pow(x, PHRASE_END_EASE_POW) * lenDampen * melodyWeight; // 樂句結尾漸慢(對長音、純伴奏都打折)
     let mult = archMult * phraseEndRitard;
     while (ritardPtr < ritardTargets.length - 1 && ritardTargets[ritardPtr] < ev.tWhole) ritardPtr++;
     const ritardDist = Math.max(0, ritardTargets[ritardPtr] - ev.tWhole);
