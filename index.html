@@ -4153,8 +4153,16 @@ function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
       ctx.font = channelFontSize + "px 'Noto Serif TC', serif";
       ctx.fillStyle = "rgba(42,42,42,0.85)";
       ctx.textAlign = "right";
-      // 有鍵盤/鼓組面板時,頻道名稱貼在面板正上方(不要疊在琴鍵上面);沒有面板就貼齊畫面底部
-      ctx.fillText(cfg.channel, W - wmPadX, (H - kbH) - wmPadY);
+      // 頻道名稱要貼在「樂譜本身下緣」的空白區,而不是直接貼鍵盤上緣——
+      // 樂譜靠上/置中對齊時兩者位置差不多,但樂譜靠下對齊時樂譜下緣會很靠近鍵盤,
+      // 直接貼鍵盤上緣定位會讓文字疊到樂譜最後幾行音符,所以要以樂譜下緣為準,
+      // 並且不能低於鍵盤上緣(沒有鍵盤面板時就以畫面底部為準)
+      const scoreBottomY = topY + SCORE_H;
+      const floorY = cfg.includeKeyboard ? (H - kbH) : H;
+      // 正常情況(樂譜下緣離鍵盤還有空間)用貼近鍵盤上緣的位置;萬一樂譜靠太近鍵盤、
+      // 空間不夠,改成貼樂譜下緣往下推,寧可靠近鍵盤一點,也不要疊到樂譜本身
+      const channelY = Math.max(floorY - wmPadY, scoreBottomY + wmPadY + channelFontSize);
+      ctx.fillText(cfg.channel, W - wmPadX, channelY);
     }
     ctx.restore();
   }
