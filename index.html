@@ -1176,6 +1176,50 @@ function mergeRestMeasures(xmlText){
   return changed ? new XMLSerializer().serializeToString(doc) : xmlText;
 }
 
+/* OSMD(實際上是底層的VexFlow)畫符桿時用固定長度,不會因為音符離譜表越遠(加線越多)
+   就自動加長——這是VexFlow已知、目前這個版本還沒修的限制(官方倉庫issue #1679仍開著)。
+   標準記譜慣例是加線音符的符桿要延伸到接近譜表中線,不然看起來會斷開、很不自然。
+   這裡在OSMD渲染完之後,直接修改輸出的SVG:只處理「單音、沒有被歸在同一組符尾(beam)裡」
+   的音符(和弦、符尾group的符桿邏輯更複雜,故意跳過避免弄亂原本的排版),
+   逐一算出每個音符所在譜表的中線位置,加線音符就把符桿的自由端接到中線上。 */
+function extendLedgerLineStems(){
+  const svg = $("score").querySelector("svg");
+  if (!svg) return;
+  const beamRanges = Array.from(svg.querySelectorAll(".vf-beam")).map(b => {
+    const bbox = b.getBBox();
+    return [bbox.x, bbox.x + bbox.width];
+  });
+  for (const staffGroup of Array.from(svg.querySelectorAll(".staffline"))) {
+    // 這個staffline底下所有量測用的5條譜線是「水平、貫穿整個系統寬度」的path,
+    // 用這個特徵跟同樣是水平線但很短的加線(ledger line,只有音符頭寬度)區分開來,
+    // 不然加線會被誤認成譜線,把整個譜表範圍越算越大
+    const linePaths = Array.from(staffGroup.querySelectorAll("path")).filter(p => {
+      const d = p.getAttribute("d") || "";
+      const m = d.match(/^M([\d.]+) ([\d.]+)L([\d.]+) ([\d.]+)$/);
+      if (!m) return false;
+      const [, x1, y1, x2, y2] = m.map(Number);
+      return Math.abs(y1 - y2) < 0.01 && Math.abs(x2 - x1) > 40; // 加線通常只有10~20寬,譜線遠寬於此
+    });
+    if (linePaths.length < 2) continue;
+    const ys = linePaths.map(p => parseFloat(p.getAttribute("d").match(/^M[\d.]+ ([\d.]+)/)[1]));
+    const topY = Math.min(...ys), bottomY = Math.max(...ys);
+    const middleY = (topY + bottomY) / 2;
+    const halfGap = (bottomY - topY) / 8; // 5條線4個間隔,取半個間隔當「還在譜表內」的容許範圍
+    for (const sn of Array.from(staffGroup.querySelectorAll(".vf-stavenote"))) {
+      if (sn.querySelectorAll(".vf-notehead").length !== 1) continue; // 和弦跳過,只處理單音
+      const stemPath = sn.querySelector(".vf-stem path");
+      if (!stemPath) continue;
+      const m = (stemPath.getAttribute("d") || "").match(/^M([\d.]+) ([\d.]+)L[\d.]+ ([\d.]+)$/);
+      if (!m) continue;
+      const x = parseFloat(m[1]), noteheadY = parseFloat(m[2]);
+      const hasLedger = noteheadY < topY - halfGap || noteheadY > bottomY + halfGap;
+      if (!hasLedger) continue;
+      if (beamRanges.some(([lo, hi]) => x >= lo - 2 && x <= hi + 2)) continue; // 屬於符尾,跳過避免弄亂角度
+      stemPath.setAttribute("d", `M${x} ${noteheadY}L${x} ${middleY}`);
+    }
+  }
+}
+
 /* ── 渲染 + 建立時間軸 ─────────────────────── */
 async function renderScore(xmlText){
   $("empty").style.display = "none";
@@ -1207,6 +1251,7 @@ async function renderScore(xmlText){
   await osmd.load(finalXml);
   osmd.zoom = 0.9;
   osmd.render();
+  extendLedgerLineStems(); // OSMD符桿長度是固定值,不會因為加線音符離譜表遠就自動加長,這裡渲染完手動補上
 
   buildTimeline();
   rebuildKeyboardRange();
