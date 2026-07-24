@@ -1842,7 +1842,12 @@ function buildTimeline(){
           const prevEv = events[events.length - 1];
           const prevOnsetWhole = prevEv.tWhole;
           const prevDurWhole = Math.max(0, ...prevEv.notes.map(n => n.durWhole || 0));
-          arpGapBeforeWhole = tWhole - (prevOnsetWhole + prevDurWhole * 0.5);
+          // 保持音(tenuto)的音符會被彈滿幾乎全部時值(見 applyArticulation 裡 tenuto 蓋過 staccato
+          // 的邏輯),不像一般音符可能提早放掉——如果只響過「一半」就讓琶音搶拍,會覺得琶音疊到
+          // 一顆明明還在響、甚至是重點強調的音符上面,所以保持音要響過更多比例(0.85)才放行
+          const prevArtic = articMap[prevOnsetWhole.toFixed(6)];
+          const holdFraction = (prevArtic && prevArtic.tenuto) ? 0.85 : 0.5;
+          arpGapBeforeWhole = tWhole - (prevOnsetWhole + prevDurWhole * holdFraction);
           arpPrevDurWhole = prevDurWhole; // 前一個音符的音長,琶音音符間隔要跟著這個調整(見 computeArpEffectiveGap)
         } else {
           arpGapBeforeWhole = null;
