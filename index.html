@@ -809,7 +809,7 @@ function computeArpNoteOffsetSec(ev, note, t0, calib){
   const weights = [];
   let weightSum = 0;
   for (let k = 0; k < span; k++) {
-    const w = 0.6 + seededRand01(seed + k * 13.37) * 0.8; // [0.6, 1.4]
+    const w = 0.4 + seededRand01(seed + k * 13.37) * 1.2; // [0.4, 1.6],差距拉大一點,打散更明顯
     weights.push(w); weightSum += w;
   }
   const scale = weightSum > 0 ? usableSpan / weightSum : 0;
