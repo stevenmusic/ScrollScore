@@ -2526,12 +2526,15 @@ $("scoreBgOpacity").addEventListener("input", () => {
    每首曲子、每次重新打開網頁都不用再輸入一次;標題則是每首曲子各自的資訊,不存進 localStorage */
 const WATERMARK_STORAGE_KEY = "scrollscore_watermark_channel";
 const WATERMARK_TOGGLE_KEY = "scrollscore_watermark_enabled";
+const TITLE_STORAGE_KEY = "scrollscore_export_title";
 try {
   const savedChannel = localStorage.getItem(WATERMARK_STORAGE_KEY);
   if (savedChannel) $("exportWatermarkInput").value = savedChannel;
   const savedToggle = localStorage.getItem(WATERMARK_TOGGLE_KEY) === "1";
   $("exportWatermarkToggle").checked = savedToggle;
   $("exportWatermarkFields").style.display = savedToggle ? "flex" : "none";
+  const savedTitle = localStorage.getItem(TITLE_STORAGE_KEY);
+  if (savedTitle) $("exportTitleInput").value = savedTitle; // 載入新樂譜時仍會被檔案自己的標題/檔名覆蓋(既有行為),這裡只是讓還沒載入新檔前欄位不是空的
 } catch (e) {} // localStorage 在部分隱私模式下可能無法存取,失敗就當作沒有存過,不影響其他功能
 $("exportWatermarkToggle").addEventListener("change", () => {
   $("exportWatermarkFields").style.display = $("exportWatermarkToggle").checked ? "flex" : "none";
@@ -2539,6 +2542,9 @@ $("exportWatermarkToggle").addEventListener("change", () => {
 });
 $("exportWatermarkInput").addEventListener("input", () => {
   try { localStorage.setItem(WATERMARK_STORAGE_KEY, $("exportWatermarkInput").value); } catch (e) {}
+});
+$("exportTitleInput").addEventListener("input", () => {
+  try { localStorage.setItem(TITLE_STORAGE_KEY, $("exportTitleInput").value); } catch (e) {}
 });
 
 $("showTempoMarks").addEventListener("change", async () => {
@@ -2573,6 +2579,15 @@ $("playBtn").addEventListener("click", () => {
   if (playing) { pausePlayback(); } else { beginPlayback(pausedAtSec); }
 });
 $("stopBtn").addEventListener("click", stopPlayback);
+
+// 點擊樂譜空白處快速播放/暫停,練習時不用每次都伸手點小小的播放鈕。
+// 排除匯出模式、匯出設定對話框、空狀態卡片、以及任何按鈕/輸入框等互動元件本身的點擊,
+// 避免跟這些元件原本的行為衝突(直接重用播放鈕既有的邏輯,包含事件計數中的處理)
+$("stage").addEventListener("click", (e) => {
+  if (exporting) return;
+  if (e.target.closest("#formatOverlay, #empty, #exitrec, button, input, select, a, textarea")) return;
+  $("playBtn").click();
+});
 
 function ensureAudio(){
   if (!audioCtx) {
@@ -3453,6 +3468,12 @@ $("audioImportFile").addEventListener("change", async e => {
     $("audioImportStatus").textContent = "已匯入:" + file.name + "(靜音樂器合成音)";
     $("audioImportClearBtn").disabled = false;
     setStatus("音檔已就緒,播放/匯出時改用這個音檔,不再播放樂器合成音");
+    // 匯入的音檔永遠用原始速度播放,不會跟著這個滑桿變速——調速度只會讓樂譜/鍵盤高亮
+    // 跟音檔漸漸不同步,乾脆直接鎖住,真的需要對齊時應該用下面的「校準」tap-along 功能
+    $("tempo").disabled = true;
+    $("tempo").title = "已匯入音檔,速度固定使用音檔原始速度,不受此滑桿影響";
+    $("tempoVal").disabled = true;
+    $("tempoVal").title = $("tempo").title;
     if (playing) { stopAudioOnly(); startAudioFrom(currentSec()); }
   } catch (err) {
     setStatus("音檔讀取失敗:" + (err.message || err));
@@ -3464,6 +3485,10 @@ $("audioImportClearBtn").addEventListener("click", () => {
   $("audioImportStatus").textContent = "尚未匯入音檔(播放樂器合成音)";
   $("audioImportClearBtn").disabled = true;
   setStatus("已移除音檔,恢復播放樂器合成音");
+  $("tempo").disabled = false;
+  $("tempo").title = "";
+  $("tempoVal").disabled = false;
+  $("tempoVal").title = "";
   if (playing) { stopAudioOnly(); startAudioFrom(currentSec()); }
 });
 
@@ -4418,9 +4443,26 @@ function computeExportLayout(cfg){
   // 樂器面板永遠貼齊畫面最底部,不會因為靠上/置中/靠下而移動;
   // 靠上/置中/靠下只影響樂譜本身在「扣掉面板後剩餘的空間」裡怎麼擺放
   const scoreAreaH = H - kbH;
-  const topY = cfg.align === "top" ? margin
+  const rawTopY = cfg.align === "top" ? margin
     : cfg.align === "bottom" ? (scoreAreaH - SCORE_H - margin)
     : (scoreAreaH - SCORE_H) / 2;
+  // 標題/副標題是畫在畫面最上方的,跟樂譜的topY是各自獨立算的,原本完全沒有互相避讓——
+  // 「靠上」對齊時margin只有5%畫面高,標題(尤其加上副標題)實際佔的高度常常比這個margin還高,
+  // 導致標題文字底部蓋到樂譜開頭(高音域、加線多的譜尤其明顯)。這裡用跟drawExportFrame畫標題
+  // 時完全相同的公式先算出標題區塊會佔多高,當作topY的下限,三種對齊都套用同一個下限,
+  // 不只是「靠上」才會遇到這個問題。
+  let titleBlockBottom = 0;
+  if (cfg.watermarkEnabled && (cfg.title || cfg.subtitle)) {
+    const wmRef = Math.min(W, H);
+    const titleFontSize = Math.round(wmRef * 0.055);
+    const subtitleFontSize = Math.round(wmRef * 0.03);
+    const wmPadY = Math.max(Math.round(titleFontSize * 0.55), 16);
+    titleBlockBottom = cfg.title
+      ? (cfg.subtitle ? wmPadY + Math.round(titleFontSize * 1.08) + subtitleFontSize : wmPadY + titleFontSize)
+      : wmPadY + subtitleFontSize;
+  }
+  const minTopY = titleBlockBottom > 0 ? titleBlockBottom + Math.round(H * 0.02) : 0;
+  const topY = Math.max(rawTopY, minTopY);
   const plX = W * PLAYLINE_RATIO;
   return { W, H, SCORE_H, margin, kbH, scoreAreaH, topY, plX };
 }
