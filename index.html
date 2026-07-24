@@ -781,10 +781,13 @@ function computeArpNoteOffsetSec(ev, note, t0, calib){
   const safeGap = computeArpEffectiveGap(ev, t0, calib);
   const safeTotalSpan = span * safeGap;
   const seed = ev.tWhole * 97.13;
-  // 前後各留一點隨機緩衝(安全總長度的一部分),第一顆、最後一顆音都不用剛好卡在邊界上
-  const edgeBufferMax = safeTotalSpan * 0.15;
-  const startBuffer = seededRand01(seed + 501) * edgeBufferMax;
-  const endBuffer = seededRand01(seed + 502) * edgeBufferMax;
+  // 前後各留一點隨機緩衝(安全總長度的一部分),第一顆、最後一顆音都不用剛好卡在邊界上。
+  // 開頭這端加大緩衝、而且保底至少用掉一半(不是0~上限均勻亂數,避免偶爾又貼著邊界太早開始),
+  // 真人彈奏琶音通常會穩定地提前一點點起手,不會每次都卡在理論上最早的臨界點
+  const startBufferMax = safeTotalSpan * 0.3;
+  const startBuffer = startBufferMax * (0.5 + seededRand01(seed + 501) * 0.5);
+  const endBufferMax = safeTotalSpan * 0.15;
+  const endBuffer = seededRand01(seed + 502) * endBufferMax;
   const usableSpan = Math.max(0, safeTotalSpan - startBuffer - endBuffer);
   // span段間隔各自用偽隨機權重打散,總和固定等於usableSpan,不會超出安全範圍
   const weights = [];
