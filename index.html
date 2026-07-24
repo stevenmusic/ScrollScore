@@ -525,13 +525,13 @@ input[type=file]{display:none}
       <button class="btn" id="bgImageClearBtn" style="padding:4px 10px" disabled>移除</button>
     </div>
     <label class="switch-row">
-      <span class="switch"><input type="checkbox" id="showTempoMarks"><span class="switch-track"></span></span>顯示速度記號
+      <span class="switch"><input type="checkbox" id="showTempoMarks" checked><span class="switch-track"></span></span>顯示速度記號
     </label>
     <label class="switch-row">
       <span class="switch"><input type="checkbox" id="mergeRestMeasures"><span class="switch-track"></span></span>合併連續整小節休止符
     </label>
     <label class="switch-row">
-      <span class="switch"><input type="checkbox" id="exportWatermarkToggle"><span class="switch-track"></span></span>匯出時加上標題/浮水印
+      <span class="switch"><input type="checkbox" id="exportWatermarkToggle" checked><span class="switch-track"></span></span>匯出時加上標題/浮水印
     </label>
     <div id="exportWatermarkFields" style="display:none;flex-direction:column;gap:8px;width:100%;margin:2px 0 6px">
       <div style="display:flex;align-items:center;gap:8px">
@@ -2522,15 +2522,17 @@ $("scoreBgOpacity").addEventListener("input", () => {
   $("scoreBg").style.opacity = $("scoreBgOpacity").value / 100;
 });
 
-/* 匯出浮水印:頻道名稱跟「是否加上標題/浮水印」這個開關存在 localStorage,
-   每首曲子、每次重新打開網頁都不用再輸入一次;標題則是每首曲子各自的資訊,不存進 localStorage */
+/* 匯出浮水印:頻道名稱、標題、「是否加上標題/浮水印」這個開關都存在 localStorage,
+   每首曲子、每次重新打開網頁都不用再輸入一次。開關預設開啟(第一次使用、還沒存過值的情況),
+   使用者主動關掉之後才會記住「關閉」這個選擇 */
 const WATERMARK_STORAGE_KEY = "scrollscore_watermark_channel";
 const WATERMARK_TOGGLE_KEY = "scrollscore_watermark_enabled";
 const TITLE_STORAGE_KEY = "scrollscore_export_title";
 try {
   const savedChannel = localStorage.getItem(WATERMARK_STORAGE_KEY);
   if (savedChannel) $("exportWatermarkInput").value = savedChannel;
-  const savedToggle = localStorage.getItem(WATERMARK_TOGGLE_KEY) === "1";
+  const rawToggle = localStorage.getItem(WATERMARK_TOGGLE_KEY);
+  const savedToggle = rawToggle === null ? true : rawToggle === "1";
   $("exportWatermarkToggle").checked = savedToggle;
   $("exportWatermarkFields").style.display = savedToggle ? "flex" : "none";
   const savedTitle = localStorage.getItem(TITLE_STORAGE_KEY);
