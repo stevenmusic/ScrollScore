@@ -805,13 +805,24 @@ function computeArpNoteOffsetSec(ev, note, t0, calib){
   const endBufferMax = safeTotalSpan * 0.15;
   const endBuffer = seededRand01(seed + 502) * endBufferMax;
   const usableSpan = Math.max(0, safeTotalSpan - startBuffer - endBuffer);
-  // span段間隔各自用偽隨機權重打散,總和固定等於usableSpan,不會超出安全範圍
+  // span段間隔各自用偽隨機權重打散,總和固定等於usableSpan,不會超出安全範圍。
+  // 用分層抽樣(stratified sampling)取代單純各自獨立的亂數:把權重範圍切成span等份,
+  // 每一段各自抽一個值,保證這一組間隔一定會同時涵蓋到偏窄跟偏寬的落差,不會因為運氣不好
+  // 剛好抽到一群很接近的數字、讓這組琶音看起來還是很平均(這就是「有的地方很好、有的地方
+  // 不夠散」的原因——單純獨立亂數本來就有機率抽出集中的結果)。抽完再洗牌打亂順序,
+  // 不然權重會變成機械式的「越來越大」或「越來越小」,聽起來又太規律、不像真人彈奏。
+  const WEIGHT_MIN = 0.35, WEIGHT_MAX = 1.75;
+  const binSize = (WEIGHT_MAX - WEIGHT_MIN) / span;
   const weights = [];
-  let weightSum = 0;
   for (let k = 0; k < span; k++) {
-    const w = 0.4 + seededRand01(seed + k * 13.37) * 1.2; // [0.4, 1.6],差距拉大一點,打散更明顯
-    weights.push(w); weightSum += w;
+    const binLo = WEIGHT_MIN + k * binSize;
+    weights.push(binLo + seededRand01(seed + k * 13.37) * binSize);
   }
+  for (let k = span - 1; k > 0; k--) {
+    const j = Math.floor(seededRand01(seed + 800 + k * 7.77) * (k + 1));
+    const tmp = weights[k]; weights[k] = weights[j]; weights[j] = tmp;
+  }
+  const weightSum = weights.reduce((a, b) => a + b, 0);
   const scale = weightSum > 0 ? usableSpan / weightSum : 0;
   let offset = -endBuffer; // 從最後一顆音(i=span)往回推算第i顆音的offset,負值=在拍點之前
   for (let k = span - 1; k >= i; k--) offset -= weights[k] * scale;
