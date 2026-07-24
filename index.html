@@ -530,23 +530,6 @@ input[type=file]{display:none}
     <label class="switch-row">
       <span class="switch"><input type="checkbox" id="mergeRestMeasures"><span class="switch-track"></span></span>合併連續整小節休止符
     </label>
-    <label class="switch-row">
-      <span class="switch"><input type="checkbox" id="exportWatermarkToggle" checked><span class="switch-track"></span></span>匯出時加上標題/浮水印
-    </label>
-    <div id="exportWatermarkFields" style="display:none;flex-direction:column;gap:8px;width:100%;margin:2px 0 6px">
-      <div style="display:flex;align-items:center;gap:8px">
-        <span style="width:56px;font-size:13px;color:var(--muted);flex:none">標題</span>
-        <input type="text" id="exportTitleInput" class="range-time-input" style="text-align:left" placeholder="樂曲標題(上方置中)">
-      </div>
-      <div style="display:flex;align-items:center;gap:8px">
-        <span style="width:56px;font-size:13px;color:var(--muted);flex:none">副標題</span>
-        <input type="text" id="exportSubtitleInput" class="range-time-input" style="text-align:left" placeholder="副標題(標題正下方,選填)">
-      </div>
-      <div style="display:flex;align-items:center;gap:8px">
-        <span style="width:56px;font-size:13px;color:var(--muted);flex:none">浮水印</span>
-        <input type="text" id="exportWatermarkInput" class="range-time-input" style="text-align:left" placeholder="頻道名稱(右下角)">
-      </div>
-    </div>
     <div style="display:flex;flex-direction:column;gap:6px;width:100%">
       <div style="display:flex;gap:10px;flex-wrap:wrap">
         <button class="btn" id="recBtn" disabled title="請先載入樂譜">錄影模式</button>
@@ -630,6 +613,28 @@ input[type=file]{display:none}
         <button class="fmt" id="alignCenter"><span><b>樂譜靠中</b></span></button>
         <button class="fmt" id="alignBottom"><span><b>樂譜靠下</b></span></button>
         <button class="btn" id="fmtBackFromAlign">返回</button>
+      </div>
+      <div id="fmtStepBrand" class="fmt-step" style="display:none">
+        <label class="switch-row" style="justify-content:space-between;width:100%;margin-bottom:10px">
+          加上標題/浮水印
+          <span class="switch"><input type="checkbox" id="exportWatermarkToggle" checked><span class="switch-track"></span></span>
+        </label>
+        <div id="exportWatermarkFields" style="display:none;flex-direction:column;gap:8px;width:100%;margin-bottom:10px">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="width:56px;font-size:13px;color:var(--muted);flex:none">標題</span>
+            <input type="text" id="exportTitleInput" class="range-time-input" style="text-align:left" placeholder="樂曲標題(上方置中)">
+          </div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="width:56px;font-size:13px;color:var(--muted);flex:none">副標題</span>
+            <input type="text" id="exportSubtitleInput" class="range-time-input" style="text-align:left" placeholder="副標題(標題正下方,選填)">
+          </div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="width:56px;font-size:13px;color:var(--muted);flex:none">浮水印</span>
+            <input type="text" id="exportWatermarkInput" class="range-time-input" style="text-align:left" placeholder="頻道名稱(右下角)">
+          </div>
+        </div>
+        <button class="btn" id="fmtBackFromBrand">返回</button>
+        <button class="btn primary" id="fmtNextFromBrand" style="margin-top:10px">下一步</button>
       </div>
       <div id="fmtStepFormat" class="fmt-step" style="display:none">
         <button class="fmt" id="fmtLandscape">
@@ -4194,11 +4199,12 @@ let chosenAlign = "center";
 let chosenIncludeKeyboard = false;
 let chosenStartSec = null, chosenEndSec = null; // null = 匯出全曲
 
-const FMT_STEP_TITLE = { type: "選擇匯出類型", range: "選擇匯出區間", align: "選擇樂譜對齊", format: "選擇影片格式" };
+const FMT_STEP_TITLE = { type: "選擇匯出類型", range: "選擇匯出區間", align: "選擇樂譜對齊", brand: "標題與浮水印", format: "選擇影片格式" };
 function showFmtStep(step){
   $("fmtStepType").style.display = step === "type" ? "flex" : "none";
   $("fmtStepRange").style.display = step === "range" ? "flex" : "none";
   $("fmtStepAlign").style.display = step === "align" ? "flex" : "none";
+  $("fmtStepBrand").style.display = step === "brand" ? "flex" : "none";
   $("fmtStepFormat").style.display = step === "format" ? "flex" : "none";
   $("fmtTitle").textContent = FMT_STEP_TITLE[step] || FMT_STEP_TITLE.type;
 }
@@ -4279,11 +4285,14 @@ $("fmtNextFromRange").addEventListener("click", () => {
 });
 
 $("fmtBackFromAlign").addEventListener("click", () => showFmtStep("range"));
-$("alignTop").addEventListener("click", () => { chosenAlign = "top"; showFmtStep("format"); });
-$("alignCenter").addEventListener("click", () => { chosenAlign = "center"; showFmtStep("format"); });
-$("alignBottom").addEventListener("click", () => { chosenAlign = "bottom"; showFmtStep("format"); });
+$("alignTop").addEventListener("click", () => { chosenAlign = "top"; showFmtStep("brand"); });
+$("alignCenter").addEventListener("click", () => { chosenAlign = "center"; showFmtStep("brand"); });
+$("alignBottom").addEventListener("click", () => { chosenAlign = "bottom"; showFmtStep("brand"); });
 
-$("fmtBackFromFormat").addEventListener("click", () => showFmtStep("align"));
+$("fmtBackFromBrand").addEventListener("click", () => showFmtStep("align"));
+$("fmtNextFromBrand").addEventListener("click", () => showFmtStep("format"));
+
+$("fmtBackFromFormat").addEventListener("click", () => showFmtStep("brand"));
 function watermarkCfg(){
   const enabled = $("exportWatermarkToggle").checked;
   return {
