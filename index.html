@@ -502,11 +502,15 @@ input[type=file]{display:none}
     <div id="exportWatermarkFields" style="display:none;flex-direction:column;gap:8px;width:100%;margin:2px 0 6px">
       <div style="display:flex;align-items:center;gap:8px">
         <span style="width:56px;font-size:13px;color:var(--muted);flex:none">標題</span>
-        <input type="text" id="exportTitleInput" class="range-time-input" style="text-align:left" placeholder="樂曲標題(左上)">
+        <input type="text" id="exportTitleInput" class="range-time-input" style="text-align:left" placeholder="樂曲標題(上方置中)">
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="width:56px;font-size:13px;color:var(--muted);flex:none">副標題</span>
+        <input type="text" id="exportSubtitleInput" class="range-time-input" style="text-align:left" placeholder="副標題(標題正下方,選填)">
       </div>
       <div style="display:flex;align-items:center;gap:8px">
         <span style="width:56px;font-size:13px;color:var(--muted);flex:none">浮水印</span>
-        <input type="text" id="exportWatermarkInput" class="range-time-input" style="text-align:left" placeholder="頻道名稱(右上)">
+        <input type="text" id="exportWatermarkInput" class="range-time-input" style="text-align:left" placeholder="頻道名稱(右下角)">
       </div>
     </div>
     <div style="display:flex;flex-direction:column;gap:6px;width:100%">
@@ -659,6 +663,18 @@ let guitarTechMap = {};
 let guitarTechEntries = [];
 let isDrumScore = false;
 let scoreTimeSig = null; // {beats, beatType, isCompound},用來估算預備拍要敲幾下(預設抓拍號分子,抓不到就用4下)
+// 速度滑桿顯示的數字 × 這個倍率 = 實際播放引擎用的「四分音符BPM」。
+// 平常是1(滑桿數字=四分音符BPM,顯示跟實際一致);當樂譜的速度記號是用附點音符當單位時
+// (例如6/8拍常見的「附點四分音符=90」),把這個設成1.5,滑桿就能直接顯示樂譜上印的90,
+// 同時播放引擎仍然照正確換算後的135四分音符BPM運算,兩邊都不會誤會
+let tempoDisplayMultiplier = 1;
+let tempoDisplayUnitLabel = ""; // 顯示在BPM旁邊的單位提示,例如"(附點四分音符)",避免誤會顯示的數字是哪種音符的速度
+const NOTE_UNIT_LABEL_ZH = { whole: "全音符", half: "二分音符", quarter: "四分音符", eighth: "八分音符", "16th": "十六分音符", "32nd": "三十二分音符", "64th": "六十四分音符" };
+function metronomeUnitLabel(beatUnit, dotCount){
+  const base = NOTE_UNIT_LABEL_ZH[beatUnit] || beatUnit;
+  const dotPrefix = dotCount === 1 ? "附點" : dotCount === 2 ? "雙附點" : "";
+  return "(" + dotPrefix + base + ")";
+}
 let importedAudioBuffer = null; // 使用者匯入的音檔(解碼後),有值時播放/匯出都改用這個,不再合成/取樣
 let importedAudioName = null;
 let crossNoteheadEntries = {}; // midi(取整數) -> 已排序的 {t,v} 陣列,記錄哪些時間點是打叉符頭(rim click等特殊擊法),用 findNearestEntry 容許誤差比對
@@ -854,7 +870,7 @@ document.addEventListener("click", e => {
   if ($("tempoPopover").contains(e.target)) return;
   $("tempoPopover").classList.remove("open");
 });
-function syncTempoDisplay(){ $("tempoDisplay").textContent = bpm() + " BPM"; }
+function syncTempoDisplay(){ $("tempoDisplay").textContent = rawTempo() + " BPM" + (tempoDisplayUnitLabel ? " " + tempoDisplayUnitLabel : ""); }
 async function loadScoreFile(file){
   if (!file) return;
   stopPlayback();
@@ -896,15 +912,27 @@ async function loadScoreFile(file){
     arpEntries = buildSortedEntries(arpMap);
     scoreTimeSig = parsed.timeSig;
     let tempoNote = "";
+    // 每次載入新樂譜都先重置,避免沿用上一首歌的顯示倍率/單位標籤
+    tempoDisplayMultiplier = 1;
+    tempoDisplayUnitLabel = "";
     if (parsed.soundTempo && parsed.soundTempo > 0) {
-      const t = Math.round(Math.min(400, Math.max(40, parsed.soundTempo)));
-      $("tempo").value = t;
-      $("tempoVal").value = t;
-      syncTempoDisplay();
-      if (parsed.timeSig && parsed.timeSig.isCompound) {
-        const dottedQuarterEquiv = (t / 1.5).toFixed(1);
-        tempoNote = "(偵測到" + parsed.timeSig.beats + "/" + parsed.timeSig.beatType + "複拍子,已自動套用樂譜內建速度" + t + ",相當於附點四分音符=" + dottedQuarterEquiv + ")";
+      const md = parsed.metronomeDisplay;
+      // 樂譜的速度記號是用附點音符(或非四分音符)當單位時,滑桿直接顯示「印在譜上的數字」
+      // (例如附點四分音符=90),不要顯示換算過的四分音符BPM(135)去讓使用者誤會;
+      // 播放引擎則透過 tempoDisplayMultiplier 換算,實際還是用正確的135運算
+      if (md && md.quartersPerBeat && md.quartersPerBeat !== 1) {
+        tempoDisplayMultiplier = md.quartersPerBeat;
+        tempoDisplayUnitLabel = metronomeUnitLabel(md.beatUnit, md.dotCount);
+        const t = Math.round(Math.min(400, Math.max(40, md.perMinute)));
+        $("tempo").value = t;
+        $("tempoVal").value = t;
+        syncTempoDisplay();
+        tempoNote = "(已自動套用樂譜內建速度" + tempoDisplayUnitLabel + "=" + t + ",相當於四分音符=" + Math.round(t * tempoDisplayMultiplier) + ")";
       } else {
+        const t = Math.round(Math.min(400, Math.max(40, parsed.soundTempo)));
+        $("tempo").value = t;
+        $("tempoVal").value = t;
+        syncTempoDisplay();
         tempoNote = "(已自動套用樂譜內建速度" + t + ")";
       }
     }
@@ -1104,24 +1132,25 @@ function parseXmlTimeline(xmlText){
       const t = s.getAttribute("tempo");
       if (t) { soundTempo = parseFloat(t); break; }
     }
-    // 有些記譜軟體只寫看得到的「速度記號」(如 ♩=120),沒有連帶寫 <sound tempo>,
-    // 這種情況退而求其次自己從 <metronome> 換算成四分音符BPM(換算基準統一用四分音符,
-    // 跟上面 <sound tempo> 的單位一致):beat-unit 是哪種音符時值、乘上附點,
-    // 換算成「每分鐘幾個四分音符」
-    if (soundTempo === null) {
-      const NOTE_TYPE_QUARTERS = { whole: 4, half: 2, quarter: 1, eighth: 0.5, "16th": 0.25, "32nd": 0.125, "64th": 0.0625 };
-      const metronomeEl = doc.getElementsByTagName("metronome")[0];
-      if (metronomeEl) {
-        const beatUnitEl = metronomeEl.getElementsByTagName("beat-unit")[0];
-        const perMinuteEl = metronomeEl.getElementsByTagName("per-minute")[0];
-        const dotCount = metronomeEl.getElementsByTagName("beat-unit-dot").length;
-        if (beatUnitEl && perMinuteEl) {
-          const perMinute = parseFloat(perMinuteEl.textContent);
-          const baseQuarters = NOTE_TYPE_QUARTERS[beatUnitEl.textContent.trim()];
-          if (baseQuarters && perMinute > 0) {
-            const dottedQuarters = baseQuarters * (2 - 1 / Math.pow(2, dotCount));
-            soundTempo = perMinute * dottedQuarters;
-          }
+    // <metronome> 記錄的才是「印在譜上的數字」本身(例如6/8拍常見的「附點四分音符=90」),
+    // 不管 <sound tempo> 存不存在都讀出來:一來當 <sound tempo> 缺席時拿來換算成
+    // 四分音符BPM(播放引擎永遠用四分音符BPM運算,不會變動);二來讓速度滑桿可以直接
+    // 顯示「90」這個使用者在譜上看到的數字,而不是換算後的135,避免兩邊數字對不起來的誤會
+    // ──beat-unit 是哪種音符時值、乘上附點,換算成「相當於幾個四分音符」
+    let metronomeDisplay = null;
+    const NOTE_TYPE_QUARTERS = { whole: 4, half: 2, quarter: 1, eighth: 0.5, "16th": 0.25, "32nd": 0.125, "64th": 0.0625 };
+    const metronomeEl = doc.getElementsByTagName("metronome")[0];
+    if (metronomeEl) {
+      const beatUnitEl = metronomeEl.getElementsByTagName("beat-unit")[0];
+      const perMinuteEl = metronomeEl.getElementsByTagName("per-minute")[0];
+      const dotCount = metronomeEl.getElementsByTagName("beat-unit-dot").length;
+      if (beatUnitEl && perMinuteEl) {
+        const perMinute = parseFloat(perMinuteEl.textContent);
+        const baseQuarters = NOTE_TYPE_QUARTERS[beatUnitEl.textContent.trim()];
+        if (baseQuarters && perMinute > 0) {
+          const quartersPerBeat = baseQuarters * (2 - 1 / Math.pow(2, dotCount));
+          metronomeDisplay = { perMinute, beatUnit: beatUnitEl.textContent.trim(), dotCount, quartersPerBeat };
+          if (soundTempo === null) soundTempo = perMinute * quartersPerBeat;
         }
       }
     }
@@ -1142,7 +1171,7 @@ function parseXmlTimeline(xmlText){
     const workTitleEl = doc.getElementsByTagName("work-title")[0];
     const movementTitleEl = doc.getElementsByTagName("movement-title")[0];
     const scoreTitle = (workTitleEl && workTitleEl.textContent.trim()) || (movementTitleEl && movementTitleEl.textContent.trim()) || null;
-    if (!bestPart) return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, arpMap: {}, soundTempo, timeSig, isDrumScore: false, crossNoteheadMap: {}, measureRanges: [], guitarTechMap: {}, vibratoRanges: [], scoreTitle };
+    if (!bestPart) return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, arpMap: {}, soundTempo, metronomeDisplay, timeSig, isDrumScore: false, crossNoteheadMap: {}, measureRanges: [], guitarTechMap: {}, vibratoRanges: [], scoreTitle };
     // 判斷這份樂譜是不是打擊樂記譜:直接看譜表有沒有用「打擊譜號」(<clef><sign>percussion</sign></clef>),
     // 這是所有記譜軟體匯出鼓譜都會寫的標準記號,比音符物件上某些欄位的預設值可靠多了(不會誤判成一般樂器)
     const isDrumScore = Array.from(bestPart.getElementsByTagName("clef")).some(c => {
@@ -1383,10 +1412,10 @@ function parseXmlTimeline(xmlText){
     const measureRanges = measureBoundaries.map((start, i) => ({
       start, end: i + 1 < measureBoundaries.length ? measureBoundaries[i + 1] : cursor
     }));
-    return { slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges, articMap, arpMap, soundTempo, timeSig, isDrumScore, crossNoteheadMap, measureRanges, guitarTechMap, vibratoRanges: outWavyLines, scoreTitle };
+    return { slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges, articMap, arpMap, soundTempo, metronomeDisplay, timeSig, isDrumScore, crossNoteheadMap, measureRanges, guitarTechMap, vibratoRanges: outWavyLines, scoreTitle };
   } catch (e) {
     console.error("讀取踏板/圓滑線資訊失敗:", e);
-    return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, arpMap: {}, soundTempo: null, timeSig: null, isDrumScore: false, crossNoteheadMap: {}, measureRanges: [], guitarTechMap: {}, vibratoRanges: [], scoreTitle: null };
+    return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, arpMap: {}, soundTempo: null, metronomeDisplay: null, timeSig: null, isDrumScore: false, crossNoteheadMap: {}, measureRanges: [], guitarTechMap: {}, vibratoRanges: [], scoreTitle: null };
   }
 }
 /* 偵測某一手(譜表)裡,音符是否精確循環重複(例如分解和弦C-E-G-C-E-G...),
@@ -1741,7 +1770,8 @@ function normalizeDrumKey(k){
 }
 
 /* ── 時間換算 ─────────────────────────────── */
-function bpm(){ return parseInt($("tempo").value, 10); }
+function rawTempo(){ return parseInt($("tempo").value, 10); } // 滑桿/數字框上直接顯示的數字(跟樂譜印的一致)
+function bpm(){ return rawTempo() * tempoDisplayMultiplier; } // 播放引擎實際使用的四分音符BPM
 function wholeToSec(w){ return w * 240 / bpm(); }   // 1 全音符 = 4 拍
 function totalSec(){
   if ($("useCalibration").checked && calibrationMap.length >= 2) return calibrationMap[calibrationMap.length-1].realSec;
@@ -1938,7 +1968,7 @@ $("calibRetapBtn").addEventListener("click", () => {
 });
 
 $("tempo").addEventListener("input", () => {
-  $("tempoVal").value = bpm();
+  $("tempoVal").value = rawTempo();
   syncTempoDisplay();
   if (playing) { // 播放中改速度:重新以目前位置起算
     const cur = currentSec();
@@ -1965,7 +1995,7 @@ function applyTempo(t){
 // 速度數字改成可以直接點擊輸入,不用只靠拖曳滑桿(滑桿範圍 40~400 橫跨很大,拖曳很難精準停在某個特定數字上)
 $("tempoVal").addEventListener("change", () => {
   let t = parseInt($("tempoVal").value, 10);
-  if (isNaN(t)) t = bpm();
+  if (isNaN(t)) t = rawTempo();
   applyTempo(t);
 });
 
@@ -1985,10 +2015,10 @@ document.addEventListener("keydown", e => {
     stopPlayback();
   } else if (e.code === "ArrowUp") {
     e.preventDefault();
-    applyTempo(bpm() + 1);
+    applyTempo(rawTempo() + 1);
   } else if (e.code === "ArrowDown") {
     e.preventDefault();
-    applyTempo(bpm() - 1);
+    applyTempo(rawTempo() - 1);
   } else if (e.code === "ArrowRight") {
     e.preventDefault();
     seekTo((playing ? currentSec() : pausedAtSec) + 5);
@@ -3688,6 +3718,7 @@ function watermarkCfg(){
   return {
     watermarkEnabled: enabled,
     title: enabled ? $("exportTitleInput").value.trim() : "",
+    subtitle: enabled ? $("exportSubtitleInput").value.trim() : "",
     channel: enabled ? $("exportWatermarkInput").value.trim() : ""
   };
 }
@@ -3708,11 +3739,13 @@ async function showExportPreview(cfg){
   $("previewImg").src = cv.toDataURL("image/png");
   $("previewOverlay").classList.add("show");
 }
+// 樂譜高度調小一點(原本560/480):樂譜太大時,同樣的移動速度視覺上掃過的範圍更大,
+// 快速橫向捲動會讓人看了很暈;縮小一點在畫面上維持同樣的播放速度感覺會穩定不少
 $("fmtLandscape").addEventListener("click", () => {
-  showExportPreview(Object.assign({ W: 1920, H: 1080, scoreH: 560, align: chosenAlign, bitrate: 5000000, fps: exportFps, includeKeyboard: chosenIncludeKeyboard, startSec: chosenStartSec, endSec: chosenEndSec }, watermarkCfg()));
+  showExportPreview(Object.assign({ W: 1920, H: 1080, scoreH: 440, align: chosenAlign, bitrate: 5000000, fps: exportFps, includeKeyboard: chosenIncludeKeyboard, startSec: chosenStartSec, endSec: chosenEndSec }, watermarkCfg()));
 });
 $("fmtPortrait").addEventListener("click", () => {
-  showExportPreview(Object.assign({ W: 1080, H: 1920, scoreH: 480, align: chosenAlign, bitrate: 5000000, fps: exportFps, includeKeyboard: chosenIncludeKeyboard, startSec: chosenStartSec, endSec: chosenEndSec }, watermarkCfg()));
+  showExportPreview(Object.assign({ W: 1080, H: 1920, scoreH: 380, align: chosenAlign, bitrate: 5000000, fps: exportFps, includeKeyboard: chosenIncludeKeyboard, startSec: chosenStartSec, endSec: chosenEndSec }, watermarkCfg()));
 });
 $("previewBackBtn").addEventListener("click", () => {
   $("previewOverlay").classList.remove("show");
@@ -3926,28 +3959,40 @@ function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
       drawKeyboard(ctx, 0, kbY, W, kbH, active);
     }
   }
-  // 標題/浮水印:畫在最上層,才會真的燒錄進匯出的影片畫面裡(不是疊在網頁上的HTML文字);
+  // 標題/副標題/頻道名稱:畫在最上層,才會真的燒錄進匯出的影片畫面裡(不是疊在網頁上的HTML文字);
   // 字級以 min(W,H) 為基準(不是直接用 H)──直式影片 H 是橫式的將近兩倍,照樣用 H 算字級的話
-  // 直式標題會變成橫式的兩倍大、留白比例整個跑掉;左上標題用網頁同一套金色、字級比右上浮水印大
-  if (cfg.watermarkEnabled && (cfg.title || cfg.channel)) {
+  // 直式標題會變成橫式的兩倍大、留白比例整個跑掉。
+  // 版面:標題置中在畫面上方,副標題緊接在標題正下方(字級較小),頻道名稱放右下角
+  if (cfg.watermarkEnabled && (cfg.title || cfg.subtitle || cfg.channel)) {
     const wmRef = Math.min(W, H);
     const titleFontSize = Math.round(wmRef * 0.055);
-    const channelFontSize = Math.round(wmRef * 0.038);
+    const subtitleFontSize = Math.round(wmRef * 0.03);
+    const channelFontSize = Math.round(wmRef * 0.032);
     const wmPadX = Math.round(W * 0.02);
     const wmPadY = Math.max(Math.round(titleFontSize * 0.55), 16);
     ctx.save();
-    ctx.textBaseline = "top";
     if (cfg.title) {
+      ctx.textBaseline = "top";
       ctx.font = titleFontSize + "px 'Noto Serif TC', serif";
       ctx.fillStyle = "#8B6508"; // 深金色,對比度5.2:1(網頁標頭的--gold只有2.36:1,WCAG連大字級3:1都不過)
-      ctx.textAlign = "left";
-      ctx.fillText(cfg.title, wmPadX, wmPadY);
+      ctx.textAlign = "center";
+      ctx.fillText(cfg.title, W / 2, wmPadY);
+    }
+    if (cfg.subtitle) {
+      ctx.textBaseline = "top";
+      ctx.font = subtitleFontSize + "px 'Noto Serif TC', serif";
+      ctx.fillStyle = "rgba(42,42,42,0.85)"; // 深炭灰,比標題低調,對比度依然夠高(8.7:1)
+      ctx.textAlign = "center";
+      const subtitleY = cfg.title ? wmPadY + Math.round(titleFontSize * 1.08) : wmPadY;
+      ctx.fillText(cfg.subtitle, W / 2, subtitleY);
     }
     if (cfg.channel) {
+      ctx.textBaseline = "bottom";
       ctx.font = channelFontSize + "px 'Noto Serif TC', serif";
-      ctx.fillStyle = "rgba(42,42,42,0.85)"; // 深炭灰,85%不透明度,比標題低調但對比度依然夠高(8.7:1)
+      ctx.fillStyle = "rgba(42,42,42,0.85)";
       ctx.textAlign = "right";
-      ctx.fillText(cfg.channel, W - wmPadX, wmPadY);
+      // 有鍵盤/鼓組面板時,頻道名稱貼在面板正上方(不要疊在琴鍵上面);沒有面板就貼齊畫面底部
+      ctx.fillText(cfg.channel, W - wmPadX, (H - kbH) - wmPadY);
     }
     ctx.restore();
   }
