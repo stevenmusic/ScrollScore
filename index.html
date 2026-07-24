@@ -798,9 +798,9 @@ function computeArpNoteOffsetSec(ev, note, t0, calib){
   const safeTotalSpan = span * safeGap;
   const seed = ev.tWhole * 97.13;
   // 前後各留一點隨機緩衝(安全總長度的一部分),第一顆、最後一顆音都不用剛好卡在邊界上。
-  // 開頭這端的緩衝之前調到0.3上限、保底一半,結果變成整體聽起來太晚才開始,調回較小範圍
-  const startBufferMax = safeTotalSpan * 0.18;
-  const startBuffer = startBufferMax * (0.35 + seededRand01(seed + 501) * 0.65);
+  // 開頭這端再收緊一點,讓起手更早一點;結尾這端(endBuffer)完全不動,不要跟著提早結束
+  const startBufferMax = safeTotalSpan * 0.12;
+  const startBuffer = startBufferMax * (0.3 + seededRand01(seed + 501) * 0.7);
   const endBufferMax = safeTotalSpan * 0.15;
   const endBuffer = seededRand01(seed + 502) * endBufferMax;
   const usableSpan = Math.max(0, safeTotalSpan - startBuffer - endBuffer);
