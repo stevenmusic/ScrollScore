@@ -546,7 +546,7 @@ input[type=file]{display:none}
       <div class="mark">
         <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
       </div>
-      <p class="empty-title">點擊「載入樂譜」開始使用</p>
+      <p class="empty-title">點擊這裡載入樂譜,開始使用</p>
       <p class="empty-sub">支援 Sibelius / Finale / MuseScore 匯出之 MusicXML(.xml / .mxl)</p>
       <button id="trySampleBtn" class="link-btn">或先試用範例樂譜看看 →</button>
     </div>
@@ -1101,6 +1101,8 @@ async function renderScore(xmlText){
   buildTimeline();
   rebuildKeyboardRange();
   resizeKeyboardCanvas(); // 可見白鍵數量隨這首曲子的音域改變,鍵盤高度要跟著重新算才會維持真實比例
+  drawKeyboardLive(0); // resize會清空canvas畫面,不補畫的話鍵盤要等到按下播放才會出現,載入完成後應該馬上看到鍵盤
+  updatePlaylineExtent(); // 樂譜換了之後高度可能不同,播放軸要跟著重新貼齊
   if (events.some(ev => ev.notes.some(n => n.drum))) { loadDrumKit(); loadCymbalKit(); }
   resetScroll();
   $("playBtn").disabled = false;
@@ -2045,6 +2047,7 @@ async function applyTranspose(delta){
   stopPlayback();
   setStatus("移調中…");
   await renderScore(lastXmlText);
+  updatePlaylineExtent(); // 移調後音符可能多出加線,樂譜實際高度會變,播放軸要重新貼齊
   pausedAtSec = at;
   updateTimeLabel(at);
   setStatus(transposeSemitones === 0 ? "已還原原調" : "已移調 " + $("transVal").textContent);
@@ -2083,6 +2086,7 @@ $("showTempoMarks").addEventListener("change", async () => {
   const at = wasPlaying ? currentSec() : pausedAtSec;
   stopPlayback();
   await renderScore(lastXmlText);
+  updatePlaylineExtent(); // 顯示/隱藏速度記號會改變樂譜高度,播放軸要重新貼齊
   pausedAtSec = at;
   updateTimeLabel(at);
   if (wasPlaying) startPlayback(at);
@@ -2739,6 +2743,21 @@ function resizeKeyboardCanvas(){
   cv.width = Math.round(rect.width);
   cv.height = Math.round(rect.height);
 }
+/* 播放軸原本用固定的「#stage高度的6%~94%」,樂譜實際渲染高度(#scroller)通常遠小於
+   #stage(尤其手機直向、樂譜置中時上下留白很多),導致播放軸看起來又長又突兀,跟匯出影片
+   原本的問題一樣。改成量測樂譜實際的上下邊界,貼著樂譜本身,不管樂譜大小、視窗尺寸都自然縮放 */
+function updatePlaylineExtent(){
+  const stage = $("stage"), scroller = $("scroller"), pl = $("playline");
+  if (!stage || !scroller || !pl) return;
+  const stageRect = stage.getBoundingClientRect();
+  const scrollerRect = scroller.getBoundingClientRect();
+  if (!scrollerRect.height || !stageRect.height) return;
+  const pad = scrollerRect.height * 0.12;
+  const top = Math.max(0, scrollerRect.top - stageRect.top - pad);
+  const bottom = Math.max(0, stageRect.bottom - scrollerRect.bottom - pad);
+  pl.style.top = top + "px";
+  pl.style.bottom = bottom + "px";
+}
 const KB_LOOKAHEAD_SEC = 0.06; // 鍵盤提前量,補償視覺感知上的延遲感
 function drawKeyboardLive(sec){
   const cv = $("keyboardCanvas");
@@ -2753,7 +2772,7 @@ function drawKeyboardLive(sec){
     drawKeyboard(ctx, 0, 0, cv.width, cv.height, active);
   }
 }
-window.addEventListener("resize", () => { resizeKeyboardCanvas(); drawKeyboardLive(playing ? currentSec() : pausedAtSec); });
+window.addEventListener("resize", () => { resizeKeyboardCanvas(); drawKeyboardLive(playing ? currentSec() : pausedAtSec); updatePlaylineExtent(); });
 
 /* 找最接近的取樣,用 playbackRate 補足音高差(標準取樣器做法) */
 function nearestSample(list, targetMidi){
@@ -3625,11 +3644,13 @@ let chosenAlign = "center";
 let chosenIncludeKeyboard = false;
 let chosenStartSec = null, chosenEndSec = null; // null = 匯出全曲
 
+const FMT_STEP_TITLE = { type: "選擇匯出類型", range: "選擇匯出區間", align: "選擇樂譜對齊", format: "選擇影片格式" };
 function showFmtStep(step){
   $("fmtStepType").style.display = step === "type" ? "flex" : "none";
   $("fmtStepRange").style.display = step === "range" ? "flex" : "none";
   $("fmtStepAlign").style.display = step === "align" ? "flex" : "none";
   $("fmtStepFormat").style.display = step === "format" ? "flex" : "none";
+  $("fmtTitle").textContent = FMT_STEP_TITLE[step] || FMT_STEP_TITLE.type;
 }
 $("exportBtn").addEventListener("click", () => {
   if (!events.length || exporting) return;
