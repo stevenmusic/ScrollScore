@@ -759,7 +759,10 @@ function arpDurationFactor(ev){
   if (ev.arpPrevDurWhole == null) return 1;
   const ref = 0.25; // 四分音符當基準
   const ratio = Math.sqrt(Math.max(0.15, ev.arpPrevDurWhole / ref));
-  const clamped = Math.max(0.6, Math.min(1.8, ratio));
+  // 下限原本是0.6,前面是十六分音符這種短音符時倍率會頂到下限,把間隔跟起手前的緩衝都
+  // 壓得太扁——十六分音符聽起來還是要有起碼的滾奏感,不能因為前面音短就整個貼死拍點,
+  // 提高下限到0.85,只留給極短音符(三十二分音符以下)一點點收緊,不要太誇張
+  const clamped = Math.max(0.85, Math.min(1.8, ratio));
   const jitter = 0.9 + seededRand01(ev.tWhole * 61.51 + 601) * 0.2; // [0.9, 1.1]
   return clamped * jitter;
 }
