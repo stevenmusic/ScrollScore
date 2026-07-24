@@ -810,7 +810,7 @@ function computeArpNoteOffsetSec(ev, note, t0, calib){
   // 剛好抽到一群很接近的數字、讓這組琶音看起來還是很平均(這就是「有的地方很好、有的地方
   // 不夠散」的原因——單純獨立亂數本來就有機率抽出集中的結果)。抽完再洗牌打亂順序,
   // 不然權重會變成機械式的「越來越大」或「越來越小」,聽起來又太規律、不像真人彈奏。
-  const WEIGHT_MIN = 0.35, WEIGHT_MAX = 1.75;
+  const WEIGHT_MIN = 0.2, WEIGHT_MAX = 1.9;
   const binSize = (WEIGHT_MAX - WEIGHT_MIN) / span;
   const weights = [];
   for (let k = 0; k < span; k++) {
