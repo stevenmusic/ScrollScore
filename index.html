@@ -750,8 +750,21 @@ function arpGapSec(){
 
 /* 確保琶音展開的範圍絕對不會超過前一個/後一個音符的位置,不夠空間就自動壓縮間隔 */
 const ARP_SAFETY_SEC = 0.012; // 留一點點餘裕,避免剛好貼齊
+/* 琶音間隔也要看「前一個音符多長」調整:前面的音越長,琶音可以拉得越開,聽起來比較從容;
+   前面的音越短,間隔跟著縮小,才不會跟周圍節奏的比例不搭。用開根號讓效果溫和一點
+   (不會因為前面是全音符就把琶音拉得誇張長),再疊一點偽隨機權重,不要每次倍率都死板一樣。
+   這裡只負責算「理想上」想要多寬,實際會不會超出安全範圍還是交給下面的 maxGapAllowed 夾住,
+   所以就算前面音很長、算出來的倍率很大,也不會真的撞到前一個音符。 */
+function arpDurationFactor(ev){
+  if (ev.arpPrevDurWhole == null) return 1;
+  const ref = 0.25; // 四分音符當基準
+  const ratio = Math.sqrt(Math.max(0.15, ev.arpPrevDurWhole / ref));
+  const clamped = Math.max(0.6, Math.min(1.8, ratio));
+  const jitter = 0.9 + seededRand01(ev.tWhole * 61.51 + 601) * 0.2; // [0.9, 1.1]
+  return clamped * jitter;
+}
 function computeArpEffectiveGap(ev, t0, calib){
-  const baseGap = arpGapSec();
+  const baseGap = arpGapSec() * arpDurationFactor(ev);
   if (!ev.arpCount || ev.arpCount < 2) return baseGap;
   const span = ev.arpCount - 1; // 全部音符都壓在拍點之前,最早的音符在拍點前 span 個間隔
   if (span <= 0) return baseGap;
@@ -1775,7 +1788,7 @@ function buildTimeline(){
       }
     }
     const arpInfo = findNearestEntry(arpEntries, tWhole, MARK_MATCH_EPSILON);
-    let arpCount = 0, arpGapBeforeWhole = null;
+    let arpCount = 0, arpGapBeforeWhole = null, arpPrevDurWhole = null;
     if (arpInfo && notes.length > 1) {
       // 依編號分組:同編號=同一條線(可能跨手,一起滾奏);不同編號=各自獨立的線(例如左右手分開,但要同時起始)
       const groupNums = Object.keys(arpInfo.groups);
@@ -1827,12 +1840,13 @@ function buildTimeline(){
           const prevOnsetWhole = prevEv.tWhole;
           const prevDurWhole = Math.max(0, ...prevEv.notes.map(n => n.durWhole || 0));
           arpGapBeforeWhole = tWhole - (prevOnsetWhole + prevDurWhole * 0.5);
+          arpPrevDurWhole = prevDurWhole; // 前一個音符的音長,琶音音符間隔要跟著這個調整(見 computeArpEffectiveGap)
         } else {
           arpGapBeforeWhole = null;
         }
       }
     }
-    events.push({ tWhole, x, notes, arpCount, arpGapBeforeWhole, arpGapAfterWhole: null });
+    events.push({ tWhole, x, notes, arpCount, arpGapBeforeWhole, arpGapAfterWhole: null, arpPrevDurWhole });
     cursor.next();
   }
   // 補上每個事件跟下一個事件的全音符間距,琶音邊界偵測要用(前面那一步只知道跟前一個事件的間距)
