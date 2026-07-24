@@ -1104,6 +1104,27 @@ function parseXmlTimeline(xmlText){
       const t = s.getAttribute("tempo");
       if (t) { soundTempo = parseFloat(t); break; }
     }
+    // 有些記譜軟體只寫看得到的「速度記號」(如 ♩=120),沒有連帶寫 <sound tempo>,
+    // 這種情況退而求其次自己從 <metronome> 換算成四分音符BPM(換算基準統一用四分音符,
+    // 跟上面 <sound tempo> 的單位一致):beat-unit 是哪種音符時值、乘上附點,
+    // 換算成「每分鐘幾個四分音符」
+    if (soundTempo === null) {
+      const NOTE_TYPE_QUARTERS = { whole: 4, half: 2, quarter: 1, eighth: 0.5, "16th": 0.25, "32nd": 0.125, "64th": 0.0625 };
+      const metronomeEl = doc.getElementsByTagName("metronome")[0];
+      if (metronomeEl) {
+        const beatUnitEl = metronomeEl.getElementsByTagName("beat-unit")[0];
+        const perMinuteEl = metronomeEl.getElementsByTagName("per-minute")[0];
+        const dotCount = metronomeEl.getElementsByTagName("beat-unit-dot").length;
+        if (beatUnitEl && perMinuteEl) {
+          const perMinute = parseFloat(perMinuteEl.textContent);
+          const baseQuarters = NOTE_TYPE_QUARTERS[beatUnitEl.textContent.trim()];
+          if (baseQuarters && perMinute > 0) {
+            const dottedQuarters = baseQuarters * (2 - 1 / Math.pow(2, dotCount));
+            soundTempo = perMinute * dottedQuarters;
+          }
+        }
+      }
+    }
     // 讀取拍號,判斷是不是複拍子(3/8,6/8,9/8,12/8這種),純粹給使用者參考用的資訊顯示
     let timeSig = null;
     const timeEl = doc.getElementsByTagName("time")[0];
