@@ -1072,6 +1072,62 @@ function transposeMusicXML(xmlText, semitones){
   return new XMLSerializer().serializeToString(doc);
 }
 
+/* 有些記譜軟體匯出時,連續整小節休止符只有部分被標成合併的多小節休止符
+   (例如4小節連續休止,卻寫成「1小節單獨+從第2小節開始的3小節群組」這種被切開的寫法),
+   OSMD 只會照著檔案裡個別小節各自的 <measure-style> 分組畫,不會主動把這種被切開的兩段
+   再接起來,畫面上就會看到明明連在一起的休止卻分成兩段獨立的休止記號。
+   這裡自己重新掃描整份樂譜:不管原本檔案怎麼分組,只要是連續的整小節休止(且不是被反覆
+   記號中斷),一律合併成一個小節群組,總數正確標在第一小節,其餘小節的分組標記清掉。 */
+function mergeRestMeasures(xmlText){
+  const doc = new DOMParser().parseFromString(xmlText, "text/xml");
+  let changed = false;
+  for (const part of Array.from(doc.getElementsByTagName("part"))) {
+    const measures = Array.from(part.getElementsByTagName("measure"));
+    let runStart = -1;
+    const flushRun = (endExclusive) => {
+      if (runStart < 0) return;
+      const runLen = endExclusive - runStart;
+      if (runLen >= 2) {
+        changed = true;
+        for (let i = runStart; i < endExclusive; i++) {
+          const m = measures[i];
+          let attrs = m.getElementsByTagName("attributes")[0];
+          if (i === runStart) {
+            if (!attrs) { attrs = doc.createElement("attributes"); m.insertBefore(attrs, m.firstChild); }
+            let ms = attrs.getElementsByTagName("measure-style")[0];
+            if (!ms) { ms = doc.createElement("measure-style"); attrs.appendChild(ms); }
+            let mr = ms.getElementsByTagName("multiple-rest")[0];
+            if (!mr) { mr = doc.createElement("multiple-rest"); ms.appendChild(mr); }
+            mr.textContent = String(runLen);
+          } else if (attrs) {
+            const ms = attrs.getElementsByTagName("measure-style")[0];
+            if (ms) {
+              const mr = ms.getElementsByTagName("multiple-rest")[0];
+              if (mr) ms.removeChild(mr);
+              if (!ms.hasChildNodes()) attrs.removeChild(ms);
+            }
+            if (!attrs.hasChildNodes()) m.removeChild(attrs);
+          }
+        }
+      }
+      runStart = -1;
+    };
+    measures.forEach((m, idx) => {
+      const hasRepeat = Array.from(m.getElementsByTagName("barline")).some(b => b.getElementsByTagName("repeat").length > 0);
+      const notes = Array.from(m.getElementsByTagName("note"));
+      const isRestMeasure = !hasRepeat && notes.length > 0 &&
+        notes.every(n => n.getElementsByTagName("rest").length > 0);
+      if (isRestMeasure) {
+        if (runStart < 0) runStart = idx;
+      } else {
+        flushRun(idx);
+      }
+    });
+    flushRun(measures.length);
+  }
+  return changed ? new XMLSerializer().serializeToString(doc) : xmlText;
+}
+
 /* ── 渲染 + 建立時間軸 ─────────────────────── */
 async function renderScore(xmlText){
   $("empty").style.display = "none";
@@ -1093,7 +1149,11 @@ async function renderScore(xmlText){
   osmd.EngravingRules.PageTopMargin = 1;
   osmd.EngravingRules.PageBottomMargin = 1;
 
-  const finalXml = transposeSemitones ? transposeMusicXML(xmlText, transposeSemitones) : xmlText;
+  const transposedXml = transposeSemitones ? transposeMusicXML(xmlText, transposeSemitones) : xmlText;
+  // OSMD只會照著檔案裡各小節「各自」的多小節休止標記畫,不會主動把被切開的段落接起來
+  // (例如4小節連續休止被檔案寫成「1小節+從第2小節起3小節」兩段),所以先重新掃描、
+  // 自己合併連續整小節休止,再交給OSMD載入
+  const finalXml = mergeRestMeasures(transposedXml);
   await osmd.load(finalXml);
   osmd.zoom = 0.9;
   osmd.render();
