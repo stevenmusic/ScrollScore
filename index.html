@@ -2583,10 +2583,41 @@ $("stopBtn").addEventListener("click", stopPlayback);
 // 點擊樂譜空白處快速播放/暫停,練習時不用每次都伸手點小小的播放鈕。
 // 排除匯出模式、匯出設定對話框、空狀態卡片、以及任何按鈕/輸入框等互動元件本身的點擊,
 // 避免跟這些元件原本的行為衝突(直接重用播放鈕既有的邏輯,包含事件計數中的處理)
+let didSwipeMeasure = false;
 $("stage").addEventListener("click", (e) => {
+  if (didSwipeMeasure) { didSwipeMeasure = false; return; } // 剛才是滑動導覽,不當作點擊暫停
   if (exporting) return;
   if (e.target.closest("#formatOverlay, #empty, #exitrec, button, input, select, a, textarea")) return;
   $("playBtn").click();
+});
+
+/* 左右滑動快速跳小節(手機/平板):滑動距離越長,一次跳的小節數越多,方便快速定位到練習的段落,
+   不用像拖曳進度條那樣要很精準。維持原本播放/暫停狀態不強制打斷,跟拖曳進度條的行為一致——
+   正在播放時滑動會直接從新位置接著播,暫停時滑動後仍維持暫停,方便先定位好再手動播放。 */
+const SWIPE_MIN_PX = 40;     // 小於這個距離不算滑動,當作一般點擊(播放/暫停)處理
+const SWIPE_MEASURE_PX = 70; // 每多滑這麼多px,多跳一個小節
+let swipeStartX = null, swipeStartY = null, swipeStatusTimer = null;
+$("stage").addEventListener("pointerdown", (e) => {
+  if (exporting || !measureRanges.length) return;
+  if (e.target.closest("#formatOverlay, #empty, #exitrec, button, input, select, a, textarea")) return;
+  swipeStartX = e.clientX; swipeStartY = e.clientY;
+});
+$("stage").addEventListener("pointerup", (e) => {
+  if (swipeStartX == null) return;
+  const dx = e.clientX - swipeStartX, dy = e.clientY - swipeStartY;
+  swipeStartX = null;
+  if (Math.abs(dx) < SWIPE_MIN_PX || Math.abs(dx) <= Math.abs(dy)) return; // 距離太短或偏垂直,不算滑動導覽
+  didSwipeMeasure = true;
+  const curWhole = secToWhole(playing ? currentSec() : pausedAtSec);
+  let curIdx = measureRanges.findIndex(m => curWhole >= m.start && curWhole < m.end);
+  if (curIdx < 0) curIdx = curWhole < measureRanges[0].start ? 0 : measureRanges.length - 1;
+  const measuresJumped = Math.max(1, Math.round(Math.abs(dx) / SWIPE_MEASURE_PX));
+  const dir = dx < 0 ? 1 : -1; // 左滑(手指往左移,dx為負)=前進到後面的小節,右滑=回到前面的小節
+  const targetIdx = Math.max(0, Math.min(measureRanges.length - 1, curIdx + dir * measuresJumped));
+  seekTo(posToSec(measureRanges[targetIdx].start, useCalib()));
+  setStatus("第 " + (targetIdx + 1) + " 小節");
+  clearTimeout(swipeStatusTimer);
+  swipeStatusTimer = setTimeout(() => setStatus(""), 1000);
 });
 
 function ensureAudio(){
@@ -3996,8 +4027,11 @@ function stopPlayback(){
 /* ── 捲動同步 ─────────────────────────────── */
 function playlineX(){ return $("stage").clientWidth * PLAYLINE_RATIO; }
 
+function secToWhole(sec){
+  return useCalib() ? calibSecToWhole(sec) : (rubatoEnabled() ? rubatoSecToWhole(sec) : sec * bpm() / 240);
+}
 function xAtSec(sec){
-  const w = useCalib() ? calibSecToWhole(sec) : (rubatoEnabled() ? rubatoSecToWhole(sec) : sec * bpm() / 240); // sec → whole
+  const w = secToWhole(sec); // sec → whole
   if (!events.length) return 0;
   if (w <= events[0].tWhole) return events[0].x;
   const lastEv = events[events.length - 1];
