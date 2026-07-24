@@ -1219,9 +1219,8 @@ async function renderScore(xmlText){
   $("stopBtn").disabled = false;
   $("recBtn").disabled = false;
   $("exportBtn").disabled = false;
-  $("transUp").disabled = false;
-  $("transDown").disabled = false;
-  for (const id of ["recBtn", "exportBtn", "transUp", "transDown"]) $(id).removeAttribute("title");
+  for (const id of ["recBtn", "exportBtn"]) $(id).removeAttribute("title");
+  updateTransposeAvailability(); // 鼓組不需要移調,依目前樂器決定移調按鈕要不要維持關閉
   $("calibStartBtn").disabled = false;
   updateTimeLabel(0);
 }
@@ -2342,6 +2341,21 @@ function startAudioFrom(fromSec){
 
 function currentInstrument(){ return $("instrument").value; }
 
+/* 鼓組的音符高低位置代表打擊的鼓件(小鼓/大鼓/銅鈸...),不是真正的音高,移調沒有意義,
+   所以樂器選到鼓組時,移調按鈕要維持變暗/停用,離開鼓組才恢復。
+   還沒載入樂譜前也要維持停用(樂器選單本身沒有停用,使用者可能在載入前就先選好樂器),
+   不能因為切樂器就搶先解除「請先載入樂譜」的停用狀態 */
+function updateTransposeAvailability(){
+  const isDrum = currentInstrument() === "drum";
+  const scoreLoaded = document.body.classList.contains("score-loaded");
+  const disabled = isDrum || !scoreLoaded;
+  $("transUp").disabled = disabled;
+  $("transDown").disabled = disabled;
+  const title = !scoreLoaded ? "請先載入樂譜" : isDrum ? "鼓組不需要移調" : "";
+  if (title) { $("transUp").title = title; $("transDown").title = title; }
+  else { $("transUp").removeAttribute("title"); $("transDown").removeAttribute("title"); }
+}
+
 /* ── 真實樂器取樣(取代合成音色) ─────────────── */
 const SAMPLE_BASE = "https://nbrosowsky.github.io/tonejs-instruments/samples/";
 const PIANO_BASE = "https://tonejs.github.io/audio/salamander/"; // Tone.js 官方託管的完整版 Salamander 鋼琴取樣,音質/延音都比一般鏡像版本好
@@ -3069,6 +3083,7 @@ $("instrument").addEventListener("change", () => {
   else loadInstrumentSamples(currentInstrument());
   resizeKeyboardCanvas(); // 鋼琴鍵盤跟鼓組面板高度邏輯不同,切換樂器時要重新算
   drawKeyboardLive(playing ? currentSec() : pausedAtSec);
+  updateTransposeAvailability();
 });
 
 /* ── 匯入音檔取代合成音色 ─────────────────── */
