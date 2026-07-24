@@ -2063,7 +2063,7 @@ function useCalib(){ return $("useCalibration").checked && calibrationMap.length
       直接來自樂譜本身的證據,優先權最高。細節見下方 detectPhraseBoundaries()。
    1) 樂句拱形(phrase arch):Todd(1985)、KTH規則系統(Friberg/Bresin/Sundberg)的Phrase Arch
       規則——樂句中段稍微加快,結尾則有明確的漸慢(Repp 1992分析Träumerei發現「每個樂段結尾」
-      都有明顯漸慢,不是只有整曲最後一個音才變慢),幅度預設走溫和路線(結尾約原速的85~90%)。
+      都有明顯漸慢,不是只有整曲最後一個音才變慢),結尾約原速的80%。
       注意:樂句結尾漸慢對本身已經是長音的音符會按比例打折——長音自己的時值已經有呼吸感,
       不該再疊加百分比式的漸慢(百分比乘在本來就大的間距上,增加的絕對秒數會遠大於短音,
       造成「只要是長音就被拉得特別長」的失真,長音不代表一定是樂句結尾)。
@@ -2165,10 +2165,11 @@ function detectPhraseBoundaries(){
 function buildRubatoMap(){
   rubatoMap = [];
   if (!events.length) return;
-  const ARCH_AMOUNT = 0.07;        // 樂句拱形中段加速幅度(+7%)
-  const PHRASE_END_MIN_MULT = 0.875; // 每個樂句結尾漸慢到原速的87.5%(85~90%溫和幅度的中點)。
-                                      // Repp(1992)分析Träumerei發現「每個樂段結尾」都有明顯漸慢,
-                                      // 不是只有整曲最後一個音才變慢,舊版公式漏掉了這個效果
+  const ARCH_AMOUNT = 0.12;        // 樂句拱形中段加速幅度(+12%)。實測發現前一版(7%)疊加伴奏
+                                    // 打三折、長音打折後,相鄰音符間隔的變化中位數只剩約5毫秒,
+                                    // 遠低於時間知覺研究裡「單一音符時間位移」的最基本可察覺
+                                    // 門檻(約10毫秒),等於大部分音符聽起來跟沒開沒兩樣,故調高
+  const PHRASE_END_MIN_MULT = 0.80;  // 每個樂句結尾漸慢到原速的80%(原本87.5%,同樣理由調深)
   const PHRASE_END_EASE_POW = 3;     // 冪次越大,漸慢越集中在樂句最後一小段,不會整句都在慢
   // 長音本身的時值已經帶有「呼吸感」,樂句結尾漸慢不該再疊加在已經很長的音上,否則長音會被
   // 不成比例地拉得更長(百分比乘在本來就大的間距上,增加的絕對秒數自然遠大於短音)。用這首曲子
@@ -2178,7 +2179,7 @@ function buildRubatoMap(){
   const RITARD_Q = 2.2;        // 跑者煞停模型的冪次(Friberg & Sundberg論文常見範圍1.5~2.7)
   const RITARD_SPAN_WHOLE = 1; // 結尾/fermata前多少全音符範圍內開始漸慢(約一小節)
   const RITARD_MIN_MULT = 0.4; // 全曲結尾/fermata的結構性漸慢,最多放慢到原速的40%
-  const AGOGIC_AMOUNT = 0.05;  // 重音/延長記號的音值重音幅度
+  const AGOGIC_AMOUNT = 0.08;  // 重音/延長記號的音值重音幅度(同樣理由調高)
   const JITTER_AMOUNT = 0.015; // 微幅隨機抖動(±1.5%)
   // 流行歌編曲常見的織度是:右手主旋律像人聲一樣自由伸縮,左手則是分解和絃/固定音型負責撐住
   // 律動(groove)。伴奏聲部如果跟著旋律的樂句呼吸一起大幅度伸縮,律動感就會不見,聽起來不像
