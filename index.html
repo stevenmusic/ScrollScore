@@ -2064,6 +2064,9 @@ function useCalib(){ return $("useCalibration").checked && calibrationMap.length
    1) 樂句拱形(phrase arch):Todd(1985)、KTH規則系統(Friberg/Bresin/Sundberg)的Phrase Arch
       規則——樂句中段稍微加快,結尾則有明確的漸慢(Repp 1992分析Träumerei發現「每個樂段結尾」
       都有明顯漸慢,不是只有整曲最後一個音才變慢),幅度預設走溫和路線(結尾約原速的85~90%)。
+      注意:樂句結尾漸慢對本身已經是長音的音符會按比例打折——長音自己的時值已經有呼吸感,
+      不該再疊加百分比式的漸慢(百分比乘在本來就大的間距上,增加的絕對秒數會遠大於短音,
+      造成「只要是長音就被拉得特別長」的失真,長音不代表一定是樂句結尾)。
    2) 結尾漸慢(final ritardando):Friberg & Sundberg(1999)用跑者煞停的運動學實測,推導出結尾
       漸慢近似冪次曲線 v(x)=(1-x)^q,套用在整首曲子結尾以及樂譜上的fermata記號前。
    3) 音值重音(agogic accent):Repp(1992)分析Schumann《夢幻曲》28個錄音版本,發現重拍或被
@@ -2139,6 +2142,11 @@ function buildRubatoMap(){
                                       // Repp(1992)分析Träumerei發現「每個樂段結尾」都有明顯漸慢,
                                       // 不是只有整曲最後一個音才變慢,舊版公式漏掉了這個效果
   const PHRASE_END_EASE_POW = 3;     // 冪次越大,漸慢越集中在樂句最後一小段,不會整句都在慢
+  // 長音本身的時值已經帶有「呼吸感」,樂句結尾漸慢不該再疊加在已經很長的音上,否則長音會被
+  // 不成比例地拉得更長(百分比乘在本來就大的間距上,增加的絕對秒數自然遠大於短音)。用這首曲子
+  // 自己的音符時值中位數當基準,音符比基準長就按比例調降漸慢幅度,基準以下(一般短音)不受影響
+  const noteDurs = events.map(ev => ev.notes.length ? Math.max(...ev.notes.map(n => n.durWhole || 0)) : 0).filter(d => d > 0).sort((a, b) => a - b);
+  const medianDurWhole = noteDurs.length ? noteDurs[Math.floor(noteDurs.length / 2)] : 0.125;
   const RITARD_Q = 2.2;        // 跑者煞停模型的冪次(Friberg & Sundberg論文常見範圍1.5~2.7)
   const RITARD_SPAN_WHOLE = 1; // 結尾/fermata前多少全音符範圍內開始漸慢(約一小節)
   const RITARD_MIN_MULT = 0.4; // 全曲結尾/fermata的結構性漸慢,最多放慢到原速的40%
@@ -2169,7 +2177,9 @@ function buildRubatoMap(){
     const ev = events[i];
     const x = posInPhrase[i] || 0;
     const archMult = 1 + ARCH_AMOUNT * Math.sin(Math.PI * x); // 樂句中段加速
-    const phraseEndRitard = 1 - (1 - PHRASE_END_MIN_MULT) * Math.pow(x, PHRASE_END_EASE_POW); // 樂句結尾漸慢
+    const ownDurWhole = ev.notes.length ? Math.max(...ev.notes.map(nn => nn.durWhole || 0)) : medianDurWhole;
+    const lenDampen = Math.min(1, medianDurWhole / Math.max(ownDurWhole, medianDurWhole));
+    const phraseEndRitard = 1 - (1 - PHRASE_END_MIN_MULT) * Math.pow(x, PHRASE_END_EASE_POW) * lenDampen; // 樂句結尾漸慢(對長音打折)
     let mult = archMult * phraseEndRitard;
     while (ritardPtr < ritardTargets.length - 1 && ritardTargets[ritardPtr] < ev.tWhole) ritardPtr++;
     const ritardDist = Math.max(0, ritardTargets[ritardPtr] - ev.tWhole);
