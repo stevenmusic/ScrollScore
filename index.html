@@ -2086,7 +2086,14 @@ function rubatoEnabled(){ const el = $("useRubato"); return !!(el && el.checked 
    - Proximity rule:邊界強度 s(i) = x[i] * (r(i-1) + r(i)),讓「這段本身夠大」且「前後變化夠大」
      的地方邊界強度才高,避免在等距離的音群中間隨便切
    三個面向正規化到[0,1]後,以 IOI/休止的知覺權重高於單純音高(LBDM文獻對節奏面向較敏感的
-   一致結論)加權合併,取強度落在前25%且是局部峰值的位置當作邊界。 */
+   一致結論)加權合併,取強度落在前25%且是局部峰值的位置當作邊界。
+   另外用非最大值抑制(non-maximum suppression):琶音、分解和弦這類連續音型,音高本身雖然
+   一直在跳、每一步都會讓 change rule 抓到一點變化,但那是同一個音型內部的正常波動,不代表
+   每隔幾個音就換了一個新樂句。如果沒有這一步,像這樣的連續音型會被切成一串三、四個音的
+   碎片樂句,每個碎片結尾都各自觸發一次漸慢,聽起來就會變成連續音符中間一直在「煞車」。
+   做法:同一個窗口(MIN_PHRASE_LEN)內只留邊界強度最高的一個,不會讓真的很短的樂句(強度
+   夠突出)被壓掉,但擋掉密集出現、強度普通的邊界。樂譜上明確的證據(fermata/圓滑線結尾)
+   不受這個窗口限制,因為那是直接來自樂譜本身、比任何數值強度都可靠。 */
 function detectPhraseBoundaries(){
   const n = events.length;
   const topMidi = events.map(ev => {
@@ -2124,11 +2131,23 @@ function detectPhraseBoundaries(){
   const strengths = S.slice(1, n - 1).filter(v => v > 0).sort((a, b) => a - b);
   const threshold = strengths.length ? strengths[Math.floor(strengths.length * 0.75)] : Infinity;
 
-  const starts = [0];
+  const candidates = [];
   for (let i = 1; i < n - 1; i++) {
     const isPeak = S[i] >= S[i - 1] && S[i] >= S[i + 1] && S[i] >= threshold;
     const explicit = (events[i - 1].artic && events[i - 1].artic.fermata) || slurEndAt.has(i);
-    if (isPeak || explicit) starts.push(i);
+    if (isPeak || explicit) candidates.push({ idx: i, strength: explicit ? Infinity : S[i] });
+  }
+  const MIN_PHRASE_LEN = 6; // 同一個窗口內只留最強的邊界,避免琶音/分解和弦被切成一串短碎片樂句
+  const starts = [0];
+  let lastIdx = 0, lastStrength = -Infinity;
+  for (const c of candidates) {
+    if (c.idx - lastIdx >= MIN_PHRASE_LEN || c.strength === Infinity) {
+      starts.push(c.idx);
+      lastIdx = c.idx; lastStrength = c.strength;
+    } else if (c.strength > lastStrength && lastStrength !== Infinity && starts.length > 1) {
+      starts[starts.length - 1] = c.idx; // 跟前一個邊界太近,誰比較強就留誰
+      lastIdx = c.idx; lastStrength = c.strength;
+    }
   }
   starts.push(n);
   return starts;
