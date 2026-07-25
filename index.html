@@ -3434,14 +3434,24 @@ function playSampledInstrument(instKey, freq, when, dur, legato, pedal, chordAnc
   } else {
     g.gain.setValueAtTime(peakGain, when);
   }
-  /* 鋼琴的弦是「敲下去之後就一路自然衰減」,不是像管風琴那樣維持同一個音量到放開為止。
-     原本的寫法是撐在滿音量直到 sustain 的 90%(holdRatio)才開始掉,踏板段落因此會變成
-     幾十個音同時都停在接近滿音量上,聽起來糊、而且相加後直接破音(實測踏板段落有60個聲部
-     同時發聲)。改成從起音之後就持續衰減到 SUSTAIN_DECAY_TO,長殘響仍然聽得到(豐滿感保留),
-     但比較舊的音會自然退到背景,不會每個都跟最新彈下去的音一樣大聲。 */
-  const SUSTAIN_DECAY_TO = 0.32;
-  const decayEnd = when + Math.max(sustain, 0.02);
-  g.gain.exponentialRampToValueAtTime(Math.max(0.0002, peakGain * SUSTAIN_DECAY_TO), decayEnd);
+  /* 音量包絡分兩種,不能一視同仁:
+     - 敲擊/撥弦類(鋼琴、吉他):弦被敲下去之後就一路自然衰減。原本撐在滿音量直到 sustain 的
+       90% 才掉,踏板段落會變成幾十個音同時停在接近滿音量,糊且相加後破音(實測60個聲部同時發聲)。
+     - 拉弦/吹奏類(小提琴、大提琴、長笛):只要弓還在拉、氣還在吹,音量是穩定持續的,
+       不會自己衰減。先前誤把衰減套用到這些樂器上,長音會自己愈來愈小聲,明顯不自然。
+     另外衰減速度必須是「每秒固定比例」,而不是「不管多長都在音符結束時剛好衰減到某個比例」——
+     後者會讓短音衰減得快、長音衰減得慢,同一台鋼琴上不該有這種差異,聽起來會忽快忽慢很不一致。
+     這裡用固定時間常數 DECAY_TAU:同樣音高不管寫多長,每秒衰減的比例都一樣。 */
+  const DECAYING = instKey === "piano" || instKey === "guitar" || instKey === "guitarnylon";
+  const DECAY_TAU = 2.2; // 秒:約每 2.2 秒衰減到 37%,接近真實鋼琴中音域的衰減速度
+  const attackEnd = attackSec > 0.005 ? when + attackSec : when;
+  const decayEnd = Math.max(when + Math.max(sustain, 0.02), attackEnd + 0.005);
+  if (DECAYING) {
+    const endLevel = Math.max(0.06, Math.exp(-(decayEnd - when) / DECAY_TAU));
+    g.gain.exponentialRampToValueAtTime(Math.max(0.0002, peakGain * endLevel), decayEnd);
+  } else {
+    g.gain.setValueAtTime(peakGain, decayEnd); // 弓弦/吹奏:發聲期間維持穩定音量
+  }
   g.gain.exponentialRampToValueAtTime(0.0001, decayEnd + tail);
   // 泛音/悶音的音色調整:泛音濾掉較多高頻讓聲音更純淨清亮,悶音濾掉更多高頻讓聲音變暗悶
   let filterNode = null;
@@ -3656,10 +3666,11 @@ function schedulePiano(freq, when, dur, legato, pedal, harmonyEndSec, artic){
   ({ sustain, peakGain: peak } = applyArticulation(sustain, peak, dur, artic));
   g.gain.setValueAtTime(0, when);
   g.gain.linearRampToValueAtTime(peak, when + 0.012);
-  // 同取樣路徑:鋼琴弦是持續自然衰減,不是撐在同一個音量。踏板段落靠這個衰減才不會
-  // 幾十個音全都停在滿音量而糊成一團(細節見 playSampledInstrument 內的說明)
+  // 同取樣路徑:鋼琴弦是持續自然衰減,而且衰減速度是每秒固定比例(短音長音都一樣),
+  // 不是「不管多長都在結束時剛好掉到某個比例」(細節見 playSampledInstrument 內的說明)
   const synthDecayEnd = when + Math.max(sustain, 0.02);
-  g.gain.exponentialRampToValueAtTime(Math.max(0.0002, peak * 0.32), synthDecayEnd);
+  const synthEndLevel = Math.max(0.06, Math.exp(-(synthDecayEnd - when) / 2.2));
+  g.gain.exponentialRampToValueAtTime(Math.max(0.0002, peak * synthEndLevel), synthDecayEnd);
   g.gain.exponentialRampToValueAtTime(0.0001, synthDecayEnd + releaseTail);
   osc.connect(lp); osc2.connect(g2); g2.connect(lp);
   lp.connect(g); g.connect(masterGain);
