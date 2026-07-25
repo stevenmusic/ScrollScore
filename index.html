@@ -223,16 +223,12 @@ input[type=range]::-webkit-slider-thumb{
   #tempoUnitSuffix{display:none}
 }
 @media (max-width:600px){
-  header{padding:8px 10px;gap:6px 8px;flex-wrap:nowrap}
-  .header-left,.header-right{gap:6px}
-  /* 品牌名在手機上只在「還沒載入樂譜」時顯示。
-     還沒載入時播放/停止是隱藏的,頂欄很空,品牌名放得下也看得到(第一眼的品牌印象);
-     一旦載入樂譜,頂欄要同時容納 6 個 44px 觸控按鈕,再加品牌名就會被擠成兩三排、
-     吃掉約 50px 的樂譜高度(實測 105~111px),所以這時才收起來。
-     標題始終保留在 DOM 裡供螢幕報讀器辨識頁面 */
-  body.score-loaded header h1{
-    position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;
-  }
+  header{padding:8px 10px;gap:6px;flex-wrap:nowrap}
+  .header-left,.header-right{gap:5px}
+  /* 品牌名在手機上也常駐。要騰出它的寬度,就把它自己的字級收小(16px→13px,實測 99px→82px),
+     速度鈕的內距與字級也收一階,兩邊合起來剛好夠一排放下品牌名 + 4 個觸控鈕 + 速度鈕 */
+  header h1{font-size:var(--fs-sm);letter-spacing:.06em}
+  #tempoToggle{padding:0 8px;font-size:var(--fs-sm)}
   .btn{padding:0 10px;height:34px;font-size:var(--fs-sm)}
   .btn-label{display:none}
   .header-left .btn svg,#settingsToggle svg{margin:0}
@@ -249,6 +245,9 @@ input[type=range]::-webkit-slider-thumb{
 @media (max-width:380px){
   header{padding:6px 8px;gap:4px 6px}
   header h1{font-size:var(--fs-xs);letter-spacing:.02em}
+  /* 380px 以下連「BPM」三個字都放不下:留著的話載入樂譜後頂欄會換行,多吃 47px 的樂譜高度。
+     只留數字跟下拉箭頭,展開的速度面板裡仍然寫著「速度」,不會不知道那個數字是什麼 */
+  #tempoBpmLabel{display:none}
   .header-left,.header-right{gap:4px}
   .btn{padding:0 8px;height:32px}
   input[type=range]{width:48px}
@@ -262,7 +261,7 @@ input[type=range]::-webkit-slider-thumb{
    吃掉 50px 的樂譜高度),所以直接把品牌名稱收起來——按鈕是功能,標題只是裝飾,
    優先保住按鈕好按跟樂譜可視高度。標題仍留在 DOM 裡供螢幕報讀器辨識頁面 */
 @media (max-width:340px){
-  /* 320px 要塞下 6 個 44px 觸控目標,只能從間距跟內距擠出空間(不犧牲觸控目標大小) */
+  /* 320px 要塞下 5 個觸控目標加品牌名,只能從間距跟內距擠出空間(不犧牲觸控目標大小) */
   header{padding:8px 6px;gap:4px}
   .btn{padding:0 5px}
   .header-left,.header-right{gap:3px}
@@ -482,20 +481,6 @@ footer{
   font-size:var(--fs-2xs);color:var(--muted);line-height:1.7;margin:16px 0 14px;text-align:center;
 }
 #shortcutOverlay .btn{width:100%}
-/* ── 專注模式:收起上下列,把畫面高度全部留給樂譜 ───────────
-   跟「錄影模式」不同:錄影模式是為了螢幕錄影,會把樂譜背景轉成白色並自動倒數播放;
-   專注模式只是練習時把控制列收起來,維持原本的深色介面,播放狀態也不中斷 */
-body.focus-mode header, body.focus-mode footer{display:none}
-#exitFocus{
-  position:absolute;top:10px;right:10px;z-index:30;display:none;
-  width:40px;height:40px;border-radius:50%;
-  border:1px solid var(--gold);color:var(--gold);
-  background:rgba(22,18,9,.75);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
-  font-size:17px;line-height:1;cursor:pointer;
-  align-items:center;justify-content:center;
-}
-body.focus-mode #exitFocus{display:flex}
-body.recording #exitFocus{display:none} /* 錄影模式有自己的離開鈕,兩個不要疊在一起 */
 /* ── 錄影模式 ───────────────────── */
 body.recording header, body.recording footer{display:none}
 body.recording #stage{background:#FFFDF6}
@@ -643,26 +628,23 @@ input[type=file]{display:none}
       <span class="btn-label">載入樂譜</span>
     </button>
     <button class="btn" id="playBtn" disabled aria-label="播放">
-      <svg id="playIcon" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path id="playIcon" d="M8 5v14l11-7z"/></svg>
       <span id="playLabel" class="btn-label">播放</span>
     </button>
-    <button class="btn" id="stopBtn" disabled aria-label="停止">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
-      <span class="btn-label">停止</span>
+    <button class="btn" id="stopBtn" disabled aria-label="回到開頭" title="停止並回到樂曲開頭(Esc / R)">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2.6v12H6zm4.4 6l8.6 6V6z"/></svg>
+      <span class="btn-label">回到開頭</span>
     </button>
   </div>
   <div class="header-right">
     <div class="tempo-compact">
       <button class="btn" id="tempoToggle" aria-label="速度">
-        <span id="tempoDisplay">100 BPM</span><span id="tempoUnitSuffix"></span><span class="caret">▾</span>
+        <span id="tempoDisplay">100</span><span id="tempoBpmLabel"> BPM</span><span id="tempoUnitSuffix"></span><span class="caret">▾</span>
       </button>
       <div id="tempoPopover">
         <div class="tempo-box"><span class="tempo-label">速度</span> <input type="range" id="tempo" min="40" max="400" value="100" step="1"><input type="number" id="tempoVal" min="40" max="400" value="100"></div>
       </div>
     </div>
-    <button class="btn" id="focusToggle" aria-label="專注模式" title="專注模式:收起上下列,把畫面留給樂譜" disabled>
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 00-2 2v3M16 3h3a2 2 0 012 2v3M8 21H5a2 2 0 01-2-2v-3M16 21h3a2 2 0 002-2v-3"/></svg>
-    </button>
     <button class="btn" id="settingsToggle" aria-label="設定">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15a3 3 0 100-6 3 3 0 000 6z"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
       <span class="btn-label">設定</span>
@@ -782,7 +764,6 @@ input[type=file]{display:none}
   <div id="playline"></div>
   <div id="countdown">3</div>
   <button id="exitrec" title="離開錄影模式">✕</button>
-  <button id="exitFocus" title="離開專注模式(Esc)" aria-label="離開專注模式">✕</button>
   <div id="formatOverlay">
     <div class="box">
       <div class="title" id="fmtTitle">選擇匯出類型</div>
@@ -1219,7 +1200,7 @@ document.addEventListener("click", e => {
 // 單位提示(如"(附點四分音符)")拆成獨立的span,手機寬度時用CSS隱藏它——
 // 不然這段文字會讓速度按鈕變超寬,把旁邊的停止鈕、設定鈕擠到自動換行,版面就跑掉了
 function syncTempoDisplay(){
-  $("tempoDisplay").textContent = rawTempo() + " BPM";
+  $("tempoDisplay").textContent = String(rawTempo());
   $("tempoUnitSuffix").textContent = tempoDisplayUnitLabel ? " " + tempoDisplayUnitLabel : "";
 }
 async function loadScoreFile(file){
@@ -1587,7 +1568,6 @@ async function renderScore(xmlText){
   $("stopBtn").disabled = false;
   $("recBtn").disabled = false;
   $("exportBtn").disabled = false;
-  $("focusToggle").disabled = false;
   // 原本這裡只是把「請先載入樂譜」移除;現在改成換上真正的說明,
   // 因為面板裡那段解說文字已經拿掉了(太佔手機版面),說明改由 tooltip 承載
   $("recBtn").title = "清空畫面成純樂譜視圖,方便你自行用手機/電腦內建的螢幕錄影工具錄製";
@@ -2892,18 +2872,6 @@ for (const id of ["cursorColor","cursorOpacity"]) {
 $("reverbAmount").addEventListener("input", applyReverbAmount);
 $("measureHl").addEventListener("change", applyHighlightStyles);
 
-/* 專注模式:把上下列收起來,樂譜可視高度變大。播放中切換不會中斷播放,
-   切換後要重算鍵盤畫布跟播放軸範圍,因為可用高度變了 */
-function setFocusMode(on){
-  document.body.classList.toggle("focus-mode", on);
-  resizeKeyboardCanvas();
-  drawKeyboardLive(playing ? currentSec() : pausedAtSec);
-  updatePlaylineExtent();
-  if (!playing) resetScroll();
-}
-$("focusToggle").addEventListener("click", () => setFocusMode(true));
-$("exitFocus").addEventListener("click", () => setFocusMode(false));
-
 /* 快捷鍵對照表:點 footer 的鍵盤圖示打開(手機沒有 hover,tooltip 等於看不到) */
 function openShortcuts(){ $("shortcutOverlay").classList.add("show"); }
 function closeShortcuts(){ $("shortcutOverlay").classList.remove("show"); }
@@ -2920,10 +2888,6 @@ document.addEventListener("keydown", e => {
   if ($("shortcutOverlay").classList.contains("show")) {
     if (e.code === "Escape") { e.preventDefault(); closeShortcuts(); }
     return;
-  }
-  // 專注模式下 Esc 是「離開專注模式」,不是停止播放(跟離開鈕的提示一致)
-  if (document.body.classList.contains("focus-mode") && e.code === "Escape") {
-    e.preventDefault(); setFocusMode(false); return;
   }
   if (document.body.classList.contains("recording") || exporting) return;
   if ($("formatOverlay").classList.contains("show") || $("exportOverlay").classList.contains("show")) return;
