@@ -560,13 +560,18 @@ input[type=file]{display:none}
   font-family:"Noto Serif TC",serif;font-size:var(--fs-xl);color:var(--gold);
   letter-spacing:.1em;margin-bottom:18px;
 }
+/* 匯出流程的選項卡。每一步的選項數量、說明字數都不一樣,如果讓內容自己撐高度,
+   一行說明的卡片 67px、兩行的 85px、沒有說明的只有 49px,同一個對話框裡看起來像三種元件。
+   固定最小高度 + 說明文字統一一行,不管在哪一步、選項有幾個,卡片大小都一致 */
 .fmt{
   display:flex;align-items:center;gap:14px;width:100%;
-  padding:13px 16px;margin-bottom:12px;border-radius:var(--radius-md);
+  min-height:66px;box-sizing:border-box;
+  padding:12px 16px;margin-bottom:12px;border-radius:var(--radius-md);
   border:1px solid var(--line);background:var(--bg);color:var(--ivory);
   font-family:inherit;font-size:var(--fs-md);text-align:left;cursor:pointer;
   transition:border-color .2s;
 }
+.fmt > span:last-child{flex:1;min-width:0}
 .fmt:active{border-color:var(--gold)}
 .range-time-input{
   flex:1;background:var(--bg);color:var(--gold-bright);border:1px solid var(--line);
@@ -580,12 +585,15 @@ input[type=file]{display:none}
   text-align:center;text-align-last:center;font-variant-numeric:tabular-nums;
 }
 .range-time-select:focus{outline:none;border-color:var(--gold)}
-.fmt b{color:var(--gold-bright);font-size:var(--fs-lg)}
-.fmt small{color:var(--muted);font-size:var(--fs-xs)}
-.ratio{border:1.5px solid var(--gold);border-radius:3px;flex:none}
-.ratio-l{width:34px;height:19px}
-.ratio-p{width:19px;height:34px;margin:0 7.5px}
-.ratio-s{width:27px;height:27px;margin:0 3.5px}
+.fmt b{color:var(--gold-bright);font-size:var(--fs-lg);display:block;line-height:1.35}
+.fmt small{color:var(--muted);font-size:var(--fs-xs);display:block;line-height:1.4}
+/* 比例縮圖大小本來就不一樣(橫的扁、直的高),以前是用不同的左右 margin 硬湊齊。
+   改成固定 34×34 的框、縮圖在裡面置中,三個選項的文字左緣才會真的對齊 */
+.ratio-slot{width:34px;height:34px;flex:none;display:flex;align-items:center;justify-content:center}
+.ratio{border:1.5px solid var(--gold);border-radius:3px;flex:none;box-sizing:border-box}
+.ratio-l{width:34px;height:20px}
+.ratio-p{width:20px;height:34px}
+.ratio-s{width:27px;height:27px}
 /* ── 匯出預覽 ───────────────────── */
 #previewOverlay{
   /* fixed(而非absolute)是因為這層原本嵌套在 #stage 裡,#stage 本身受 flex 版面限制、
@@ -768,10 +776,10 @@ input[type=file]{display:none}
       <div class="title" id="fmtTitle">選擇匯出類型</div>
       <div id="fmtStepType" class="fmt-step">
         <button class="fmt" id="fmtTypeScore">
-          <span><b>純樂譜</b><br><small>滿版1920×1080 或 1080×1920</small></span>
+          <span><b>純樂譜</b><small>整個畫面只有樂譜</small></span>
         </button>
         <button class="fmt" id="fmtTypeWithKeyboard">
-          <span><b>樂譜+樂器</b><br><small>畫面下方加上鍵盤或鼓組面板高亮顯示(依照樂器選單而定)</small></span>
+          <span><b>樂譜+樂器</b><small>下方加上鍵盤/鼓組高亮</small></span>
         </button>
         <button class="btn" id="fmtCancel">取消</button>
       </div>
@@ -800,9 +808,9 @@ input[type=file]{display:none}
         <button class="btn primary" id="fmtNextFromRange" style="margin-top:10px">下一步</button>
       </div>
       <div id="fmtStepAlign" class="fmt-step" style="display:none">
-        <button class="fmt" id="alignTop"><span><b>樂譜靠上</b></span></button>
-        <button class="fmt" id="alignCenter"><span><b>樂譜靠中</b></span></button>
-        <button class="fmt" id="alignBottom"><span><b>樂譜靠下</b></span></button>
+        <button class="fmt" id="alignTop"><span><b>樂譜靠上</b><small>下方留白</small></span></button>
+        <button class="fmt" id="alignCenter"><span><b>樂譜靠中</b><small>上下等距置中</small></span></button>
+        <button class="fmt" id="alignBottom"><span><b>樂譜靠下</b><small>上方留白</small></span></button>
         <button class="btn" id="fmtBackFromAlign">返回</button>
       </div>
       <div id="fmtStepBrand" class="fmt-step" style="display:none">
@@ -829,16 +837,16 @@ input[type=file]{display:none}
       </div>
       <div id="fmtStepFormat" class="fmt-step" style="display:none">
         <button class="fmt" id="fmtLandscape">
-          <span class="ratio ratio-l"></span>
-          <span><b>橫式 1920 × 1080</b><br><small>YouTube 影片</small></span>
+          <span class="ratio-slot"><span class="ratio ratio-l"></span></span>
+          <span><b>橫式 1920 × 1080</b><small>YouTube 影片</small></span>
         </button>
         <button class="fmt" id="fmtPortrait">
-          <span class="ratio ratio-p"></span>
-          <span><b>直式 1080 × 1920</b><br><small>Shorts / Reels / TikTok</small></span>
+          <span class="ratio-slot"><span class="ratio ratio-p"></span></span>
+          <span><b>直式 1080 × 1920</b><small>Shorts / Reels / TikTok</small></span>
         </button>
         <button class="fmt" id="fmtSquare">
-          <span class="ratio ratio-s"></span>
-          <span><b>正方形 1080 × 1080</b><br><small>Instagram 貼文 / Facebook</small></span>
+          <span class="ratio-slot"><span class="ratio ratio-s"></span></span>
+          <span><b>正方形 1080 × 1080</b><small>Instagram 貼文 / Facebook</small></span>
         </button>
         <button class="btn" id="fmtBackFromFormat">返回</button>
       </div>
@@ -2359,7 +2367,13 @@ function useCalib(){ return $("useCalibration").checked && calibrationMap.length
    rubatoMap 存的是「彈性速度換算後的等效全音符座標」而非秒數,實際秒數仍透過 wholeToSec()
    依目前的tempo滑桿計算,所以调整tempo不需要重建這張表。 */
 let rubatoMap = []; // [{orig: 原始tWhole, warped: 換算後的等效全音符座標}],依orig遞增排序
-function rubatoEnabled(){ const el = $("useRubato"); return !!(el && el.checked && rubatoMap.length >= 2); }
+/* 匯入音檔時一律關掉彈性速度,理由跟速度滑桿被鎖住一樣:音檔是照它自己的原始速度線性播放的,
+   而彈性速度只會扭曲樂譜捲動/游標/鍵盤高亮的時間軸,兩邊會愈走愈開(實測使用者的曲子最多差
+   2.6 秒)。要跟真實錄音對齊應該用「校準」tap-along 功能,而不是彈性速度。 */
+function rubatoEnabled(){
+  const el = $("useRubato");
+  return !!(el && el.checked && !importedAudioBuffer && rubatoMap.length >= 2);
+}
 
 /* Local Boundary Detection Model(LBDM,Cambouropoulos 2001):針對音高音程、IOI(音符間距)、
    休止 三個面向各自算出一條「音程序列」,再用同一套規則抓出「變化劇烈」的位置(而不是絕對值
@@ -2416,14 +2430,32 @@ function detectPhraseBoundaries(){
   const candidates = [];
   for (let i = 1; i < n - 1; i++) {
     const isPeak = S[i] >= S[i - 1] && S[i] >= S[i + 1] && S[i] >= threshold;
-    const explicit = (events[i - 1].artic && events[i - 1].artic.fermata) || slurEndAt.has(i);
-    if (isPeak || explicit) candidates.push({ idx: i, strength: explicit ? Infinity : S[i] });
+    // fermata 是樂譜上明確的「停下來」,一定是樂句邊界,不受任何最短長度限制。
+    // 圓滑線結尾則不然——鋼琴譜上兩三個音的小圓滑線只是圓滑奏的articulation,
+    // 不代表一個樂句結束,所以只當成很強的候選,仍要通過下面的最短長度檢查。
+    const isFermata = !!(events[i - 1].artic && events[i - 1].artic.fermata);
+    const isSlurEnd = slurEndAt.has(i);
+    if (isPeak || isFermata || isSlurEnd) {
+      candidates.push({ idx: i, hard: isFermata, strength: isFermata ? Infinity : (isSlurEnd ? 1 : S[i]) });
+    }
   }
-  const MIN_PHRASE_LEN = 6; // 同一個窗口內只留最強的邊界,避免琶音/分解和弦被切成一串短碎片樂句
+  // 最短樂句限制必須用「音樂時間」而不是「事件個數」。實測使用者的曲子:事件門檻設 6 個時,
+  // 十六分音符密集段落裡 6 個事件只有 0.375 全音符(4/4 拍的 1.5 拍),於是整首 33 個樂句裡有
+  // 21 個短於一小節、9 個短於一拍——等於每一拍半就觸發一次樂句結尾漸慢,速度倍率在相鄰音符間
+  // 反覆 1.01 → 0.79 → 1.01(±25%),聽起來不是呼吸而是一跛一跛。同樣的 6 個事件放在稀疏的
+  // 抒情段落又可能橫跨四小節,同一個門檻在不同織度下代表完全不同的音樂長度。
+  // Todd(1985)、KTH Phrase Arch 規則的樂句拱形本來就是套在「樂句」層級(流行歌通常 2~8 小節),
+  // 不是套在拍或動機層級,所以這裡改成:至少跨一小節,而且至少 4 個事件。
+  const barWhole = (scoreTimeSig && scoreTimeSig.beats > 0 && scoreTimeSig.beatType > 0)
+    ? scoreTimeSig.beats / scoreTimeSig.beatType : 1;
+  const MIN_PHRASE_WHOLE = barWhole;
+  const MIN_PHRASE_EVENTS = 4;
   const starts = [0];
   let lastIdx = 0, lastStrength = -Infinity;
   for (const c of candidates) {
-    if (c.idx - lastIdx >= MIN_PHRASE_LEN || c.strength === Infinity) {
+    const farEnough = (c.idx - lastIdx) >= MIN_PHRASE_EVENTS &&
+      (events[c.idx].tWhole - events[lastIdx].tWhole) >= MIN_PHRASE_WHOLE - 1e-6;
+    if (farEnough || c.hard) {
       starts.push(c.idx);
       lastIdx = c.idx; lastStrength = c.strength;
     } else if (c.strength > lastStrength && lastStrength !== Infinity && starts.length > 1) {
@@ -2433,6 +2465,29 @@ function detectPhraseBoundaries(){
   }
   starts.push(n);
   return starts;
+}
+
+/* 微幅時間抖動用的 1/f(粉紅)雜訊,而不是每個音各自獨立的白雜訊。
+   人類演奏的時間偏差不是相互獨立的隨機值:Gilden、Thornton & Mallon(1995)以及
+   Hennig 等人(2011, PNAS)量測到人在打拍/演奏時的偏差帶有長程相關性(1/f 特性),
+   Hennig 等人後續的聽感實驗(2012, PLoS ONE)也顯示,用長程相關雜訊「人性化」過的節奏,
+   聽眾評為比用白雜訊人性化的版本更自然。白雜訊的問題在於相鄰音符會拿到完全無關的偏移量,
+   聽起來是「不穩」而不是「有呼吸」;1/f 雜訊則是慢慢飄移,相鄰音符幾乎一致,整段的速度感
+   會像人一樣輕微起伏。這裡用四個倍頻的平滑值雜訊疊加近似 1/f:最低的倍頻約兩個全音符
+   變化一次,每高一個倍頻速度加倍、幅度減半。用既有的 seededRand01,同一首曲子可重現。 */
+function pinkNoiseAt(tWhole){
+  let v = 0, amp = 1, norm = 0, scale = 0.5;
+  for (let o = 0; o < 4; o++) {
+    const x = tWhole * scale + o * 37.13;
+    const i0 = Math.floor(x), f = x - i0;
+    const a = seededRand01(i0 * 1.618 + o * 911.3) - 0.5;
+    const b = seededRand01((i0 + 1) * 1.618 + o * 911.3) - 0.5;
+    const s = f * f * (3 - 2 * f); // smoothstep:避免折線轉折處產生突變
+    v += (a + (b - a) * s) * amp;
+    norm += amp;
+    amp *= 0.5; scale *= 2;
+  }
+  return v / norm; // 約 [-0.5, 0.5]
 }
 
 function buildRubatoMap(){
@@ -2462,19 +2517,49 @@ function buildRubatoMap(){
   // 全曲結尾/fermata的結構性大漸慢不受此限制,因為那是整個樂團(雙手)一起放慢的完整停止動作。
   const MELODY_STAFF = 1;
   const ACCOMP_DAMPEN = 0.3;
+  // 但「這個時間點有沒有旋律音」是個 0/1 的訊號,而且翻轉得很頻繁(實測使用者的曲子有 23%
+  // 的相鄰事件會翻轉)。直接拿它當權重,等於樂句拱形與樂句結尾漸慢的幅度在音符之間反覆開關,
+  // 在漸慢區段裡會產生 0.80 ↔ 1.00 的來回跳動,那不是伴奏穩住律動,是一跛一跛。
+  // 真實演奏裡雙手是一起呼吸的,只是伴奏織度為主的段落整體伸縮幅度比較小——所以改成在
+  // ±MELODY_SMOOTH_WHOLE 的時間窗內取旋律音出現的比例:整段有旋律的地方權重接近 1,
+  // 純伴奏的過門/間奏才降到 ACCOMP_DAMPEN,中間平滑過渡,不會逐音切換。
+  const MELODY_SMOOTH_WHOLE = 0.5; // 約兩拍(4/4)
+  const melodyRaw = events.map(ev => ev.notes.some(nn => nn.freq && (nn.staff || 1) === MELODY_STAFF) ? 1 : 0);
+  const melodyWeights = new Array(events.length);
+  {
+    let lo = 0, hi = 0, sum = 0;
+    for (let i = 0; i < events.length; i++) {
+      const t = events[i].tWhole;
+      while (hi < events.length && events[hi].tWhole <= t + MELODY_SMOOTH_WHOLE) { sum += melodyRaw[hi]; hi++; }
+      while (lo < hi && events[lo].tWhole < t - MELODY_SMOOTH_WHOLE) { sum -= melodyRaw[lo]; lo++; }
+      const frac = hi > lo ? sum / (hi - lo) : melodyRaw[i];
+      melodyWeights[i] = ACCOMP_DAMPEN + (1 - ACCOMP_DAMPEN) * frac;
+    }
+  }
 
-  // 段落太短(少於3個音)就併入前一段,避免拱形曲線太誇張
+  // 段落太短就併入前一段,避免拱形曲線太誇張。同樣要看音樂時間而不是只看音符個數:
+  // fermata 造成的邊界不受最短長度限制,所以這裡還是可能收到很短的段落
+  const barWholeForPhrase = (scoreTimeSig && scoreTimeSig.beats > 0 && scoreTimeSig.beatType > 0)
+    ? scoreTimeSig.beats / scoreTimeSig.beatType : 1;
   const phraseStarts = detectPhraseBoundaries();
   const phrases = [];
   for (let i = 0; i < phraseStarts.length - 1; i++) {
     const s = phraseStarts[i], e = phraseStarts[i + 1];
-    if (phrases.length && (e - s) < 3) phrases[phrases.length - 1].end = e;
+    const spanWhole = (events[e] ? events[e].tWhole : totalWhole) - events[s].tWhole;
+    const tooShort = (e - s) < 3 || spanWhole < barWholeForPhrase * 0.5;
+    if (phrases.length && tooShort) phrases[phrases.length - 1].end = e;
     else phrases.push({ start: s, end: e });
   }
+  // 樂句內的位置要用「音樂時間」算,不能用第幾個音符算。Todd(1985)的樂句拱形模型本來就是
+  // 把速度寫成樂譜時間位置的函數;用音符序號的話,同一個樂句裡只要織度不平均(前半是十六分音符
+  // 跑動、後半是長音),序號的中點就會落在時間上的很前面,拱形的頂點跟結尾漸慢都會落錯位置——
+  // 尤其會讓一整串短音符從中途就開始被漸慢曲線煞車。
   const posInPhrase = new Array(events.length);
   for (const ph of phrases) {
-    const span = Math.max(1, ph.end - ph.start - 1);
-    for (let i = ph.start; i < ph.end; i++) posInPhrase[i] = (i - ph.start) / span;
+    const t0 = events[ph.start].tWhole;
+    const t1 = events[ph.end] ? events[ph.end].tWhole : totalWhole;
+    const span = Math.max(1e-6, t1 - t0);
+    for (let i = ph.start; i < ph.end; i++) posInPhrase[i] = Math.min(1, (events[i].tWhole - t0) / span);
   }
 
   // 結尾漸慢的目標點:曲子真正的結尾,以及樂譜上每一個fermata
@@ -2486,8 +2571,7 @@ function buildRubatoMap(){
   function localTempoMult(i){
     const ev = events[i];
     const x = posInPhrase[i] || 0;
-    const isMelody = ev.notes.some(nn => nn.freq && (nn.staff || 1) === MELODY_STAFF);
-    const melodyWeight = isMelody ? 1 : ACCOMP_DAMPEN;
+    const melodyWeight = melodyWeights[i];
     const archMult = 1 + ARCH_AMOUNT * Math.sin(Math.PI * x) * melodyWeight; // 樂句中段加速
     const ownDurWhole = ev.notes.length ? Math.max(...ev.notes.map(nn => nn.durWhole || 0)) : medianDurWhole;
     const lenDampen = Math.min(1, medianDurWhole / Math.max(ownDurWhole, medianDurWhole));
@@ -2503,7 +2587,7 @@ function buildRubatoMap(){
     }
     const a = ev.artic;
     if (a && (a.tenuto || a.fermata || a.accent || a.strongAccent)) mult *= (1 - AGOGIC_AMOUNT);
-    const jitter = 1 + (seededRand01(ev.tWhole * 53.73 + 707) - 0.5) * 2 * JITTER_AMOUNT;
+    const jitter = 1 + pinkNoiseAt(ev.tWhole) * 2 * JITTER_AMOUNT;
     mult *= jitter;
     return Math.max(0.4, Math.min(1.7, mult));
   }
@@ -4101,6 +4185,8 @@ $("audioImportFile").addEventListener("change", async e => {
     $("tempo").title = "已匯入音檔,速度固定使用音檔原始速度,不受此滑桿影響";
     $("tempoVal").disabled = true;
     $("tempoVal").title = $("tempo").title;
+    $("useRubato").disabled = true;
+    $("useRubato").closest(".switch-row").title = "已匯入音檔,彈性速度會讓樂譜捲動與音檔愈走愈不同步,因此暫時停用";
     if (playing) { stopAudioOnly(); startAudioFrom(currentSec()); }
   } catch (err) {
     setStatus("音檔讀取失敗:" + (err.message || err));
@@ -4116,6 +4202,8 @@ $("audioImportClearBtn").addEventListener("click", () => {
   $("tempo").title = "";
   $("tempoVal").disabled = false;
   $("tempoVal").title = "";
+  $("useRubato").disabled = false;
+  $("useRubato").closest(".switch-row").title = "模擬真人彈奏的節奏彈性(樂句抑揚、結尾漸慢、重音拉長),而非機械式的固定拍點。套用在整首曲子共用的主時間軸上,所有樂器/雙手會一起呼吸伸縮";
   if (playing) { stopAudioOnly(); startAudioFrom(currentSec()); }
 });
 
