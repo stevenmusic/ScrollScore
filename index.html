@@ -2190,10 +2190,15 @@ function buildRubatoMap(){
   const noteDurs = events.map(ev => ev.notes.length ? Math.max(...ev.notes.map(n => n.durWhole || 0)) : 0).filter(d => d > 0).sort((a, b) => a - b);
   const medianDurWhole = noteDurs.length ? noteDurs[Math.floor(noteDurs.length / 2)] : 0.125;
   const RITARD_Q = 2.2;        // 跑者煞停模型的冪次(Friberg & Sundberg論文常見範圍1.5~2.7)
-  // 結尾/fermata前多少全音符範圍內開始漸慢。原本只有1(約一小節),落在範圍內的音符太少,
-  // 漸慢只被取樣到一兩個點,聽起來像突然煞車;放寬到2(約2~3小節)讓更多音符參與這段漸慢。
-  // 但不能超過整首曲子長度的15%,否則很短的片段(例如只有一兩小節的測試檔)會整首都在漸慢
-  const RITARD_SPAN_WHOLE = Math.min(2, Math.max(0.5, totalWhole * 0.15));
+  /* 結尾/fermata 漸慢的範圍。這裡不能用固定的音樂長度,要看「這段裡面有幾個音符」:
+     漸慢是靠一個一個音符去呈現的,範圍內只有一兩個音的話,再平滑的曲線也只會被取樣到一兩個點,
+     聽起來還是「平穩→突然煞停」。實測使用者的曲子(結尾是一個長和絃)用固定1全音符的範圍時,
+     範圍內只框到 1 個音,最後兩音之間直接從 0.968 掉到 0.401。
+     所以改成:往回涵蓋至少 RITARD_MIN_NOTES 個音符,但仍夾在 [0.75, 2] 全音符之間——
+     音符密集的結尾範圍自然會短(不拖),稀疏的結尾才會自動延長(不煞車)。 */
+  const RITARD_MIN_NOTES = 6;
+  const RITARD_SPAN_MIN = Math.min(0.75, Math.max(0.25, totalWhole * 0.1)); // 很短的片段不要整首都在漸慢
+  const RITARD_SPAN_MAX = Math.min(2, Math.max(RITARD_SPAN_MIN, totalWhole * 0.15));
   const RITARD_MIN_MULT = 0.4; // 全曲結尾/fermata的結構性漸慢,最多放慢到原速的40%
   const AGOGIC_AMOUNT = 0.08;  // 重音/延長記號的音值重音幅度(同樣理由調高)
   const JITTER_AMOUNT = 0.015; // 微幅隨機抖動(±1.5%)
@@ -2225,6 +2230,14 @@ function buildRubatoMap(){
   for (const ev of events) if (ev.artic && ev.artic.fermata) ritardTargets.push(ev.tWhole);
   ritardTargets.sort((a, b) => a - b);
   let ritardPtr = 0;
+  // 每個漸慢目標各自算一次範圍(往回涵蓋足夠多的音符),先算好存起來,避免每個音符都要重算
+  const ritardSpans = ritardTargets.map(target => {
+    let endIdx = events.findIndex(e => e.tWhole >= target);
+    if (endIdx < 0) endIdx = events.length - 1;
+    const startIdx = Math.max(0, endIdx - RITARD_MIN_NOTES);
+    const byNotes = target - events[startIdx].tWhole;
+    return Math.min(RITARD_SPAN_MAX, Math.max(RITARD_SPAN_MIN, byNotes));
+  });
 
   function localTempoMult(i){
     const ev = events[i];
@@ -2238,8 +2251,9 @@ function buildRubatoMap(){
     let mult = archMult * phraseEndRitard;
     while (ritardPtr < ritardTargets.length - 1 && ritardTargets[ritardPtr] < ev.tWhole) ritardPtr++;
     const ritardDist = Math.max(0, ritardTargets[ritardPtr] - ev.tWhole);
-    if (ritardDist < RITARD_SPAN_WHOLE) {
-      const rx = 1 - ritardDist / RITARD_SPAN_WHOLE; // 0=剛進入漸慢範圍, 1=正好在結尾/fermata上
+    const ritardSpan = ritardSpans[ritardPtr];
+    if (ritardDist < ritardSpan) {
+      const rx = 1 - ritardDist / ritardSpan; // 0=剛進入漸慢範圍, 1=正好在結尾/fermata上
       // 把冪次曲線「縮放」進 [RITARD_MIN_MULT, 1] 這個範圍,而不是用 Math.max 硬夾住。
       // 原本用夾的:q=2.2 時曲線在整段漸慢只走了三分之一就已經觸底(0.4),後面三分之二都是
       // 平的,於是聽起來不是漸慢,而是「平穩→突然煞停」。實測整首曲子最後兩個音之間
@@ -2650,10 +2664,13 @@ function ensureAudio(){
     masterGain = audioCtx.createGain();
     /* 0.9 對這個合成器來說太燙了:每個聲部各自的峰值就有 0.32(合成)~0.66(取樣),
        Web Audio 又是直接把波形相加,實測連稀疏的琶音都會衝到 1.392、踏板段落到 2.451,
-       全都超過 ±1.0 而被硬切成破音。降到 0.45 留出足夠的動態餘裕(headroom),
-       讓下面的限幅器只需要在真正的尖峰時介入,而不是整首曲子都在壓縮——
-       否則大聲小聲會被壓成一樣大聲(實測動態比從 1.76 被壓到只剩 1.06),反而更不自然。 */
-    masterGain.gain.value = 0.45;
+       全都超過 ±1.0 而被硬切成破音。降下來留出動態餘裕(headroom),讓下面的限幅器只需要在
+       真正的尖峰時介入,而不是整首曲子都在壓縮——否則大聲小聲會被壓成一樣大聲
+       (實測動態比從 1.76 被壓到只剩 1.06),反而更不自然。
+       0.48 是實測「完全不破音」的上限:再往上 0.50 開始有零星削波、0.55 有 18 幀、0.65 有 58 幀。
+       想再更大聲就只能把限幅器壓更兇,但那會把大小聲壓成一樣(動態比掉回 1.0 附近),得不償失,
+       所以停在這裡,需要更大聲請直接調裝置音量。 */
+    masterGain.gain.value = 0.48;
     /* 總輸出限幅器(limiter):Web Audio 是把每個聲音的波形「直接相加」再送到喇叭,超過 ±1.0
        就會被硬切成方波,產生刺耳的破音。踏板踩著時同時發聲的音符會一路累積(實測踏板段落
        峰值可達 5.34,遠超過 1.0,而且 93% 的取樣時間都在破音),真實鋼琴不會有這種現象——
@@ -3399,9 +3416,10 @@ function playSampledInstrument(instKey, freq, when, dur, legato, pedal, chordAnc
     // 撐滿整個和聲/圓滑線範圍的實際長度,而不是只加一段固定的尾音
     sustain = Math.max(harmonyEndSec - when, dur, 0.1);
     if (pedal) {
-      // 踏板踩著時飽滿延續,但放開的瞬間阻尼器動作其實很快(約0.15秒),
-      // 不能拖太長,否則前一個和聲會糊進下一個和聲裡
-      tail = 0.18;
+      // 踏板放開時阻尼器落下,但毛氈不是硬碰硬地把弦「切斷」,低音弦尤其會再延續一小段才靜下來。
+      // 之前設 0.18 秒偏乾,換踏板時聽起來像被切掉;放長到 0.4 秒讓聲音是「淡出」而不是「切斷」,
+      // 保留流行抒情曲需要的豐滿感,同時仍然照樂譜的踏板換點清掉和聲,不會糊成一團
+      tail = 0.4;
       holdRatio = 0.9;
       peakGain = 0.66;
     } else {
@@ -3410,7 +3428,7 @@ function playSampledInstrument(instKey, freq, when, dur, legato, pedal, chordAnc
   } else {
     sustain = Math.max(dur, 0.1);
     tail = 0.4;
-    if (pedal) { tail = 0.18; holdRatio = 0.9; peakGain = 0.66; }
+    if (pedal) { tail = 0.4; holdRatio = 0.9; peakGain = 0.66; } // 同上:淡出而非切斷
     else if (legato) tail = 0.6;
   }
   ({ sustain, peakGain } = applyArticulation(sustain, peakGain, dur, artic));
@@ -3640,11 +3658,11 @@ function schedulePiano(freq, when, dur, legato, pedal, harmonyEndSec, artic){
   let sustain, releaseTail;
   if (harmonyEndSec != null) {
     sustain = Math.max(harmonyEndSec - when, dur * 0.9, 0.08);
-    releaseTail = pedal ? 0.18 : 0.3; // 踏板放開瞬間阻尼器動作快,不能拖太長否則混濁
+    releaseTail = pedal ? 0.4 : 0.3; // 踏板放開時淡出而不是切斷(阻尼器毛氈不會把弦硬生生切住)
   } else {
     sustain = Math.max(dur * 0.9, 0.08);
     releaseTail = 0.25;
-    if (pedal) { sustain = Math.max(dur * 1.3, 0.08); releaseTail = 0.18; }
+    if (pedal) { sustain = Math.max(dur * 1.3, 0.08); releaseTail = 0.4; }
     else if (legato) { sustain = Math.max(dur * 1.15, 0.08); releaseTail = 0.35; }
   }
   ({ sustain, peakGain: peak } = applyArticulation(sustain, peak, dur, artic));
