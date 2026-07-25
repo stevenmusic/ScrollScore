@@ -1875,9 +1875,10 @@ function buildTimeline(){
     }
   }
   // 踏板範圍:只用樂譜裡明確的踏板記號(拍長猜測準確率太低,已移除)。
-  // 樂譜有標踏板的話,那就是編訂者對「什麼時候該換踏板清掉和聲」的明確決定,優先權高於
-  // 下面「重複分解和弦音型」這個推測性的偵測——否則譜上每小節換一次踏板的意圖會被蓋掉。
-  const scoreHasPedalMarks = pedalRanges.length > 0;
+  // 「重複分解和弦音型」偵測到的範圍會讓音符延續得更久、聲音更豐滿(流行抒情曲要的就是這個),
+  // 但完全不設限的話會誇張到單一音符殘響10.4個全音符(約14小節),不同和聲整個疊在一起變糊。
+  // 折衷:保留這個延長效果,但限制任何一個音符最多只能比自己的起點多響 RING_CAP_WHOLE。
+  const RING_CAP_WHOLE = 1.0;
   for (const ev of events) {
     ev.pedalOn = inRanges(ev.tWhole, pedalRanges);
     ev.legato = !ev.pedalOn && inRanges(ev.tWhole, slurRanges);
@@ -1889,13 +1890,14 @@ function buildTimeline(){
         if (ev.tWhole >= r.start && ev.tWhole < r.end) { rangeEnd = r.end; break; }
       }
     }
-    // 左手(或任一手)重複分解和弦音型偵測到的範圍,也當作和聲延伸的依據——但這只是用來補足
-    // 「樂譜完全沒標踏板」的情況。樂譜有標踏板時絕對不能套用:實測使用者的樂譜(每小節換一次
-    // 踏板、共58個踏板記號)發現這個偵測範圍最長可達5.75全音符(約7個小節),會把每小節的踏板
-    // 切換整個蓋掉,讓不同和聲全部疊在一起(單一音符最長殘響10.4全音符),聽起來就是一團糊。
-    if (!scoreHasPedalMarks) {
-      for (const r of repeatChordRanges) {
-        if (ev.tWhole >= r.start && ev.tWhole < r.end) { rangeEnd = rangeEnd != null ? Math.max(rangeEnd, r.end) : r.end; break; }
+    // 左手(或任一手)重複分解和弦音型偵測到的範圍,也當作和聲延伸的依據。這個延長本身就是
+    // 讓聲音變豐滿的來源,所以有標踏板時照樣套用,只是不能無限延長——夾在 RING_CAP_WHOLE 以內,
+    // 避免像先前那樣一路響過好幾個小節、把不同和聲全疊在一起
+    for (const r of repeatChordRanges) {
+      if (ev.tWhole >= r.start && ev.tWhole < r.end) {
+        const capped = Math.min(r.end, ev.tWhole + RING_CAP_WHOLE);
+        rangeEnd = rangeEnd != null ? Math.max(rangeEnd, capped) : capped;
+        break;
       }
     }
     // 同一時刻裡,只要有更長時值的音符(例如左手四拍和絃),其他較短的音符(例如右手旋律音)
@@ -2190,15 +2192,7 @@ function buildRubatoMap(){
   const noteDurs = events.map(ev => ev.notes.length ? Math.max(...ev.notes.map(n => n.durWhole || 0)) : 0).filter(d => d > 0).sort((a, b) => a - b);
   const medianDurWhole = noteDurs.length ? noteDurs[Math.floor(noteDurs.length / 2)] : 0.125;
   const RITARD_Q = 2.2;        // 跑者煞停模型的冪次(Friberg & Sundberg論文常見範圍1.5~2.7)
-  /* 結尾/fermata 漸慢的範圍。這裡不能用固定的音樂長度,要看「這段裡面有幾個音符」:
-     漸慢是靠一個一個音符去呈現的,範圍內只有一兩個音的話,再平滑的曲線也只會被取樣到一兩個點,
-     聽起來還是「平穩→突然煞停」。實測使用者的曲子(結尾是一個長和絃)用固定1全音符的範圍時,
-     範圍內只框到 1 個音,最後兩音之間直接從 0.968 掉到 0.401。
-     所以改成:往回涵蓋至少 RITARD_MIN_NOTES 個音符,但仍夾在 [0.75, 2] 全音符之間——
-     音符密集的結尾範圍自然會短(不拖),稀疏的結尾才會自動延長(不煞車)。 */
-  const RITARD_MIN_NOTES = 6;
-  const RITARD_SPAN_MIN = Math.min(0.75, Math.max(0.25, totalWhole * 0.1)); // 很短的片段不要整首都在漸慢
-  const RITARD_SPAN_MAX = Math.min(2, Math.max(RITARD_SPAN_MIN, totalWhole * 0.15));
+  const RITARD_SPAN_WHOLE = 1; // 結尾/fermata前多少全音符範圍內開始漸慢(約一小節)
   const RITARD_MIN_MULT = 0.4; // 全曲結尾/fermata的結構性漸慢,最多放慢到原速的40%
   const AGOGIC_AMOUNT = 0.08;  // 重音/延長記號的音值重音幅度(同樣理由調高)
   const JITTER_AMOUNT = 0.015; // 微幅隨機抖動(±1.5%)
@@ -2230,14 +2224,6 @@ function buildRubatoMap(){
   for (const ev of events) if (ev.artic && ev.artic.fermata) ritardTargets.push(ev.tWhole);
   ritardTargets.sort((a, b) => a - b);
   let ritardPtr = 0;
-  // 每個漸慢目標各自算一次範圍(往回涵蓋足夠多的音符),先算好存起來,避免每個音符都要重算
-  const ritardSpans = ritardTargets.map(target => {
-    let endIdx = events.findIndex(e => e.tWhole >= target);
-    if (endIdx < 0) endIdx = events.length - 1;
-    const startIdx = Math.max(0, endIdx - RITARD_MIN_NOTES);
-    const byNotes = target - events[startIdx].tWhole;
-    return Math.min(RITARD_SPAN_MAX, Math.max(RITARD_SPAN_MIN, byNotes));
-  });
 
   function localTempoMult(i){
     const ev = events[i];
@@ -2251,16 +2237,11 @@ function buildRubatoMap(){
     let mult = archMult * phraseEndRitard;
     while (ritardPtr < ritardTargets.length - 1 && ritardTargets[ritardPtr] < ev.tWhole) ritardPtr++;
     const ritardDist = Math.max(0, ritardTargets[ritardPtr] - ev.tWhole);
-    const ritardSpan = ritardSpans[ritardPtr];
-    if (ritardDist < ritardSpan) {
-      const rx = 1 - ritardDist / ritardSpan; // 0=剛進入漸慢範圍, 1=正好在結尾/fermata上
-      // 把冪次曲線「縮放」進 [RITARD_MIN_MULT, 1] 這個範圍,而不是用 Math.max 硬夾住。
-      // 原本用夾的:q=2.2 時曲線在整段漸慢只走了三分之一就已經觸底(0.4),後面三分之二都是
-      // 平的,於是聽起來不是漸慢,而是「平穩→突然煞停」。實測整首曲子最後兩個音之間
-      // 速度直接從 0.968 掉到 0.400(等於一步慢了 2.4 倍),明顯不像真人收尾。
-      // 縮放之後:進入範圍時剛好是 1.0(不會有突兀的接縫),到結尾才剛好抵達最慢速度,
-      // 中間是連續平滑的,符合 Friberg & Sundberg(1999)跑者煞停模型原本的曲線形狀。
-      mult *= RITARD_MIN_MULT + (1 - RITARD_MIN_MULT) * Math.pow(1 - rx, RITARD_Q);
+    if (ritardDist < RITARD_SPAN_WHOLE) {
+      const rx = 1 - ritardDist / RITARD_SPAN_WHOLE;
+      // 註:曾經改成把曲線縮放進 [RITARD_MIN_MULT, 1](讓收尾在數值上更平滑、沒有突然的落差),
+      // 但實際聽感反而是這個原本的版本比較自然,所以維持原樣不要再「修」它。
+      mult *= Math.max(RITARD_MIN_MULT, Math.pow(1 - rx, RITARD_Q));
     }
     const a = ev.artic;
     if (a && (a.tenuto || a.fermata || a.accent || a.strongAccent)) mult *= (1 - AGOGIC_AMOUNT);
@@ -3453,8 +3434,15 @@ function playSampledInstrument(instKey, freq, when, dur, legato, pedal, chordAnc
   } else {
     g.gain.setValueAtTime(peakGain, when);
   }
-  g.gain.setValueAtTime(peakGain, when + sustain * holdRatio);
-  g.gain.exponentialRampToValueAtTime(0.0001, when + sustain + tail);
+  /* 鋼琴的弦是「敲下去之後就一路自然衰減」,不是像管風琴那樣維持同一個音量到放開為止。
+     原本的寫法是撐在滿音量直到 sustain 的 90%(holdRatio)才開始掉,踏板段落因此會變成
+     幾十個音同時都停在接近滿音量上,聽起來糊、而且相加後直接破音(實測踏板段落有60個聲部
+     同時發聲)。改成從起音之後就持續衰減到 SUSTAIN_DECAY_TO,長殘響仍然聽得到(豐滿感保留),
+     但比較舊的音會自然退到背景,不會每個都跟最新彈下去的音一樣大聲。 */
+  const SUSTAIN_DECAY_TO = 0.32;
+  const decayEnd = when + Math.max(sustain, 0.02);
+  g.gain.exponentialRampToValueAtTime(Math.max(0.0002, peakGain * SUSTAIN_DECAY_TO), decayEnd);
+  g.gain.exponentialRampToValueAtTime(0.0001, decayEnd + tail);
   // 泛音/悶音的音色調整:泛音濾掉較多高頻讓聲音更純淨清亮,悶音濾掉更多高頻讓聲音變暗悶
   let filterNode = null;
   if (tech && (tech.harmonic || tech.pizzicato)) {
@@ -3668,8 +3656,11 @@ function schedulePiano(freq, when, dur, legato, pedal, harmonyEndSec, artic){
   ({ sustain, peakGain: peak } = applyArticulation(sustain, peak, dur, artic));
   g.gain.setValueAtTime(0, when);
   g.gain.linearRampToValueAtTime(peak, when + 0.012);
-  g.gain.setValueAtTime(peak, when + Math.max(sustain, 0.02)); // 保持住音量,彈滿時值,不要提早衰減
-  g.gain.exponentialRampToValueAtTime(0.0001, when + sustain + releaseTail);
+  // 同取樣路徑:鋼琴弦是持續自然衰減,不是撐在同一個音量。踏板段落靠這個衰減才不會
+  // 幾十個音全都停在滿音量而糊成一團(細節見 playSampledInstrument 內的說明)
+  const synthDecayEnd = when + Math.max(sustain, 0.02);
+  g.gain.exponentialRampToValueAtTime(Math.max(0.0002, peak * 0.32), synthDecayEnd);
+  g.gain.exponentialRampToValueAtTime(0.0001, synthDecayEnd + releaseTail);
   osc.connect(lp); osc2.connect(g2); g2.connect(lp);
   lp.connect(g); g.connect(masterGain);
   osc.start(when); osc2.start(when);
