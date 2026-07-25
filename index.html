@@ -632,6 +632,9 @@ input[type=file]{display:none}
     <label class="switch-row">
       <span class="switch"><input type="checkbox" id="legatoPedal" checked><span class="switch-track"></span></span>圓滑/踏板效果
     </label>
+    <div class="tempo-box" title="模擬鋼琴在真實空間裡的殘響與左右聲像。取樣本身是近距離收音的乾聲,加一點空間感才不會聽起來貼在臉上">空間感
+      <input type="range" id="reverbAmount" min="0" max="100" value="30"><b id="reverbAmountVal">30</b>
+    </div>
     <label class="switch-row" title="模擬真人彈奏的節奏彈性(樂句抑揚、結尾漸慢、重音拉長),而非機械式的固定拍點。套用在整首曲子共用的主時間軸上,所有樂器/雙手會一起呼吸伸縮">
       <span class="switch"><input type="checkbox" id="useRubato"><span class="switch-track"></span></span>彈性速度(Rubato)
     </label>
@@ -2689,6 +2692,7 @@ function updateMeasureHighlight(sec){
 for (const id of ["cursorColor","cursorOpacity","measureColor","measureOpacity"]) {
   $(id).addEventListener("input", applyHighlightStyles);
 }
+$("reverbAmount").addEventListener("input", applyReverbAmount);
 $("measureHl").addEventListener("change", applyHighlightStyles);
 
 /* 專注模式:把上下列收起來,樂譜可視高度變大。播放中切換不會中斷播放,
@@ -2826,6 +2830,7 @@ const PREF_FIELDS = [
   { id: "measureHl",         prop: "checked" },
   { id: "measureColor",      prop: "value" },
   { id: "measureOpacity",    prop: "value" },
+  { id: "reverbAmount",      prop: "value" },
 ];
 function savePrefs(){
   try {
@@ -2857,7 +2862,7 @@ function restorePrefs(){
 }
 restorePrefs();
 // 不管有沒有存過設定都要跑一次,把游標/小節高亮的顏色濃度寫進 CSS 變數並同步數字標籤
-setTimeout(applyHighlightStyles, 0);
+setTimeout(() => { applyHighlightStyles(); applyReverbAmount(); }, 0);
 for (const f of PREF_FIELDS) {
   const el = $(f.id);
   if (el) el.addEventListener(f.prop === "checked" ? "change" : "input", savePrefs);
@@ -2962,8 +2967,74 @@ function ensureAudio(){
     masterLimiter.release.value = 0.25;  // 放開得慢一點,不會有抽動感
     masterGain.connect(masterLimiter);
     masterLimiter.connect(audioCtx.destination);
+    buildReverbChain();
   }
   if (audioCtx.state === "suspended") audioCtx.resume();
+}
+
+/* ── 空間感(殘響)────────────────────────────────────────────────
+   Salamander 這套取樣是近距離收音、幾乎全乾的,加上程式裡每個聲部都直接接到 masterGain、
+   沒有任何聲像或殘響處理,所以左右聲道實測是「位元完全相同」的單聲道,而且最後一個音放開後
+   0.03 秒聲音就完全消失——真實鋼琴不管在什麼房間都會有 1~2 秒的殘響尾巴,這是聽起來
+   「像合成音、貼在臉上」最主要的原因。
+
+   這裡補三件真實鋼琴一定有、但目前完全沒有的東西:
+   1) 房間殘響:用程式合成的脈衝響應(IR)做卷積殘響。不外掛音檔,維持單檔架構。
+      IR 的左右聲道用各自獨立的亂數,彼此不相關,殘響才會有真正的立體聲寬度。
+      高頻隨時間衰減得比低頻快(真實空間對高頻的吸收比較強),所以尾巴會越來越暗。
+   2) 預延遲(pre-delay):直接音先到、反射音晚 18ms 才到,聽感上直接音才不會被殘響糊掉。
+   3) 早期反射:前段疊幾個離散的反射點,空間的「大小感」主要來自這個,而不是尾巴長度。 */
+let reverbBus = null, reverbConvolver = null, reverbWet = null, reverbPreDelay = null;
+function buildImpulseResponse(seconds, decayPow){
+  const rate = audioCtx.sampleRate;
+  const len = Math.max(1, Math.floor(rate * seconds));
+  const ir = audioCtx.createBuffer(2, len, rate);
+  for (let ch = 0; ch < 2; ch++) {
+    const d = ir.getChannelData(ch);
+    let lp = 0;
+    for (let i = 0; i < len; i++) {
+      const t = i / len;
+      const env = Math.pow(1 - t, decayPow);
+      const noise = (Math.random() * 2 - 1) * env;
+      // 一極低通,係數隨時間變小 = 尾巴越後面越暗,模擬空間對高頻的吸收
+      const a = 0.42 * (1 - t * 0.8) + 0.02;
+      lp += a * (noise - lp);
+      d[i] = lp;
+    }
+    // 早期反射:在前 90ms 內灑幾個離散反射,左右聲道時間略微錯開增加寬度
+    const early = [0.011, 0.019, 0.031, 0.044, 0.058, 0.077];
+    for (let k = 0; k < early.length; k++) {
+      const idx = Math.floor(rate * (early[k] + (ch ? 0.0031 : 0)));
+      if (idx < len) d[idx] += (0.55 - k * 0.07) * (ch ? -1 : 1) * 0.6;
+    }
+  }
+  return ir;
+}
+function buildReverbChain(){
+  reverbBus = audioCtx.createGain();          // 各聲部的殘響送出匯集到這裡
+  reverbPreDelay = audioCtx.createDelay(0.2);
+  reverbPreDelay.delayTime.value = 0.018;
+  reverbConvolver = audioCtx.createConvolver();
+  reverbConvolver.buffer = buildImpulseResponse(2.1, 2.4);
+  reverbWet = audioCtx.createGain();
+  reverbWet.gain.value = reverbWetTarget();
+  reverbBus.connect(reverbPreDelay);
+  reverbPreDelay.connect(reverbConvolver);
+  reverbConvolver.connect(reverbWet);
+  reverbWet.connect(masterGain); // 接在 masterGain 之前,殘響一樣受總限幅器保護,不會破音
+}
+function reverbAmount(){ const el = $("reverbAmount"); return el ? +el.value / 100 : 0.3; }
+function reverbWetTarget(){ return reverbAmount() * 0.55; }
+function applyReverbAmount(){
+  if (reverbWet) reverbWet.gain.value = reverbWetTarget();
+  const el = $("reverbAmountVal");
+  if (el) el.textContent = $("reverbAmount").value;
+}
+/* 真實鋼琴的低音弦在左、高音弦在右(以演奏者的視角),錄音也會保留這個位置感。
+   幅度刻意保守(±0.32):做太寬會變成不自然的「兩台鋼琴」效果 */
+function pianoPanFor(freq){
+  const t = Math.max(0, Math.min(1, (freqToMidi(freq) - 21) / 87));
+  return (t - 0.5) * 0.64;
 }
 
 const PLAY_ICON_D = "M8 5v14l11-7z";
@@ -3806,7 +3877,28 @@ function playSampledInstrument(instKey, freq, when, dur, legato, pedal, chordAnc
     filterNode.frequency.value = tech.harmonic ? Math.min(freq * 5, 4500) : Math.min(freq * 2.5, 1800);
   }
   if (filterNode) { src.connect(filterNode); filterNode.connect(g); } else { src.connect(g); }
-  g.connect(masterGain);
+  /* 聲像 + 殘響送出。鋼琴依音高擺左右(低音左、高音右),其他樂器維持置中——
+     那個位置感是鋼琴弦排列的物理特性,套到小提琴或長笛上反而不對。
+     踏板踩著時送多一點進殘響:真實鋼琴踏板一踩,所有沒被制音的弦會跟著共鳴,
+     整體空間感明顯變大。這是用殘響量去逼近那個效果,不是真的在模擬弦間共振。 */
+  const panner = audioCtx.createStereoPanner ? audioCtx.createStereoPanner() : null;
+  if (panner) {
+    panner.pan.value = (instKey === "piano") ? pianoPanFor(freq) : 0;
+    g.connect(panner);
+    panner.connect(masterGain);
+    if (reverbBus) {
+      const send = audioCtx.createGain();
+      send.gain.value = pedal ? 0.85 : 0.5;
+      panner.connect(send); send.connect(reverbBus);
+    }
+  } else {
+    g.connect(masterGain);
+    if (reverbBus) {
+      const send = audioCtx.createGain();
+      send.gain.value = pedal ? 0.85 : 0.5;
+      g.connect(send); send.connect(reverbBus);
+    }
+  }
   // 滑音(glissando/slide):音高在演奏期間持續滑向下一個音,模擬手指在同一條弦上滑動把位
   if (tech && tech.glissTargetFreq) {
     const targetRate = rate * (tech.glissTargetFreq / freq);
@@ -4018,7 +4110,25 @@ function schedulePiano(freq, when, dur, legato, pedal, harmonyEndSec, artic){
   g.gain.exponentialRampToValueAtTime(Math.max(0.0002, peak * synthEndLevel), synthDecayEnd);
   g.gain.exponentialRampToValueAtTime(0.0001, synthDecayEnd + releaseTail);
   osc.connect(lp); osc2.connect(g2); g2.connect(lp);
-  lp.connect(g); g.connect(masterGain);
+  lp.connect(g);
+  // 合成音備援路徑也要有同樣的聲像與殘響,否則取樣載入前後的空間感會突然改變
+  const sPan = audioCtx.createStereoPanner ? audioCtx.createStereoPanner() : null;
+  if (sPan) {
+    sPan.pan.value = pianoPanFor(freq);
+    g.connect(sPan); sPan.connect(masterGain);
+    if (reverbBus) {
+      const send = audioCtx.createGain();
+      send.gain.value = pedal ? 0.85 : 0.5;
+      sPan.connect(send); send.connect(reverbBus);
+    }
+  } else {
+    g.connect(masterGain);
+    if (reverbBus) {
+      const send = audioCtx.createGain();
+      send.gain.value = pedal ? 0.85 : 0.5;
+      g.connect(send); send.connect(reverbBus);
+    }
+  }
   osc.start(when); osc2.start(when);
   const stopAt = when + sustain + releaseTail + 0.05;
   osc.stop(stopAt); osc2.stop(stopAt);
