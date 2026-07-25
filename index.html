@@ -208,9 +208,12 @@ input[type=range]::-webkit-slider-thumb{
   .btn{padding:0 8px;height:32px}
   input[type=range]{width:48px}
 }
-/* 最舊款極窄機型(320px):再壓縮一輪滑桿與數字框寬度 */
-@media (max-width:330px){
-  header h1{font-size:var(--fs-2xs);letter-spacing:0}
+/* 最舊款極窄機型(320px):再壓縮一輪滑桿與數字框寬度。
+   這個寬度放不下「品牌名稱 + 5 個 44px 觸控按鈕」(實測 320px 時頂欄會被擠成三排、
+   吃掉 50px 的樂譜高度),所以直接把品牌名稱收起來——按鈕是功能,標題只是裝飾,
+   優先保住按鈕好按跟樂譜可視高度。標題仍留在 DOM 裡供螢幕報讀器辨識頁面 */
+@media (max-width:340px){
+  header h1{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
   .btn{padding:0 7px}
   input[type=range]{width:34px}
   .tempo-box input[type=number]{width:34px;height:26px;line-height:26px;padding:0 2px}
@@ -227,12 +230,30 @@ input[type=range]::-webkit-slider-thumb{
   #keyboardCanvas{height:64px;margin-bottom:6px}
   #stage{min-height:70px}
 }
-/* 觸控裝置:放大可點擊區域,滑桿把手更好抓 */
+/* 平板/桌機:設定面板不要橫跨整個螢幕寬度。它是 position:fixed 且 left/right:0,
+   在 1920px 以上的螢幕上,控制項會全部擠在最左邊、右邊留下一大片空白(2560px 時空了將近兩千px),
+   跟一般產品把內容收在可讀寬度內置中的做法不符。抽屜本體維持滿版(毛玻璃背景才連貫),
+   只把裡面的內容收進 960px 並置中 */
+@media (min-width:900px){
+  #settingsPanel{align-items:center}
+  #settingsPanel > *{width:min(960px, 100%)}
+}
+/* 觸控裝置:放大可點擊區域,滑桿把手更好抓。
+   高度已經有 42px,但手機寬度下按鈕的文字標籤會收起來只剩一個 14px 的圖示,
+   實測寬度只剩 30~37px,遠低於 Apple HIG 的 44pt 與 WCAG 2.5.5 的 44px 建議,
+   實際用手指點很容易按偏,所以補上 min-width */
 @media (pointer:coarse){
-  .btn{height:42px}
+  .btn{height:44px;min-width:44px}
   input[type=range]::-webkit-slider-thumb{width:24px;height:24px}
   #settingsPanel select{min-height:38px}
   #progressbar{height:8px}
+  #seekGoBtn{min-width:44px;min-height:44px}
+}
+/* 手機橫向:螢幕高度本來就很吃緊(實測樂譜區只剩約190px),44px 的按鈕會再吃掉寶貴的高度。
+   這裡取 36px 折衷——比原本純高度斷點的 28px 好按,又不會把樂譜區壓得更小。
+   必須放在 pointer:coarse 之後,否則會被上面的 44px 蓋掉 */
+@media (pointer:coarse) and (max-height:420px){
+  .btn{height:36px}
 }
 #stage.dragover::after{
   content:"放開以載入樂譜";
@@ -354,7 +375,8 @@ body.recording #exitrec{display:block}
 input[type=file]{display:none}
 /* ── 匯出覆蓋層 ─────────────────── */
 #exportOverlay{
-  position:absolute;inset:0;z-index:40;display:none;
+  /* 同上:必須相對於視窗置中,否則手機橫向時會以被壓縮的 #stage 置中而被切到 */
+  position:fixed;inset:0;z-index:40;display:none;
   align-items:center;justify-content:center;
   background:rgba(12,10,7,.88);backdrop-filter:blur(3px);
 }
@@ -374,7 +396,11 @@ input[type=file]{display:none}
 #exportOverlay p{font-size:var(--fs-xs);color:var(--muted);line-height:1.8;margin-bottom:16px}
 /* ── 格式選擇 ───────────────────── */
 #formatOverlay{
-  position:absolute;inset:0;z-index:45;display:none;
+  /* 跟 #previewOverlay 同樣的理由必須用 fixed:這層嵌在 #stage 裡,而 #stage 的高度受 flex
+     版面壓縮,手機橫向時只剩約 197px。用 absolute 的話對話框會以那 197px 置中,
+     實測上緣被切掉 10~17px 而且捲不到(對話框本身沒超過 max-height,不會出現捲軸)。
+     改成 fixed 才是相對於真正的視窗置中 */
+  position:fixed;inset:0;z-index:45;display:none;
   align-items:center;justify-content:center;
   background:rgba(12,10,7,.88);backdrop-filter:blur(3px);
 }
@@ -382,7 +408,7 @@ input[type=file]{display:none}
 #formatOverlay .box{
   text-align:center;padding:26px 28px;border:1px solid var(--gold);
   border-radius:var(--radius-md);background:var(--panel-2);width:min(300px, 86vw);
-  max-height:86vh;overflow-y:auto;box-sizing:border-box;
+  max-height:86vh;max-height:86dvh;overflow-y:auto;box-sizing:border-box;
   box-shadow:var(--shadow-lg);
 }
 .fmt-step{display:flex;flex-direction:column;align-items:stretch}
