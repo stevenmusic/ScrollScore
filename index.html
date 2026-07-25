@@ -145,10 +145,21 @@ input[type=range]::-webkit-slider-thumb{
 }
 /* 三大分組:音色與調性 / 播放與練習 / 顯示與匯出,用淡淡卡片底色隔開,降低整片選單的資訊密度 */
 .settings-group{
-  display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;
+  /* 每個控制項各自一列、左邊標籤欄固定寬度,所有控制項的左緣才會對齊。
+     原本是 flex-wrap 讓元素自由流動,不同長度的標籤會把控制項推到參差不齊的位置 */
+  display:flex;flex-direction:column;align-items:stretch;gap:10px;
   padding:14px 16px;background:rgba(255,255,255,.035);
   border:1px solid var(--line);border-radius:var(--radius-md);
 }
+.settings-group .tempo-box,.settings-group .switch-row{width:100%}
+.settings-group .tempo-box{flex-wrap:wrap}
+.row-label{width:5.2em;flex:none;color:var(--muted);font-size:var(--fs-sm)}
+.row-hint{font-size:var(--fs-2xs);color:var(--muted);opacity:.8}
+.settings-group input[type=range]{flex:1;min-width:90px;width:auto}
+.settings-group .tempo-box b{min-width:2.6em;text-align:right}
+/* 「尚未匯入音檔(播放樂器合成音)」這類狀態文字很長,會把後面的「移除」擠到下一行變成孤兒。
+   讓它吃掉剩餘寬度並在過長時截斷,整列就能維持一行 */
+#audioImportStatus,#bgImageStatus{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .settings-group-title{
   width:100%;font-size:var(--fs-2xs);letter-spacing:.14em;color:var(--muted);
   text-transform:uppercase;font-weight:700;
@@ -310,7 +321,8 @@ input[type=color]::-webkit-color-swatch{border:none;border-radius:2px}
 body.score-loaded #playline{display:block}
 #playline::before{
   content:"";position:absolute;top:-2px;left:50%;transform:translateX(-50%);
-  border:7px solid transparent;border-top:10px solid var(--gold);
+  /* 三角標記跟游標線同色,不然改了顏色只有線變、上面的三角形還是金色 */
+  border:7px solid transparent;border-top:10px solid var(--cursor-col,var(--gold));
 }
 #empty{
   position:absolute;inset:0;display:flex;flex-direction:column;
@@ -608,7 +620,7 @@ input[type=file]{display:none}
 <div id="settingsPanel">
   <div class="settings-group">
     <div class="settings-group-title">音色與調性</div>
-    <div class="tempo-box">樂器
+    <div class="tempo-box"><span class="row-label">樂器</span>
       <select id="instrument">
         <option value="piano">鋼琴</option>
         <option value="strings">小提琴</option>
@@ -620,8 +632,8 @@ input[type=file]{display:none}
         <option value="drum">鼓組</option>
       </select>
     </div>
-    <div class="tempo-box">移調 <button class="btn" id="transDown" style="padding:4px 10px" disabled title="請先載入樂譜">−</button><b id="transVal">原調</b><button class="btn" id="transUp" style="padding:4px 10px" disabled title="請先載入樂譜">＋</button></div>
-    <div class="tempo-box">
+    <div class="tempo-box"><span class="row-label">移調</span> <button class="btn" id="transDown" style="padding:4px 10px" disabled title="請先載入樂譜">−</button><b id="transVal">原調</b><button class="btn" id="transUp" style="padding:4px 10px" disabled title="請先載入樂譜">＋</button></div>
+    <div class="tempo-box"><span class="row-label">音檔</span>
       <button class="btn" id="audioImportBtn">匯入音檔</button>
       <input type="file" id="audioImportFile" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.flac">
       <span id="audioImportStatus" style="font-size:12px;opacity:0.75">尚未匯入音檔(播放樂器合成音)</span>
@@ -637,7 +649,7 @@ input[type=file]{display:none}
     <label class="switch-row">
       <span class="switch"><input type="checkbox" id="legatoPedal" checked><span class="switch-track"></span></span>圓滑/踏板效果
     </label>
-    <div class="tempo-box" title="模擬鋼琴在真實空間裡的殘響與左右聲像。取樣本身是近距離收音的乾聲,加一點空間感才不會聽起來貼在臉上">空間感
+    <div class="tempo-box" title="模擬鋼琴在真實空間裡的殘響與左右聲像。取樣本身是近距離收音的乾聲,加一點空間感才不會聽起來貼在臉上"><span class="row-label">空間感</span>
       <input type="range" id="reverbAmount" min="0" max="100" value="30"><b id="reverbAmountVal">30</b>
     </div>
     <label class="switch-row" title="模擬真人彈奏的節奏彈性(樂句抑揚、結尾漸慢、重音拉長),而非機械式的固定拍點。套用在整首曲子共用的主時間軸上,所有樂器/雙手會一起呼吸伸縮">
@@ -647,23 +659,24 @@ input[type=file]{display:none}
 
   <div class="settings-group">
     <div class="settings-group-title">游標與小節高亮</div>
-    <div class="tempo-box">游標
-      <input type="color" id="cursorColor" value="#E9CB7A" aria-label="游標顏色">
-      <span class="mini-label">濃度</span><input type="range" id="cursorOpacity" min="10" max="100" value="100"><b id="cursorOpacityVal">100</b>
+    <div class="tempo-box">
+      <span class="row-label">顏色</span>
+      <input type="color" id="cursorColor" value="#E9CB7A" aria-label="游標與小節高亮顏色">
+      <span class="row-hint">游標、三角標記、小節色塊共用</span>
+    </div>
+    <div class="tempo-box">
+      <span class="row-label">濃度</span>
+      <input type="range" id="cursorOpacity" min="10" max="100" value="100"><b id="cursorOpacityVal">100</b>
     </div>
     <label class="switch-row" title="把正在演奏的那一小節整段用色塊標起來,視讀時更容易抓到位置">
       <span class="switch"><input type="checkbox" id="measureHl"><span class="switch-track"></span></span>小節高亮
     </label>
-    <div class="tempo-box">色塊
-      <input type="color" id="measureColor" value="#C9A24B" aria-label="小節高亮顏色">
-      <span class="mini-label">濃度</span><input type="range" id="measureOpacity" min="5" max="80" value="18"><b id="measureOpacityVal">18</b>
-    </div>
   </div>
 
   <div class="settings-group">
     <div class="settings-group-title">顯示與匯出</div>
-    <div class="tempo-box">背景透明度 <input type="range" id="scoreBgOpacity" min="0" max="100" value="0"><b id="scoreBgOpacityVal">0</b></div>
-    <div class="tempo-box">
+    <div class="tempo-box"><span class="row-label">背景濃度</span> <input type="range" id="scoreBgOpacity" min="0" max="100" value="0"><b id="scoreBgOpacityVal">0</b></div>
+    <div class="tempo-box"><span class="row-label">背景圖</span>
       <button class="btn" id="bgImageBtn">匯入背景圖片</button>
       <input type="file" id="bgImageFile" accept="image/*">
       <span id="bgImageStatus" style="font-size:12px;opacity:0.75">尚未匯入背景圖片</span>
@@ -872,6 +885,12 @@ function setStatus(msg){ statusEl.textContent = msg; }
 let osmd = null;
 let events = [];        // {tWhole, x, notes:[{freq,durWhole}], legato, pedalOn}
 let slurRanges = [], pedalRanges = [], repeatChordRanges = [], measureRanges = [], vibratoRanges = [];
+/* 小節高亮要對齊真正的小節線,不能靠音符位置內插:音符的 x 是「音符中心」,而小節線在
+   第一個音符之前(還要容納譜號、調號、升降記號),兩者不成比例。實測內插出來的右邊界
+   固定比真正的小節線右移 21px,遇到窄小節甚至差到 42px。
+   改成直接跟 OSMD 要它排版好的圖形小節位置——時間戳與像素位置都出自同一個來源,
+   不會有跨時間軸對不起來的問題。[{startWhole, left, right}] */
+let measurePixels = [];
 let articMap = {};
 let guitarTechMap = {};
 let guitarTechEntries = [];
@@ -2104,7 +2123,35 @@ function buildTimeline(){
   endX = lastX + 120;
   cursor.hide();
   computeGuitarStringRinging();
+  buildMeasurePixels();
   buildRubatoMap();
+}
+
+/* 從 OSMD 排好版的圖形小節取出每一小節的起始時間與左右像素邊界。
+   AbsolutePosition 是 OSMD 內部單位,乘以 10*zoom 換算成像素,跟 events[].x
+   (取自 cursorElement.offsetLeft)是同一個座標系,可以直接混用。
+   多譜表時同一小節每個譜表的水平範圍一樣,取第一個非空的即可。 */
+function buildMeasurePixels(){
+  measurePixels = [];
+  try {
+    const ml = osmd && osmd.GraphicSheet && osmd.GraphicSheet.MeasureList;
+    if (!ml || !ml.length) return;
+    const unit = 10 * (osmd.zoom || 1);
+    for (const staves of ml) {
+      let gm = null;
+      for (const c of staves) if (c) { gm = c; break; }
+      if (!gm || !gm.PositionAndShape || !gm.parentSourceMeasure) continue;
+      const ts = gm.parentSourceMeasure.AbsoluteTimestamp;
+      if (!ts) continue;
+      const ps = gm.PositionAndShape;
+      measurePixels.push({
+        startWhole: ts.RealValue,
+        left: ps.AbsolutePosition.x * unit,
+        right: (ps.AbsolutePosition.x + ps.Size.width) * unit
+      });
+    }
+    measurePixels.sort((a, b) => a.startWhole - b.startWhole);
+  } catch (e) { measurePixels = []; } // 取不到就退回原本的內插法,不影響其他功能
 }
 
 /* ── 吉他同弦延音判斷(古典吉他/民謠吉他共用)──────────────────────
@@ -2660,8 +2707,12 @@ $("tempoVal").addEventListener("change", () => {
    確保預覽跟實際輸出長得一樣 */
 function hlCursorColor(){ return $("cursorColor").value; }
 function hlCursorOpacity(){ return +$("cursorOpacity").value / 100; }
-function hlMeasureColor(){ return $("measureColor").value; }
-function hlMeasureOpacity(){ return +$("measureOpacity").value / 100; }
+/* 小節色塊跟游標共用同一個顏色。濃度也共用同一個滑桿,但色塊必須明顯淡得多——
+   它是鋪在音符底下的一整塊面積,跟只有 2px 寬的游標用同樣濃度的話會蓋掉音符、非常吃力。
+   實測 0.22 是「看得出小節範圍、又完全不影響讀譜」的比例,所以色塊 = 濃度 × 0.22。 */
+const MEASURE_BAND_RATIO = 0.22;
+function hlMeasureColor(){ return $("cursorColor").value; }
+function hlMeasureOpacity(){ return hlCursorOpacity() * MEASURE_BAND_RATIO; }
 function measureHlOn(){ return $("measureHl").checked; }
 function applyHighlightStyles(){
   const root = document.documentElement.style;
@@ -2670,15 +2721,26 @@ function applyHighlightStyles(){
   root.setProperty("--measure-col", hlMeasureColor());
   root.setProperty("--measure-op", String(hlMeasureOpacity()));
   $("cursorOpacityVal").textContent = $("cursorOpacity").value;
-  $("measureOpacityVal").textContent = $("measureOpacity").value;
+
   document.body.classList.toggle("measure-hl", measureHlOn());
   updateMeasureHighlight(playing ? currentSec() : pausedAtSec);
 }
 /* 找出某個時間點落在第幾小節,回傳它在樂譜上的左右邊界(px)。
    measureRanges 存的是全音符座標,直接用 xAtWhole() 換算,不用繞道秒數 */
 function measureBoundsAt(sec){
-  if (!measureRanges.length || !events.length) return null;
+  if (!events.length) return null;
   const w = secToWhole(sec);
+  // 優先用 OSMD 排版好的真實小節邊界(對得準小節線)
+  if (measurePixels.length) {
+    for (let i = 0; i < measurePixels.length; i++) {
+      const m = measurePixels[i];
+      const nextStart = (i + 1 < measurePixels.length) ? measurePixels[i + 1].startWhole : Infinity;
+      if (w >= m.startWhole && w < nextStart) return { left: m.left, right: m.right, index: i };
+    }
+    return null;
+  }
+  // 退路:拿不到 OSMD 圖形資料時才用音符位置內插(邊界會略微偏右)
+  if (!measureRanges.length) return null;
   for (let i = 0; i < measureRanges.length; i++) {
     const m = measureRanges[i];
     if (w >= m.start && w < m.end) return { left: xAtWhole(m.start), right: xAtWhole(m.end), index: i };
@@ -2694,7 +2756,7 @@ function updateMeasureHighlight(sec){
   el.style.left = b.left + "px";
   el.style.width = Math.max(0, b.right - b.left) + "px";
 }
-for (const id of ["cursorColor","cursorOpacity","measureColor","measureOpacity"]) {
+for (const id of ["cursorColor","cursorOpacity"]) {
   $(id).addEventListener("input", applyHighlightStyles);
 }
 $("reverbAmount").addEventListener("input", applyReverbAmount);
@@ -2833,8 +2895,6 @@ const PREF_FIELDS = [
   { id: "cursorColor",       prop: "value" },
   { id: "cursorOpacity",     prop: "value" },
   { id: "measureHl",         prop: "checked" },
-  { id: "measureColor",      prop: "value" },
-  { id: "measureOpacity",    prop: "value" },
   { id: "reverbAmount",      prop: "value" },
 ];
 function savePrefs(){
