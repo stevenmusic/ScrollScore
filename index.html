@@ -143,7 +143,8 @@ input[type=range]::-webkit-slider-thumb{
   border-radius:var(--radius-pill);padding:6px 12px;font-family:inherit;font-size:var(--fs-sm);
   min-height:34px;max-width:150px;
 }
-/* 三大分組:音色與調性 / 播放與練習 / 顯示與匯出,用淡淡卡片底色隔開,降低整片選單的資訊密度 */
+/* 三大分組:音色與調性 / 播放與顯示 / 進階(收合),用淡淡卡片底色隔開,降低整片選單的資訊密度。
+   「匯出」不放進卡片,直接當面板最底下的主要動作列 */
 .settings-group{
   /* 每個控制項各自一列、左邊標籤欄固定寬度,所有控制項的左緣才會對齊。
      原本是 flex-wrap 讓元素自由流動,不同長度的標籤會把控制項推到參差不齊的位置 */
@@ -160,6 +161,28 @@ input[type=range]::-webkit-slider-thumb{
 /* 「尚未匯入音檔(播放樂器合成音)」這類狀態文字很長,會把後面的「移除」擠到下一行變成孤兒。
    讓它吃掉剩餘寬度並在過長時截斷,整列就能維持一行 */
 #audioImportStatus,#bgImageStatus{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 開關兩個一列。先前為了對齊改成一列一個,結果面板在手機上變成 1.27 個畫面高;
+   用等寬的 flex 基準排成兩欄,既維持左緣對齊又省掉一半高度,窄螢幕放不下時自動退回一欄。
+   min-width 取 108px:軌道 38 + 間距 10 + 四個中文字約 52 = 100,留一點餘裕,
+   這樣連 320px 的螢幕(每欄可用 122px)都還能維持兩欄,不會退回一欄多吃 60px 高度 */
+.switch-grid{display:flex;flex-wrap:wrap;gap:8px 12px;width:100%}
+.switch-grid .switch-row{flex:1 1 calc(50% - 12px);min-width:108px}
+.export-row{display:flex;gap:10px;flex-wrap:wrap;width:100%}
+/* 匯出是整個面板的主要動作,不再包進卡片,直接放在最下面當底部主按鈕 */
+.panel-actions #exportBtn{flex:1}
+/* 可摺疊分組:顏色、背景這類「設定一次就不太會再動」的項目預設收起來,
+   需要時才展開,避免每次開設定都要滑過它們 */
+.settings-collapse{display:block}
+.settings-collapse > summary{
+  list-style:none;cursor:pointer;display:flex;align-items:center;gap:6px;
+  margin:0;user-select:none;
+}
+.settings-collapse > summary::-webkit-details-marker{display:none}
+.settings-collapse > summary .chev{
+  font-size:15px;line-height:1;transition:transform .2s;display:inline-block;
+}
+.settings-collapse[open] > summary .chev{transform:rotate(90deg)}
+.settings-collapse .collapse-body{display:flex;flex-direction:column;gap:10px;margin-top:12px}
 .settings-group-title{
   width:100%;font-size:var(--fs-2xs);letter-spacing:.14em;color:var(--muted);
   text-transform:uppercase;font-weight:700;
@@ -229,6 +252,10 @@ input[type=range]::-webkit-slider-thumb{
   .header-left,.header-right{gap:4px}
   .btn{padding:0 8px;height:32px}
   input[type=range]{width:48px}
+  /* 320~380px 的機身高度也短(SE 只有 568px),面板卡片的內距與列距再收一輪,
+     讓設定不用捲動就看得完 */
+  .settings-group{padding:10px 12px;gap:8px}
+  #settingsPanel{gap:8px}
 }
 /* 最舊款極窄機型(320px):再壓縮一輪滑桿與數字框寬度。
    這個寬度放不下「品牌名稱 + 5 個 44px 觸控按鈕」(實測 320px 時頂欄會被擠成三排、
@@ -250,6 +277,14 @@ input[type=range]::-webkit-slider-thumb{
   #settingsPanel{padding:5px 10px;gap:5px 10px}
   .tempo-box{font-size:var(--fs-2xs);gap:4px}
   #settingsPanel select{padding:4px 10px;min-height:28px}
+  /* 橫向時螢幕「很寬但很矮」,面板可用高度只剩約 300px。
+     寬度既然有剩,就把同一組裡的短控制項並排、開關改三欄,把高度換成寬度 */
+  .settings-group{padding:8px 12px;gap:6px 12px;flex-direction:row;flex-wrap:wrap;align-items:center}
+  .settings-group .settings-group-title{width:100%}
+  .settings-group .tempo-box{width:auto}
+  .settings-group .collapse-body .tempo-box{width:100%}
+  .switch-grid{gap:6px 10px}
+  .switch-grid .switch-row{flex:1 1 calc(33.333% - 10px)}
   input[type=range]{width:70px}
   #keyboardCanvas{height:64px;margin-bottom:6px}
   #stage{min-height:70px}
@@ -633,68 +668,65 @@ input[type=file]{display:none}
       </select>
     </div>
     <div class="tempo-box"><span class="row-label">移調</span> <button class="btn" id="transDown" style="padding:4px 10px" disabled title="請先載入樂譜">−</button><b id="transVal">原調</b><button class="btn" id="transUp" style="padding:4px 10px" disabled title="請先載入樂譜">＋</button></div>
-    <div class="tempo-box"><span class="row-label">音檔</span>
-      <button class="btn" id="audioImportBtn">匯入音檔</button>
-      <input type="file" id="audioImportFile" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.flac">
-      <span id="audioImportStatus" style="font-size:12px;opacity:0.75">尚未匯入音檔(播放樂器合成音)</span>
-      <button class="btn" id="audioImportClearBtn" style="padding:4px 10px" disabled>移除</button>
-    </div>
   </div>
 
   <div class="settings-group">
-    <div class="settings-group-title">播放與練習</div>
-    <label class="switch-row" title="播放前先敲一小節節拍器,留時間把手放到樂器上">
-      <span class="switch"><input type="checkbox" id="countIn"><span class="switch-track"></span></span>預備拍
-    </label>
-    <label class="switch-row">
-      <span class="switch"><input type="checkbox" id="legatoPedal" checked><span class="switch-track"></span></span>圓滑/踏板效果
-    </label>
-    <div class="tempo-box" title="模擬鋼琴在真實空間裡的殘響與左右聲像。取樣本身是近距離收音的乾聲,加一點空間感才不會聽起來貼在臉上"><span class="row-label">空間感</span>
-      <input type="range" id="reverbAmount" min="0" max="100" value="30"><b id="reverbAmountVal">30</b>
+    <div class="settings-group-title">播放與顯示</div>
+    <div class="switch-grid">
+      <label class="switch-row" title="播放前先敲一小節節拍器,留時間把手放到樂器上">
+        <span class="switch"><input type="checkbox" id="countIn"><span class="switch-track"></span></span>預備拍
+      </label>
+      <label class="switch-row" title="圓滑線與踏板記號的延音效果">
+        <span class="switch"><input type="checkbox" id="legatoPedal" checked><span class="switch-track"></span></span>圓滑/踏板
+      </label>
+      <label class="switch-row" title="模擬真人彈奏的節奏彈性(樂句抑揚、結尾漸慢、重音拉長),而非機械式的固定拍點。套用在整首曲子共用的主時間軸上,所有樂器/雙手會一起呼吸伸縮">
+        <span class="switch"><input type="checkbox" id="useRubato"><span class="switch-track"></span></span>彈性速度
+      </label>
+      <label class="switch-row" title="把正在演奏的那一小節整段用色塊標起來,視讀時更容易抓到位置">
+        <span class="switch"><input type="checkbox" id="measureHl"><span class="switch-track"></span></span>小節高亮
+      </label>
+      <label class="switch-row" title="顯示樂譜上的速度記號">
+        <span class="switch"><input type="checkbox" id="showTempoMarks" checked><span class="switch-track"></span></span>速度記號
+      </label>
+      <label class="switch-row" title="把連續的整小節休止符合併成一個多小節休止記號">
+        <span class="switch"><input type="checkbox" id="mergeRestMeasures"><span class="switch-track"></span></span>合併休止
+      </label>
     </div>
-    <label class="switch-row" title="模擬真人彈奏的節奏彈性(樂句抑揚、結尾漸慢、重音拉長),而非機械式的固定拍點。套用在整首曲子共用的主時間軸上,所有樂器/雙手會一起呼吸伸縮">
-      <span class="switch"><input type="checkbox" id="useRubato"><span class="switch-track"></span></span>彈性速度(Rubato)
-    </label>
   </div>
 
-  <div class="settings-group">
-    <div class="settings-group-title">游標與小節高亮</div>
-    <div class="tempo-box">
-      <span class="row-label">顏色</span>
-      <input type="color" id="cursorColor" value="#E9CB7A" aria-label="游標與小節高亮顏色">
-      <span class="row-hint">游標、三角標記、小節色塊共用</span>
-    </div>
-    <div class="tempo-box">
-      <span class="row-label">濃度</span>
-      <input type="range" id="cursorOpacity" min="10" max="100" value="100"><b id="cursorOpacityVal">100</b>
-    </div>
-    <label class="switch-row" title="把正在演奏的那一小節整段用色塊標起來,視讀時更容易抓到位置">
-      <span class="switch"><input type="checkbox" id="measureHl"><span class="switch-track"></span></span>小節高亮
-    </label>
-  </div>
-
-  <div class="settings-group">
-    <div class="settings-group-title">顯示與匯出</div>
-    <div class="tempo-box"><span class="row-label">背景濃度</span> <input type="range" id="scoreBgOpacity" min="0" max="100" value="0"><b id="scoreBgOpacityVal">0</b></div>
-    <div class="tempo-box"><span class="row-label">背景圖</span>
-      <button class="btn" id="bgImageBtn">匯入背景圖片</button>
-      <input type="file" id="bgImageFile" accept="image/*">
-      <span id="bgImageStatus" style="font-size:12px;opacity:0.75">尚未匯入背景圖片</span>
-      <button class="btn" id="bgImageClearBtn" style="padding:4px 10px" disabled>移除</button>
-    </div>
-    <label class="switch-row">
-      <span class="switch"><input type="checkbox" id="showTempoMarks" checked><span class="switch-track"></span></span>顯示速度記號
-    </label>
-    <label class="switch-row">
-      <span class="switch"><input type="checkbox" id="mergeRestMeasures"><span class="switch-track"></span></span>合併連續整小節休止符
-    </label>
-    <div style="display:flex;flex-direction:column;gap:6px;width:100%">
-      <div style="display:flex;gap:10px;flex-wrap:wrap">
-        <button class="btn" id="recBtn" disabled title="請先載入樂譜">錄影模式</button>
-        <button class="btn primary" id="exportBtn" disabled title="請先載入樂譜"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m-5-5l5 5 5-5M4 21h16"/></svg>匯出影片</button>
+  <details class="settings-group settings-collapse">
+    <summary class="settings-group-title">進階(音檔、空間感、顏色、背景)<span class="chev">›</span></summary>
+    <div class="collapse-body">
+      <div class="tempo-box"><span class="row-label">音檔</span>
+        <button class="btn" id="audioImportBtn">匯入音檔</button>
+        <input type="file" id="audioImportFile" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.flac">
+        <span id="audioImportStatus" style="font-size:12px;opacity:0.75">尚未匯入音檔(播放樂器合成音)</span>
+        <button class="btn" id="audioImportClearBtn" style="padding:4px 10px" disabled>移除</button>
       </div>
-      <p style="font-size:11px;color:var(--muted);line-height:1.6;margin:0">匯出影片:自動產生可下載的影片檔。錄影模式:清空畫面成純樂譜視圖,方便你自行用手機/電腦內建的螢幕錄影工具錄製。</p>
+      <div class="tempo-box" title="模擬鋼琴在真實空間裡的殘響與左右聲像。取樣本身是近距離收音的乾聲,加一點空間感才不會聽起來貼在臉上"><span class="row-label">空間感</span>
+        <input type="range" id="reverbAmount" min="0" max="100" value="30"><b id="reverbAmountVal">30</b>
+      </div>
+      <div class="tempo-box" title="游標線、上方三角標記、小節色塊共用這個顏色">
+        <span class="row-label">游標顏色</span>
+        <input type="color" id="cursorColor" value="#E9CB7A" aria-label="游標與小節高亮顏色">
+        <span class="row-hint">重開網頁會回到金色</span>
+      </div>
+      <div class="tempo-box"><span class="row-label">游標濃度</span>
+        <input type="range" id="cursorOpacity" min="10" max="100" value="100"><b id="cursorOpacityVal">100</b>
+      </div>
+      <div class="tempo-box"><span class="row-label">背景濃度</span> <input type="range" id="scoreBgOpacity" min="0" max="100" value="0"><b id="scoreBgOpacityVal">0</b></div>
+      <div class="tempo-box"><span class="row-label">背景圖</span>
+        <button class="btn" id="bgImageBtn">匯入背景圖片</button>
+        <input type="file" id="bgImageFile" accept="image/*">
+        <span id="bgImageStatus" style="font-size:12px;opacity:0.75">尚未匯入背景圖片</span>
+        <button class="btn" id="bgImageClearBtn" style="padding:4px 10px" disabled>移除</button>
+      </div>
     </div>
+  </details>
+
+  <div class="export-row panel-actions">
+    <button class="btn" id="recBtn" disabled title="請先載入樂譜">錄影模式</button>
+    <button class="btn primary" id="exportBtn" disabled title="請先載入樂譜"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m-5-5l5 5 5-5M4 21h16"/></svg>匯出影片</button>
   </div>
 </div>
 
@@ -1537,7 +1569,10 @@ async function renderScore(xmlText){
   $("recBtn").disabled = false;
   $("exportBtn").disabled = false;
   $("focusToggle").disabled = false;
-  for (const id of ["recBtn", "exportBtn"]) $(id).removeAttribute("title");
+  // 原本這裡只是把「請先載入樂譜」移除;現在改成換上真正的說明,
+  // 因為面板裡那段解說文字已經拿掉了(太佔手機版面),說明改由 tooltip 承載
+  $("recBtn").title = "清空畫面成純樂譜視圖,方便你自行用手機/電腦內建的螢幕錄影工具錄製";
+  $("exportBtn").title = "自動產生可下載的影片檔";
   updateTransposeAvailability(); // 鼓組不需要移調,依目前樂器決定移調按鈕要不要維持關閉
   $("calibStartBtn").disabled = false;
   updateTimeLabel(0);
