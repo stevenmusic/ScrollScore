@@ -191,9 +191,14 @@ input[type=range]::-webkit-slider-thumb{
 @media (max-width:600px){
   header{padding:8px 10px;gap:6px 8px;flex-wrap:nowrap}
   .header-left,.header-right{gap:6px}
-  /* 手機寬度放不下「品牌名 + 6 個 44px 觸控按鈕」(實測會被擠成兩三排、吃掉樂譜高度),
-     品牌名收起來只留功能按鈕;標題仍保留在 DOM 供螢幕報讀器辨識頁面 */
-  header h1{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+  /* 品牌名在手機上只在「還沒載入樂譜」時顯示。
+     還沒載入時播放/停止是隱藏的,頂欄很空,品牌名放得下也看得到(第一眼的品牌印象);
+     一旦載入樂譜,頂欄要同時容納 6 個 44px 觸控按鈕,再加品牌名就會被擠成兩三排、
+     吃掉約 50px 的樂譜高度(實測 105~111px),所以這時才收起來。
+     標題始終保留在 DOM 裡供螢幕報讀器辨識頁面 */
+  body.score-loaded header h1{
+    position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;
+  }
   .btn{padding:0 10px;height:34px;font-size:var(--fs-sm)}
   .btn-label{display:none}
   .header-left .btn svg,#settingsToggle svg{margin:0}
