@@ -2892,7 +2892,9 @@ const PREF_FIELDS = [
   { id: "useRubato",         prop: "checked" },
   { id: "showTempoMarks",    prop: "checked" },
   { id: "mergeRestMeasures", prop: "checked" },
-  { id: "cursorColor",       prop: "value" },
+  // cursorColor 刻意不存:游標/播放軸/小節色塊每次重新開啟都回到預設金色。
+  // 改顏色通常是為了某支影片的當下需求,不是長期偏好,下次打開又是上次那個顏色反而困擾。
+  // 濃度與「小節高亮」開關屬於使用習慣,照樣記住。
   { id: "cursorOpacity",     prop: "value" },
   { id: "measureHl",         prop: "checked" },
   { id: "reverbAmount",      prop: "value" },
