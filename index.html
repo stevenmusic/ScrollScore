@@ -2620,7 +2620,7 @@ $("mergeRestMeasures").addEventListener("change", async () => {
 /* ── 播放控制 ─────────────────────────────── */
 $("playBtn").addEventListener("click", () => {
   if (!events.length) return;
-  if (countingIn) { countInCancelled = true; setPlayBtnState(false); setStatus(""); countingIn = false; return; }
+  if (countingIn) { countInCancelled = true; stopCountInClicks(); setPlayBtnState(false); setStatus(""); countingIn = false; return; }
   if (playing) { pausePlayback(); } else { beginPlayback(pausedAtSec); }
 });
 $("stopBtn").addEventListener("click", stopPlayback);
@@ -2712,29 +2712,77 @@ function startPlayback(fromSec){
 }
 
 /* ── 預備拍(Count-in):播放前先敲一小節節拍器,留時間把手放到樂器/譜架前 ── */
-function scheduleMetronomeClick(when, accent){
+let countInNodes = [];
+/* 原本只是一個方波振盪器(1600/1000Hz)直接發聲,方波的奇次諧波很硬,聽起來就是電子嗶嗶聲。
+   真實的節拍器/木魚聲其實是兩層疊起來的:
+   (1) 敲擊瞬間的寬頻雜訊瞬態——「喀」的那一下,人耳主要靠這個判斷是敲擊而不是電子音;
+   (2) 木頭本身的短促共鳴——用三角波(泛音比方波柔和),而且敲下去之後音高會微微下滑。
+   強弱也不只有兩級:小節第一拍(強)、次強拍、其餘弱拍三級,聽起來才有拍子的律動而不是一直同一聲。 */
+function scheduleMetronomeClick(when, level){
+  const freq = level === 2 ? 1150 : level === 1 ? 880 : 740;
+  const amp  = level === 2 ? 0.40 : level === 1 ? 0.28 : 0.20;
+  const dur  = level === 2 ? 0.075 : 0.055;
+  // (1) 瞬態:12ms 的雜訊,用帶通濾出高頻的「喀」聲,再快速衰減
+  const nLen = Math.max(1, Math.floor(audioCtx.sampleRate * 0.012));
+  const nBuf = audioCtx.createBuffer(1, nLen, audioCtx.sampleRate);
+  const nd = nBuf.getChannelData(0);
+  for (let i = 0; i < nLen; i++) nd[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / nLen, 2);
+  const nSrc = audioCtx.createBufferSource(); nSrc.buffer = nBuf;
+  const nBp = audioCtx.createBiquadFilter();
+  nBp.type = "bandpass"; nBp.frequency.value = Math.min(freq * 2.6, 6000); nBp.Q.value = 0.9;
+  const nG = audioCtx.createGain();
+  nG.gain.setValueAtTime(amp * 0.75, when);
+  nG.gain.exponentialRampToValueAtTime(0.0001, when + 0.028);
+  nSrc.connect(nBp); nBp.connect(nG); nG.connect(masterGain);
+  nSrc.start(when); nSrc.stop(when + 0.02);
+  // (2) 音體:三角波 + 輕微下滑的音高,模擬敲擊後木頭的共鳴
   const osc = audioCtx.createOscillator();
   const g = audioCtx.createGain();
-  osc.type = "square";
-  osc.frequency.value = accent ? 1600 : 1000;
+  osc.type = "triangle";
+  osc.frequency.setValueAtTime(freq, when);
+  osc.frequency.exponentialRampToValueAtTime(freq * 0.84, when + dur);
   g.gain.setValueAtTime(0.0001, when);
-  g.gain.exponentialRampToValueAtTime(accent ? 0.5 : 0.32, when + 0.004);
-  g.gain.exponentialRampToValueAtTime(0.0001, when + 0.05);
+  g.gain.exponentialRampToValueAtTime(amp, when + 0.003);
+  g.gain.exponentialRampToValueAtTime(0.0001, when + dur);
   osc.connect(g); g.connect(masterGain);
-  osc.start(when); osc.stop(when + 0.06);
+  osc.start(when); osc.stop(when + dur + 0.01);
+  countInNodes.push(nSrc, osc);
 }
-function countInClicks(){
-  if (scoreTimeSig && !scoreTimeSig.isCompound && scoreTimeSig.beats >= 1) return Math.min(8, scoreTimeSig.beats);
-  return 4;
+function stopCountInClicks(){
+  for (const n of countInNodes) { try { n.stop(); } catch (e) {} }
+  countInNodes = [];
+}
+/* 依照樂譜實際的拍號決定要敲幾下、每下多長、哪幾下是重拍。
+   舊版只看分子、而且明確排除複拍子(6/8、9/8、12/8),那些拍號會直接退回「4下四分音符」,
+   跟譜上的拍子完全對不起來;間隔也固定是四分音符,2/2、3/8 這類拍號同樣不對。 */
+function countInPattern(){
+  const ts = scoreTimeSig;
+  const beats = (ts && ts.beats >= 1) ? ts.beats : 4;
+  const beatType = (ts && ts.beatType >= 1) ? ts.beatType : 4;
+  const quartersPerClick = 4 / beatType; // 6/8→0.5(八分音符), 4/4→1, 2/2→2
+  // 複拍子敲八分音符、每三下一個次強拍(6/8就是「1 2 3 4 5 6」重音在1跟4),
+  // 這樣才聽得出複拍子的律動;4/4則在第三拍給次強拍,其餘拍號只有第一拍是強拍
+  const secondaryEvery = (ts && ts.isCompound) ? 3 : (beats === 4 && beatType === 4 ? 2 : 0);
+  let clicks = beats;
+  // 一小節太短的話(例如 2/4、3/8)給兩小節,不然預備拍一閃就過去了,來不及準備
+  while (clicks * quartersPerClick < 3 && clicks < 12) clicks *= 2;
+  clicks = Math.min(clicks, 12);
+  const levels = [];
+  for (let i = 0; i < clicks; i++) {
+    const posInBar = i % beats;
+    levels.push(posInBar === 0 ? 2 : (secondaryEvery && posInBar % secondaryEvery === 0 ? 1 : 0));
+  }
+  return { clicks, quartersPerClick, levels };
 }
 function playCountIn(){
   ensureAudio();
   return new Promise(resolve => {
-    const n = countInClicks();
-    const interval = 60 / bpm();
+    const { clicks, quartersPerClick, levels } = countInPattern();
+    const interval = (60 / bpm()) * quartersPerClick;
     const startAt = audioCtx.currentTime + 0.05;
-    for (let i = 0; i < n; i++) scheduleMetronomeClick(startAt + i * interval, i === 0);
-    setTimeout(resolve, (0.05 + n * interval) * 1000);
+    countInNodes = [];
+    for (let i = 0; i < clicks; i++) scheduleMetronomeClick(startAt + i * interval, levels[i]);
+    setTimeout(resolve, (0.05 + clicks * interval) * 1000);
   });
 }
 let countInCancelled = false, countingIn = false;
@@ -4099,7 +4147,7 @@ function stopAudioOnly(){
 }
 
 function stopPlayback(){
-  if (countingIn) { countInCancelled = true; countingIn = false; setStatus(""); }
+  if (countingIn) { countInCancelled = true; stopCountInClicks(); countingIn = false; setStatus(""); }
   stopAudioOnly();
   playing = false; pausedAtSec = 0;
   setPlayBtnState(false);
