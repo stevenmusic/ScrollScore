@@ -738,7 +738,7 @@ let arpMap = {};
 let calibrating = false, calibStartPerf = 0, calibTapIndex = 0;
 let calibrationMap = []; // [{tWhole, realSec}] 已排序,由 tap-along 或自動偵測建立
 let endX = 0, totalWhole = 0;
-let audioCtx = null, masterGain = null;
+let audioCtx = null, masterGain = null, masterLimiter = null;
 let playing = false, startCtxTime = 0, pausedAtSec = 0;
 let rafId = 0;
 let scheduled = [];     // 已排程的 audio nodes,停止時關閉
@@ -1874,7 +1874,10 @@ function buildTimeline(){
       events[i].arpGapAfterWhole = (i + 1 < events.length) ? events[i + 1].tWhole - events[i].tWhole : Infinity;
     }
   }
-  // 踏板範圍:只用樂譜裡明確的踏板記號(拍長猜測準確率太低,已移除)
+  // 踏板範圍:只用樂譜裡明確的踏板記號(拍長猜測準確率太低,已移除)。
+  // 樂譜有標踏板的話,那就是編訂者對「什麼時候該換踏板清掉和聲」的明確決定,優先權高於
+  // 下面「重複分解和弦音型」這個推測性的偵測——否則譜上每小節換一次踏板的意圖會被蓋掉。
+  const scoreHasPedalMarks = pedalRanges.length > 0;
   for (const ev of events) {
     ev.pedalOn = inRanges(ev.tWhole, pedalRanges);
     ev.legato = !ev.pedalOn && inRanges(ev.tWhole, slurRanges);
@@ -1886,9 +1889,14 @@ function buildTimeline(){
         if (ev.tWhole >= r.start && ev.tWhole < r.end) { rangeEnd = r.end; break; }
       }
     }
-    // 左手(或任一手)重複分解和弦音型偵測到的範圍,也當作和聲延伸的依據
-    for (const r of repeatChordRanges) {
-      if (ev.tWhole >= r.start && ev.tWhole < r.end) { rangeEnd = rangeEnd != null ? Math.max(rangeEnd, r.end) : r.end; break; }
+    // 左手(或任一手)重複分解和弦音型偵測到的範圍,也當作和聲延伸的依據——但這只是用來補足
+    // 「樂譜完全沒標踏板」的情況。樂譜有標踏板時絕對不能套用:實測使用者的樂譜(每小節換一次
+    // 踏板、共58個踏板記號)發現這個偵測範圍最長可達5.75全音符(約7個小節),會把每小節的踏板
+    // 切換整個蓋掉,讓不同和聲全部疊在一起(單一音符最長殘響10.4全音符),聽起來就是一團糊。
+    if (!scoreHasPedalMarks) {
+      for (const r of repeatChordRanges) {
+        if (ev.tWhole >= r.start && ev.tWhole < r.end) { rangeEnd = rangeEnd != null ? Math.max(rangeEnd, r.end) : r.end; break; }
+      }
     }
     // 同一時刻裡,只要有更長時值的音符(例如左手四拍和絃),其他較短的音符(例如右手旋律音)
     // 就延長撐滿到那個最長時值的音符結束為止,不用判斷和聲、純粹看樂譜上寫的時值
@@ -2182,7 +2190,10 @@ function buildRubatoMap(){
   const noteDurs = events.map(ev => ev.notes.length ? Math.max(...ev.notes.map(n => n.durWhole || 0)) : 0).filter(d => d > 0).sort((a, b) => a - b);
   const medianDurWhole = noteDurs.length ? noteDurs[Math.floor(noteDurs.length / 2)] : 0.125;
   const RITARD_Q = 2.2;        // 跑者煞停模型的冪次(Friberg & Sundberg論文常見範圍1.5~2.7)
-  const RITARD_SPAN_WHOLE = 1; // 結尾/fermata前多少全音符範圍內開始漸慢(約一小節)
+  // 結尾/fermata前多少全音符範圍內開始漸慢。原本只有1(約一小節),落在範圍內的音符太少,
+  // 漸慢只被取樣到一兩個點,聽起來像突然煞車;放寬到2(約2~3小節)讓更多音符參與這段漸慢。
+  // 但不能超過整首曲子長度的15%,否則很短的片段(例如只有一兩小節的測試檔)會整首都在漸慢
+  const RITARD_SPAN_WHOLE = Math.min(2, Math.max(0.5, totalWhole * 0.15));
   const RITARD_MIN_MULT = 0.4; // 全曲結尾/fermata的結構性漸慢,最多放慢到原速的40%
   const AGOGIC_AMOUNT = 0.08;  // 重音/延長記號的音值重音幅度(同樣理由調高)
   const JITTER_AMOUNT = 0.015; // 微幅隨機抖動(±1.5%)
@@ -2228,8 +2239,14 @@ function buildRubatoMap(){
     while (ritardPtr < ritardTargets.length - 1 && ritardTargets[ritardPtr] < ev.tWhole) ritardPtr++;
     const ritardDist = Math.max(0, ritardTargets[ritardPtr] - ev.tWhole);
     if (ritardDist < RITARD_SPAN_WHOLE) {
-      const rx = 1 - ritardDist / RITARD_SPAN_WHOLE;
-      mult *= Math.max(RITARD_MIN_MULT, Math.pow(1 - rx, RITARD_Q));
+      const rx = 1 - ritardDist / RITARD_SPAN_WHOLE; // 0=剛進入漸慢範圍, 1=正好在結尾/fermata上
+      // 把冪次曲線「縮放」進 [RITARD_MIN_MULT, 1] 這個範圍,而不是用 Math.max 硬夾住。
+      // 原本用夾的:q=2.2 時曲線在整段漸慢只走了三分之一就已經觸底(0.4),後面三分之二都是
+      // 平的,於是聽起來不是漸慢,而是「平穩→突然煞停」。實測整首曲子最後兩個音之間
+      // 速度直接從 0.968 掉到 0.400(等於一步慢了 2.4 倍),明顯不像真人收尾。
+      // 縮放之後:進入範圍時剛好是 1.0(不會有突兀的接縫),到結尾才剛好抵達最慢速度,
+      // 中間是連續平滑的,符合 Friberg & Sundberg(1999)跑者煞停模型原本的曲線形狀。
+      mult *= RITARD_MIN_MULT + (1 - RITARD_MIN_MULT) * Math.pow(1 - rx, RITARD_Q);
     }
     const a = ev.artic;
     if (a && (a.tenuto || a.fermata || a.accent || a.strongAccent)) mult *= (1 - AGOGIC_AMOUNT);
@@ -2631,8 +2648,25 @@ function ensureAudio(){
   if (!audioCtx) {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     masterGain = audioCtx.createGain();
-    masterGain.gain.value = 0.9;
-    masterGain.connect(audioCtx.destination);
+    /* 0.9 對這個合成器來說太燙了:每個聲部各自的峰值就有 0.32(合成)~0.66(取樣),
+       Web Audio 又是直接把波形相加,實測連稀疏的琶音都會衝到 1.392、踏板段落到 2.451,
+       全都超過 ±1.0 而被硬切成破音。降到 0.45 留出足夠的動態餘裕(headroom),
+       讓下面的限幅器只需要在真正的尖峰時介入,而不是整首曲子都在壓縮——
+       否則大聲小聲會被壓成一樣大聲(實測動態比從 1.76 被壓到只剩 1.06),反而更不自然。 */
+    masterGain.gain.value = 0.45;
+    /* 總輸出限幅器(limiter):Web Audio 是把每個聲音的波形「直接相加」再送到喇叭,超過 ±1.0
+       就會被硬切成方波,產生刺耳的破音。踏板踩著時同時發聲的音符會一路累積(實測踏板段落
+       峰值可達 5.34,遠超過 1.0,而且 93% 的取樣時間都在破音),真實鋼琴不會有這種現象——
+       多踩踏板只會變厚,不會破。這裡加一個快起音的限幅器把總音量壓在安全範圍內,
+       讓踏板段落只會變得飽滿,而不是破音。 */
+    masterLimiter = audioCtx.createDynamicsCompressor();
+    masterLimiter.threshold.value = -3;  // 只在接近滿刻度時才介入,一般演奏完全不碰,保留動態對比
+    masterLimiter.knee.value = 3;        // 稍微緩和轉折,避免壓縮介入的瞬間聽得出來
+    masterLimiter.ratio.value = 12;      // 高壓縮比,實質上當限幅器用(安全網,不是全時壓縮)
+    masterLimiter.attack.value = 0.001;  // 鋼琴起音極快,反應太慢的話峰值會直接穿過去
+    masterLimiter.release.value = 0.25;  // 放開得慢一點,不會有抽動感
+    masterGain.connect(masterLimiter);
+    masterLimiter.connect(audioCtx.destination);
   }
   if (audioCtx.state === "suspended") audioCtx.resume();
 }
@@ -4629,7 +4663,7 @@ async function exportVideo(cfg){
     const ctx = cv.getContext("2d");
     const vStream = cv.captureStream(cfg.fps || 30);
     aDest = audioCtx.createMediaStreamDestination();
-    masterGain.connect(aDest);
+    masterLimiter.connect(aDest); // 從限幅器之後取音,匯出的影片才跟現場聽到的一樣不會破音
     const stream = new MediaStream([
       ...vStream.getVideoTracks(),
       ...aDest.stream.getAudioTracks()
@@ -4712,7 +4746,7 @@ async function exportVideo(cfg){
   } catch (err) {
     setStatus("輸出失敗:" + (err.message || err));
   }
-  if (aDest) { try { masterGain.disconnect(aDest); } catch(e){} }
+  if (aDest) { try { masterLimiter.disconnect(aDest); } catch(e){} }
   stopAudioOnly();
   releaseWakeLock();
   $("exportOverlay").classList.remove("show");
