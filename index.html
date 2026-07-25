@@ -183,10 +183,17 @@ input[type=range]::-webkit-slider-thumb{
 /* ── 響應式斷點 ─────────────────── */
 /* 手機寬度:頂欄改成單排「圖示按鈕」,文字標籤收起來(用 aria-label 留給螢幕報讀器),
    這樣 載入/播放/停止/速度/設定 全部擠在一行也不會換行,不會有兩排高低不一的觀感 */
+/* 速度按鈕上的「(附點四分音符)」這類單位提示會讓按鈕寬到 195px,平板直向時足以把頂欄
+   擠成兩排。900px 以下一律只留數字,平板才能維持單排又保留品牌名 */
+@media (max-width:900px){
+  #tempoUnitSuffix{display:none}
+}
 @media (max-width:600px){
   header{padding:8px 10px;gap:6px 8px;flex-wrap:nowrap}
   .header-left,.header-right{gap:6px}
-  header h1{font-size:var(--fs-md);letter-spacing:.06em}
+  /* 手機寬度放不下「品牌名 + 6 個 44px 觸控按鈕」(實測會被擠成兩三排、吃掉樂譜高度),
+     品牌名收起來只留功能按鈕;標題仍保留在 DOM 供螢幕報讀器辨識頁面 */
+  header h1{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
   .btn{padding:0 10px;height:34px;font-size:var(--fs-sm)}
   .btn-label{display:none}
   .header-left .btn svg,#settingsToggle svg{margin:0}
@@ -195,7 +202,6 @@ input[type=range]::-webkit-slider-thumb{
   .tempo-label{display:none}
   /* "(附點四分音符)"這類單位提示手機寬度顯示不下,會把速度按鈕撐超寬,
      連帶把停止鈕、設定鈕擠到自動換行,版面就亂了——窄螢幕直接隱藏,只留數字 */
-  #tempoUnitSuffix{display:none}
   input[type=range]{width:64px}
   .tempo-box input[type=number]{width:44px;height:28px;line-height:28px;padding:0 3px}
   #keyboardCanvas{height:110px}
@@ -213,8 +219,10 @@ input[type=range]::-webkit-slider-thumb{
    吃掉 50px 的樂譜高度),所以直接把品牌名稱收起來——按鈕是功能,標題只是裝飾,
    優先保住按鈕好按跟樂譜可視高度。標題仍留在 DOM 裡供螢幕報讀器辨識頁面 */
 @media (max-width:340px){
-  header h1{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
-  .btn{padding:0 7px}
+  /* 320px 要塞下 6 個 44px 觸控目標,只能從間距跟內距擠出空間(不犧牲觸控目標大小) */
+  header{padding:8px 6px;gap:4px}
+  .btn{padding:0 5px}
+  .header-left,.header-right{gap:3px}
   input[type=range]{width:34px}
   .tempo-box input[type=number]{width:34px;height:26px;line-height:26px;padding:0 2px}
 }
@@ -267,14 +275,33 @@ input[type=range]::-webkit-slider-thumb{
 #scroller{will-change:transform;padding:0 0 0 0;position:relative;z-index:2}
 #score{filter:invert(92%) sepia(18%) saturate(180%) hue-rotate(10deg) brightness(1.02)}
 /* OSMD 產出 SVG 為黑底白紙,用濾鏡翻成象牙色譜面 */
+/* 游標顏色/濃度可自訂:--cursor-col 由設定面板的色票寫入,--cursor-op 是不透明度 */
 #playline{
   position:absolute;top:6%;bottom:6%;width:2px;
   left:var(--playx,25%);
-  background:linear-gradient(to bottom,transparent,var(--gold-bright) 12%,var(--gold-bright) 88%,transparent);
-  box-shadow:0 0 14px 2px rgba(233,203,122,.45);
+  background:linear-gradient(to bottom,transparent,var(--cursor-col,var(--gold-bright)) 12%,var(--cursor-col,var(--gold-bright)) 88%,transparent);
+  box-shadow:0 0 14px 2px color-mix(in srgb, var(--cursor-col,var(--gold-bright)) 45%, transparent);
+  opacity:var(--cursor-op,1);
   pointer-events:none;z-index:5;
   display:none; /* 樂譜載入前先不亮這條播放線,避免跟中間的說明文字疊在一起 */
 }
+/* 目前正在演奏的小節色塊。放在 #scroller 裡面(跟著樂譜一起捲動),
+   z-index 壓在樂譜下方,才不會蓋住音符 */
+#measureHighlight{
+  position:absolute;top:0;bottom:0;display:none;
+  background:var(--measure-col,#C9A24B);
+  opacity:var(--measure-op,.18);
+  pointer-events:none;z-index:0;border-radius:2px;
+}
+body.measure-hl.score-loaded #measureHighlight{display:block}
+.mini-label{font-size:var(--fs-2xs);color:var(--muted)}
+input[type=color]{
+  -webkit-appearance:none;appearance:none;border:1px solid var(--gold);
+  border-radius:var(--radius-sm);width:34px;height:26px;padding:0;
+  background:var(--bg);cursor:pointer;flex:none;
+}
+input[type=color]::-webkit-color-swatch-wrapper{padding:3px}
+input[type=color]::-webkit-color-swatch{border:none;border-radius:2px}
 body.score-loaded #playline{display:block}
 #playline::before{
   content:"";position:absolute;top:-2px;left:50%;transform:translateX(-50%);
@@ -350,7 +377,61 @@ footer{
   background:var(--gold);color:var(--bg);border:none;border-radius:var(--radius-sm);
   padding:4px 10px;font-family:inherit;font-size:var(--fs-xs);font-weight:700;cursor:pointer;
 }
-#kbdHint{flex:none;font-size:var(--fs-sm);opacity:.6;cursor:help}
+/* 快捷鍵說明原本只藏在這個圖示的 title tooltip 裡:手機/平板根本沒有 hover,滑鼠使用者也
+   要停在上面等一秒才看得到。改成真的可以點開的按鈕 + 對照表 */
+#kbdHint{
+  flex:none;font-size:var(--fs-sm);opacity:.65;cursor:pointer;
+  background:none;border:none;padding:4px;line-height:1;border-radius:var(--radius-sm);
+}
+#kbdHint:hover,#kbdHint:focus-visible{opacity:1}
+#shortcutOverlay{
+  position:fixed;inset:0;z-index:70;display:none;
+  align-items:center;justify-content:center;
+  background:rgba(12,10,7,.88);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);
+}
+#shortcutOverlay.show{display:flex}
+#shortcutOverlay .box{
+  padding:26px 28px;border:1px solid var(--gold);border-radius:var(--radius-md);
+  background:var(--panel-2);width:min(400px,90vw);
+  max-height:88vh;max-height:88dvh;overflow-y:auto;box-sizing:border-box;
+  box-shadow:var(--shadow-lg);
+}
+#shortcutOverlay .title{
+  font-family:"Noto Serif TC",serif;font-size:var(--fs-lg);color:var(--gold);
+  letter-spacing:.1em;margin-bottom:14px;text-align:center;
+}
+#shortcutOverlay table{width:100%;border-collapse:collapse}
+#shortcutOverlay td{
+  padding:8px 4px;font-size:var(--fs-sm);color:var(--ivory);
+  border-bottom:1px solid var(--line);vertical-align:middle;
+}
+#shortcutOverlay td:first-child{width:44%;white-space:nowrap}
+#shortcutOverlay tr:last-child td{border-bottom:none}
+#shortcutOverlay .or{color:var(--muted);font-size:var(--fs-2xs);margin:0 2px}
+#shortcutOverlay kbd{
+  display:inline-block;min-width:22px;text-align:center;
+  background:var(--bg);border:1px solid var(--gold);border-bottom-width:2px;
+  border-radius:var(--radius-sm);color:var(--gold-bright);
+  font-family:inherit;font-size:var(--fs-2xs);padding:3px 7px;
+}
+#shortcutOverlay p{
+  font-size:var(--fs-2xs);color:var(--muted);line-height:1.7;margin:16px 0 14px;text-align:center;
+}
+#shortcutOverlay .btn{width:100%}
+/* ── 專注模式:收起上下列,把畫面高度全部留給樂譜 ───────────
+   跟「錄影模式」不同:錄影模式是為了螢幕錄影,會把樂譜背景轉成白色並自動倒數播放;
+   專注模式只是練習時把控制列收起來,維持原本的深色介面,播放狀態也不中斷 */
+body.focus-mode header, body.focus-mode footer{display:none}
+#exitFocus{
+  position:absolute;top:10px;right:10px;z-index:30;display:none;
+  width:40px;height:40px;border-radius:50%;
+  border:1px solid var(--gold);color:var(--gold);
+  background:rgba(22,18,9,.75);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  font-size:17px;line-height:1;cursor:pointer;
+  align-items:center;justify-content:center;
+}
+body.focus-mode #exitFocus{display:flex}
+body.recording #exitFocus{display:none} /* 錄影模式有自己的離開鈕,兩個不要疊在一起 */
 /* ── 錄影模式 ───────────────────── */
 body.recording header, body.recording footer{display:none}
 body.recording #stage{background:#FFFDF6}
@@ -394,6 +475,17 @@ input[type=file]{display:none}
 #exportBar{height:4px;background:var(--line);border-radius:2px;overflow:hidden;margin-bottom:14px}
 #exportFill{height:100%;width:0%;background:var(--gold)}
 #exportOverlay p{font-size:var(--fs-xs);color:var(--muted);line-height:1.8;margin-bottom:16px}
+/* 「不要切走」這件事原本只是灰色小字的一句話,但它其實是匯出成敗的關鍵:
+   分頁跑到背景時瀏覽器會把畫面更新頻率降到很低(實測從 57fps 掉到 6.4fps),
+   影片就會一格一格卡住而且無法補救。所以獨立成一個看得見的警告區塊 */
+#exportOverlay .export-warn{
+  display:flex;flex-direction:column;gap:6px;text-align:left;
+  margin:16px 0 14px;padding:12px 14px;
+  border:1px solid var(--gold);border-left-width:3px;border-radius:var(--radius-sm);
+  background:rgba(201,162,75,.10);
+}
+#exportOverlay .export-warn b{color:var(--gold-bright);font-size:var(--fs-sm);letter-spacing:.03em}
+#exportOverlay .export-warn span{color:var(--ivory);font-size:var(--fs-2xs);line-height:1.75;opacity:.9}
 /* ── 格式選擇 ───────────────────── */
 #formatOverlay{
   /* 跟 #previewOverlay 同樣的理由必須用 fixed:這層嵌在 #stage 裡,而 #stage 的高度受 flex
@@ -441,6 +533,7 @@ input[type=file]{display:none}
 .ratio{border:1.5px solid var(--gold);border-radius:3px;flex:none}
 .ratio-l{width:34px;height:19px}
 .ratio-p{width:19px;height:34px;margin:0 7.5px}
+.ratio-s{width:27px;height:27px;margin:0 3.5px}
 /* ── 匯出預覽 ───────────────────── */
 #previewOverlay{
   /* fixed(而非absolute)是因為這層原本嵌套在 #stage 裡,#stage 本身受 flex 版面限制、
@@ -495,6 +588,9 @@ input[type=file]{display:none}
         <div class="tempo-box"><span class="tempo-label">速度</span> <input type="range" id="tempo" min="40" max="400" value="100" step="1"><input type="number" id="tempoVal" min="40" max="400" value="100"></div>
       </div>
     </div>
+    <button class="btn" id="focusToggle" aria-label="專注模式" title="專注模式:收起上下列,把畫面留給樂譜" disabled>
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 00-2 2v3M16 3h3a2 2 0 012 2v3M8 21H5a2 2 0 01-2-2v-3M16 21h3a2 2 0 002-2v-3"/></svg>
+    </button>
     <button class="btn" id="settingsToggle" aria-label="設定">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15a3 3 0 100-6 3 3 0 000 6z"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
       <span class="btn-label">設定</span>
@@ -539,6 +635,21 @@ input[type=file]{display:none}
     <label class="switch-row" title="模擬真人彈奏的節奏彈性(樂句抑揚、結尾漸慢、重音拉長),而非機械式的固定拍點。套用在整首曲子共用的主時間軸上,所有樂器/雙手會一起呼吸伸縮">
       <span class="switch"><input type="checkbox" id="useRubato"><span class="switch-track"></span></span>彈性速度(Rubato)
     </label>
+  </div>
+
+  <div class="settings-group">
+    <div class="settings-group-title">游標與小節高亮</div>
+    <div class="tempo-box">游標
+      <input type="color" id="cursorColor" value="#E9CB7A" aria-label="游標顏色">
+      <span class="mini-label">濃度</span><input type="range" id="cursorOpacity" min="10" max="100" value="100"><b id="cursorOpacityVal">100</b>
+    </div>
+    <label class="switch-row" title="把正在演奏的那一小節整段用色塊標起來,視讀時更容易抓到位置">
+      <span class="switch"><input type="checkbox" id="measureHl"><span class="switch-track"></span></span>小節高亮
+    </label>
+    <div class="tempo-box">色塊
+      <input type="color" id="measureColor" value="#C9A24B" aria-label="小節高亮顏色">
+      <span class="mini-label">濃度</span><input type="range" id="measureOpacity" min="5" max="80" value="18"><b id="measureOpacityVal">18</b>
+    </div>
   </div>
 
   <div class="settings-group">
@@ -594,10 +705,11 @@ input[type=file]{display:none}
       <button id="trySampleBtn" class="link-btn">或先試用範例樂譜看看 →</button>
     </div>
   </div>
-  <div id="scroller"><div id="score"></div></div>
+  <div id="scroller"><div id="measureHighlight"></div><div id="score"></div></div>
   <div id="playline"></div>
   <div id="countdown">3</div>
   <button id="exitrec" title="離開錄影模式">✕</button>
+  <button id="exitFocus" title="離開專注模式(Esc)" aria-label="離開專注模式">✕</button>
   <div id="formatOverlay">
     <div class="box">
       <div class="title" id="fmtTitle">選擇匯出類型</div>
@@ -671,6 +783,10 @@ input[type=file]{display:none}
           <span class="ratio ratio-p"></span>
           <span><b>直式 1080 × 1920</b><br><small>Shorts / Reels / TikTok</small></span>
         </button>
+        <button class="fmt" id="fmtSquare">
+          <span class="ratio ratio-s"></span>
+          <span><b>正方形 1080 × 1080</b><br><small>Instagram 貼文 / Facebook</small></span>
+        </button>
         <button class="btn" id="fmtBackFromFormat">返回</button>
       </div>
     </div>
@@ -680,7 +796,12 @@ input[type=file]{display:none}
       <div class="title" id="exportOverlayTitle">合成中 0%</div>
       <div id="exportTime">0:00 / 0:00</div>
       <div id="exportBar"><div id="exportFill"></div></div>
-      <p>請勿切換分頁或切到背景,螢幕也請不要熄滅。<br>輸出時間 = 樂曲長度,完成後自動下載。</p>
+      <div class="export-warn">
+        <b>⚠ 請讓這個畫面保持在最前面</b>
+        <span>切到其他 App、其他分頁,或讓螢幕熄滅,瀏覽器就會把畫面更新降到每秒幾格,
+        錄出來的影片會一格一格卡住(而且沒辦法事後修復,只能重新匯出)。</span>
+      </div>
+      <p>輸出時間 = 樂曲長度,完成後自動下載。</p>
       <button class="btn" id="exportCancel">取消</button>
     </div>
   </div>
@@ -711,8 +832,28 @@ input[type=file]{display:none}
       <button id="seekGoBtn">跳轉</button>
     </div>
   </div>
-  <span id="kbdHint" title="快捷鍵:Space 播放/暫停、Esc 或 R 停止、↑↓ 調整速度、←→ 跳轉5秒">⌨️</span>
+  <button id="kbdHint" title="快捷鍵一覽" aria-label="快捷鍵一覽">⌨️</button>
 </footer>
+
+<div id="shortcutOverlay">
+  <div class="box">
+    <div class="title">快捷鍵</div>
+    <table id="shortcutTable">
+      <tr><td><kbd>Space</kbd></td><td>播放 / 暫停</td></tr>
+      <tr><td><kbd>Esc</kbd> <span class="or">或</span> <kbd>R</kbd></td><td>停止並回到開頭</td></tr>
+      <tr><td><kbd>↑</kbd> <kbd>↓</kbd></td><td>速度 ±1 BPM</td></tr>
+      <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>倒退 / 快轉 5 秒</td></tr>
+    </table>
+    <div class="title" style="margin-top:20px">觸控手勢</div>
+    <table id="shortcutTable2">
+      <tr><td><b>點一下樂譜</b></td><td>播放 / 暫停</td></tr>
+      <tr><td><b>左右滑動樂譜</b></td><td>跳到前後小節(滑越長跳越多)</td></tr>
+      <tr><td><b>拖曳時間軸</b></td><td>精確定位到任一時間點</td></tr>
+    </table>
+    <p>載入樂譜後才會生效。輸入文字時快捷鍵會自動停用。</p>
+    <button class="btn" id="shortcutClose">關閉</button>
+  </div>
+</div>
 
 <script>
 "use strict";
@@ -1368,6 +1509,7 @@ async function renderScore(xmlText){
   $("stopBtn").disabled = false;
   $("recBtn").disabled = false;
   $("exportBtn").disabled = false;
+  $("focusToggle").disabled = false;
   for (const id of ["recBtn", "exportBtn"]) $(id).removeAttribute("title");
   updateTransposeAvailability(); // 鼓組不需要移調,依目前樂器決定移調按鈕要不要維持關閉
   $("calibStartBtn").disabled = false;
@@ -2505,11 +2647,83 @@ $("tempoVal").addEventListener("change", () => {
   applyTempo(t);
 });
 
+/* ── 游標與小節高亮的外觀設定 ──────────────────────────────
+   顏色/濃度寫進 CSS 變數,現場畫面直接吃;匯出影片則在 drawExportFrame() 讀同一組值,
+   確保預覽跟實際輸出長得一樣 */
+function hlCursorColor(){ return $("cursorColor").value; }
+function hlCursorOpacity(){ return +$("cursorOpacity").value / 100; }
+function hlMeasureColor(){ return $("measureColor").value; }
+function hlMeasureOpacity(){ return +$("measureOpacity").value / 100; }
+function measureHlOn(){ return $("measureHl").checked; }
+function applyHighlightStyles(){
+  const root = document.documentElement.style;
+  root.setProperty("--cursor-col", hlCursorColor());
+  root.setProperty("--cursor-op", String(hlCursorOpacity()));
+  root.setProperty("--measure-col", hlMeasureColor());
+  root.setProperty("--measure-op", String(hlMeasureOpacity()));
+  $("cursorOpacityVal").textContent = $("cursorOpacity").value;
+  $("measureOpacityVal").textContent = $("measureOpacity").value;
+  document.body.classList.toggle("measure-hl", measureHlOn());
+  updateMeasureHighlight(playing ? currentSec() : pausedAtSec);
+}
+/* 找出某個時間點落在第幾小節,回傳它在樂譜上的左右邊界(px)。
+   measureRanges 存的是全音符座標,直接用 xAtWhole() 換算,不用繞道秒數 */
+function measureBoundsAt(sec){
+  if (!measureRanges.length || !events.length) return null;
+  const w = secToWhole(sec);
+  for (let i = 0; i < measureRanges.length; i++) {
+    const m = measureRanges[i];
+    if (w >= m.start && w < m.end) return { left: xAtWhole(m.start), right: xAtWhole(m.end), index: i };
+  }
+  return null;
+}
+function updateMeasureHighlight(sec){
+  const el = $("measureHighlight");
+  if (!el) return;
+  if (!measureHlOn() || !events.length) { el.style.width = "0px"; return; }
+  const b = measureBoundsAt(sec);
+  if (!b) { el.style.width = "0px"; return; }
+  el.style.left = b.left + "px";
+  el.style.width = Math.max(0, b.right - b.left) + "px";
+}
+for (const id of ["cursorColor","cursorOpacity","measureColor","measureOpacity"]) {
+  $(id).addEventListener("input", applyHighlightStyles);
+}
+$("measureHl").addEventListener("change", applyHighlightStyles);
+
+/* 專注模式:把上下列收起來,樂譜可視高度變大。播放中切換不會中斷播放,
+   切換後要重算鍵盤畫布跟播放軸範圍,因為可用高度變了 */
+function setFocusMode(on){
+  document.body.classList.toggle("focus-mode", on);
+  resizeKeyboardCanvas();
+  drawKeyboardLive(playing ? currentSec() : pausedAtSec);
+  updatePlaylineExtent();
+  if (!playing) resetScroll();
+}
+$("focusToggle").addEventListener("click", () => setFocusMode(true));
+$("exitFocus").addEventListener("click", () => setFocusMode(false));
+
+/* 快捷鍵對照表:點 footer 的鍵盤圖示打開(手機沒有 hover,tooltip 等於看不到) */
+function openShortcuts(){ $("shortcutOverlay").classList.add("show"); }
+function closeShortcuts(){ $("shortcutOverlay").classList.remove("show"); }
+$("kbdHint").addEventListener("click", openShortcuts);
+$("shortcutClose").addEventListener("click", closeShortcuts);
+$("shortcutOverlay").addEventListener("click", e => { if (e.target === $("shortcutOverlay")) closeShortcuts(); });
+
 /* ── 鍵盤快捷鍵:方便放在譜架/桌上練習時不用點螢幕 ──────────
    Space 播放/暫停、Esc 或 R 停止回到開頭、↑↓ 微調 BPM、←→ 跳轉5秒 */
 document.addEventListener("keydown", e => {
   const tag = document.activeElement ? document.activeElement.tagName : "";
   if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+  // 快捷鍵一覽開著的時候,Esc 是用來關掉它(不是停止播放),其餘按鍵一律忽略
+  if ($("shortcutOverlay").classList.contains("show")) {
+    if (e.code === "Escape") { e.preventDefault(); closeShortcuts(); }
+    return;
+  }
+  // 專注模式下 Esc 是「離開專注模式」,不是停止播放(跟離開鈕的提示一致)
+  if (document.body.classList.contains("focus-mode") && e.code === "Escape") {
+    e.preventDefault(); setFocusMode(false); return;
+  }
   if (document.body.classList.contains("recording") || exporting) return;
   if ($("formatOverlay").classList.contains("show") || $("exportOverlay").classList.contains("show")) return;
   if (!events.length) return;
@@ -2591,6 +2805,63 @@ $("exportWatermarkInput").addEventListener("input", () => {
 $("exportTitleInput").addEventListener("input", () => {
   try { localStorage.setItem(TITLE_STORAGE_KEY, $("exportTitleInput").value); } catch (e) {}
 });
+
+/* ── 記住使用者的偏好設定 ────────────────────────────────────────
+   音色、背景透明度、各種開關下次打開網頁時自動帶回來,不用每次重設。
+   刻意「不」記住速度:每份樂譜載入時都會用譜上自己的速度覆蓋掉滑桿,
+   記住的值只會在還沒載入樂譜前短暫存在,記了也沒有意義。
+   樂器不需要在這裡重新載入取樣音色——載入樂譜的流程本來就會依照當下選的樂器載入取樣,
+   所以這裡只還原數值,不用在頁面載入時就建立 AudioContext(那會被瀏覽器擋下來)。 */
+const PREF_KEY = "scrollscore_prefs";
+const PREF_FIELDS = [
+  { id: "instrument",        prop: "value" },
+  { id: "scoreBgOpacity",    prop: "value" },
+  { id: "countIn",           prop: "checked" },
+  { id: "legatoPedal",       prop: "checked" },
+  { id: "useRubato",         prop: "checked" },
+  { id: "showTempoMarks",    prop: "checked" },
+  { id: "mergeRestMeasures", prop: "checked" },
+  { id: "cursorColor",       prop: "value" },
+  { id: "cursorOpacity",     prop: "value" },
+  { id: "measureHl",         prop: "checked" },
+  { id: "measureColor",      prop: "value" },
+  { id: "measureOpacity",    prop: "value" },
+];
+function savePrefs(){
+  try {
+    const data = {};
+    for (const f of PREF_FIELDS) {
+      const el = $(f.id);
+      if (el) data[f.id] = el[f.prop];
+    }
+    localStorage.setItem(PREF_KEY, JSON.stringify(data));
+  } catch (e) {}
+}
+function restorePrefs(){
+  let data = null;
+  try { data = JSON.parse(localStorage.getItem(PREF_KEY) || "null"); } catch (e) {}
+  if (!data) return;
+  for (const f of PREF_FIELDS) {
+    const el = $(f.id);
+    if (el && data[f.id] !== undefined && data[f.id] !== null) el[f.prop] = data[f.id];
+  }
+  // 還原後要補做的畫面同步(這些平常是由各自的 change/input 事件負責的)
+  $("scoreBgOpacityVal").textContent = $("scoreBgOpacity").value;
+  $("scoreBg").style.opacity = $("scoreBgOpacity").value / 100;
+  // 這兩個會用到後面才宣告的 const(例如 KB_MIN_H),在這裡直接呼叫會踩到暫時性死區,
+  // 排到這一輪腳本跑完之後再執行
+  setTimeout(() => {
+    resizeKeyboardCanvas();        // 鋼琴/鼓組的面板高度算法不同
+    updateTransposeAvailability(); // 鼓組不能移調
+  }, 0);
+}
+restorePrefs();
+// 不管有沒有存過設定都要跑一次,把游標/小節高亮的顏色濃度寫進 CSS 變數並同步數字標籤
+setTimeout(applyHighlightStyles, 0);
+for (const f of PREF_FIELDS) {
+  const el = $(f.id);
+  if (el) el.addEventListener(f.prop === "checked" ? "change" : "input", savePrefs);
+}
 
 $("showTempoMarks").addEventListener("change", async () => {
   if (!lastXmlText) return;
@@ -4165,8 +4436,10 @@ function playlineX(){ return $("stage").clientWidth * PLAYLINE_RATIO; }
 function secToWhole(sec){
   return useCalib() ? calibSecToWhole(sec) : (rubatoEnabled() ? rubatoSecToWhole(sec) : sec * bpm() / 240);
 }
-function xAtSec(sec){
-  const w = secToWhole(sec); // sec → whole
+function xAtSec(sec){ return xAtWhole(secToWhole(sec)); } // sec → whole → x
+/* 全音符座標 → 樂譜上的 x。小節高亮需要直接用小節邊界(本來就是全音符座標)算出
+   左右邊界,不必先繞去換算成秒再換回來,所以把原本內嵌在 xAtSec 裡的這段抽出來共用 */
+function xAtWhole(w){
   if (!events.length) return 0;
   if (w <= events[0].tWhole) return events[0].x;
   const lastEv = events[events.length - 1];
@@ -4195,12 +4468,14 @@ function tick(){
   $("progressfill").style.width = (sec / totalSec() * 100).toFixed(2) + "%";
   updateTimeLabel(sec);
   drawKeyboardLive(sec);
+  updateMeasureHighlight(sec);
   rafId = requestAnimationFrame(tick);
 }
 
 function resetScroll(){
   if (!events.length) return;
   $("scroller").style.transform = "translateX(" + (playlineX() - events[0].x) + "px)";
+  updateMeasureHighlight(playing ? currentSec() : pausedAtSec);
 }
 
 function fmt(s){ s=Math.max(0,Math.floor(s)); return Math.floor(s/60)+":"+String(s%60).padStart(2,"0"); }
@@ -4217,6 +4492,7 @@ function seekTo(sec){
   $("progressfill").style.width = (sec / totalSec() * 100).toFixed(2) + "%";
   updateTimeLabel(sec);
   drawKeyboardLive(sec);
+  updateMeasureHighlight(sec);
 }
 function fmtPrecise(s){ s = Math.max(0, s); return Math.floor(s/60) + ":" + (s%60).toFixed(1).padStart(4, "0"); }
 
@@ -4458,6 +4734,11 @@ $("fmtLandscape").addEventListener("click", () => {
 $("fmtPortrait").addEventListener("click", () => {
   showExportPreview(Object.assign({ W: 1080, H: 1920, scoreH: 380, align: chosenAlign, bitrate: 5000000, fps: exportFps, includeKeyboard: chosenIncludeKeyboard, startSec: chosenStartSec, endSec: chosenEndSec }, watermarkCfg()));
 });
+// 正方形:高度介於橫式(1080)與直式(1920)之間,樂譜高度取 400 —— 比橫式略高一點點,
+// 因為正方形沒有橫式那麼寬,同樣的樂譜高度看起來會相對小
+$("fmtSquare").addEventListener("click", () => {
+  showExportPreview(Object.assign({ W: 1080, H: 1080, scoreH: 400, align: chosenAlign, bitrate: 5000000, fps: exportFps, includeKeyboard: chosenIncludeKeyboard, startSec: chosenStartSec, endSec: chosenEndSec }, watermarkCfg()));
+});
 $("previewBackBtn").addEventListener("click", () => {
   $("previewOverlay").classList.remove("show");
   $("formatOverlay").classList.add("show");
@@ -4642,6 +4923,21 @@ function computeExportLayout(cfg){
   const plX = W * PLAYLINE_RATIO;
   return { W, H, SCORE_H, margin, kbH, scoreAreaH, topY, plX };
 }
+/* 匯出畫面的樂譜底色是亮米色(#FFFDF6),使用者挑的游標顏色如果偏亮(預設的淡金色就是),
+   直接畫上去會幾乎看不見。這裡在亮度過高時等比壓暗到安全範圍,色相維持不變 */
+function darkenForLightBg(hex){
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex || "");
+  if (!m) return "#B8860B";
+  const n = parseInt(m[1], 16);
+  let r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  const MAX_LUM = 0.45;
+  if (lum > MAX_LUM) {
+    const k = MAX_LUM / lum;
+    r = Math.round(r * k); g = Math.round(g * k); b = Math.round(b * k);
+  }
+  return "#" + [r, g, b].map(v => v.toString(16).padStart(2, "0")).join("");
+}
 /* 依照 CSS background-size:cover 的邏輯裁切/縮放圖片,填滿指定區域不變形 */
 function drawImageCover(ctx, img, x, y, w, h){
   const imgRatio = img.width / img.height, boxRatio = w / h;
@@ -4666,6 +4962,17 @@ function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
     }
   }
   const off = plX - xAtSec(songSec) * scale;
+  // 小節高亮畫在樂譜「之前」,才會在音符底下當底色而不是蓋住音符(跟現場畫面的 z-index 一致)
+  if (measureHlOn()) {
+    const mb = measureBoundsAt(songSec);
+    if (mb) {
+      ctx.save();
+      ctx.globalAlpha = hlMeasureOpacity();
+      ctx.fillStyle = hlMeasureColor();
+      ctx.fillRect(off + mb.left * scale, topY, Math.max(0, (mb.right - mb.left) * scale), SCORE_H);
+      ctx.restore();
+    }
+  }
   for (const tl of tiles) {
     const dx = off + tl.x;
     if (dx < W && dx + tl.canvas.width > 0) ctx.drawImage(tl.canvas, dx, topY);
@@ -4675,12 +4982,18 @@ function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
   // 長超多,看起來又粗又突兀;貼著樂譜量才會跟著樂譜大小自然縮放
   const plPad = SCORE_H * 0.1;
   const plTop = topY - plPad, plBottom = topY + SCORE_H + plPad;
-  ctx.strokeStyle = "#B8860B"; ctx.lineWidth = 4;
+  // 游標顏色跟現場畫面用同一組設定;匯出的樂譜背景是亮米色,所以太淺的顏色會看不清楚,
+  // 這裡把亮度壓一階當作描邊色,確保在白底上仍然看得見
+  const curCol = darkenForLightBg(hlCursorColor());
+  ctx.save();
+  ctx.globalAlpha = hlCursorOpacity();
+  ctx.strokeStyle = curCol; ctx.lineWidth = 4;
   ctx.beginPath(); ctx.moveTo(plX, plTop); ctx.lineTo(plX, plBottom); ctx.stroke();
-  ctx.fillStyle = "#B8860B";
+  ctx.fillStyle = curCol;
   ctx.beginPath();
   ctx.moveTo(plX-9, plTop-2); ctx.lineTo(plX+9, plTop-2); ctx.lineTo(plX, plTop+13);
   ctx.closePath(); ctx.fill();
+  ctx.restore();
   if (cfg.includeKeyboard) {
     const kbY = H - kbH;
     if (currentInstrument() === "drum") {
