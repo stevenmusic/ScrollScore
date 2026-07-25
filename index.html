@@ -4189,11 +4189,14 @@ $("exitrec").addEventListener("click", () => {
 let exporting = false, exportCancelled = false;
 const exportFps = 60; // 固定60fps,60沒有卡頓問題,不再提供選項
 
-/* requestAnimationFrame 的實際頻率被螢幕更新率(通常60Hz)限制住,
-   要求120/144fps時改用計時器強制排程,但實際能不能真的跑到那個速率還是要看裝置/瀏覽器支援 */
+/* 匯出常常要跑20~90秒以上,使用者中途切出分頁、鎖螢幕的機率不低——實測發現這種情況下
+   requestAnimationFrame 會被瀏覽器直接節流到一個很低的固定頻率(實測影片幀率從~57fps
+   驟降到~6.4fps,而且幀與幀間隔幾乎是同一個固定值,是節流的典型特徵,不是運算變慢),
+   因為rAF綁定畫面繪製週期,分頁不在前景就不會照原本頻率觸發。改用setTimeout排程,
+   瀏覽器對背景分頁計時器的節流沒有rAF那麼激進(尤其匯出時Web Audio還在持續播放,
+   瀏覽器通常會讓分頁保持活躍),明顯更耐使用者中途切出去。 */
 function scheduleFrame(fn, fps){
-  if (fps <= 60) { requestAnimationFrame(fn); return; }
-  setTimeout(fn, 1000 / fps);
+  setTimeout(fn, 1000 / (fps || 60));
 }
 let chosenAlign = "center";
 let chosenIncludeKeyboard = false;
