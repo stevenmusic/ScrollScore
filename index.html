@@ -227,7 +227,14 @@ input[type=range]::-webkit-slider-thumb{
    而移調那組是 flex:none 不會縮,320px 螢幕就會被推到第二列(實測列寬 274 放不下 146+10+162)。
    關掉換行之後改由選單負責壓縮,最窄縮到 min-width 就好 */
 .settings-group .combo-row{flex-wrap:nowrap}
-.combo-row #instrument{flex:0 1 auto;min-width:92px;max-width:200px}
+/* align-self:stretch —— 讓選單的高度跟著這一列最高的元素(移調按鈕)走。
+   兩者本來一個是 select 的 min-height(38px)、一個是 .btn 的 height(44px),差 6px,
+   並排時上下緣對不齊。直接寫死高度的話,.btn 在 5 個斷點各有不同高度(38/34/32/44/36),
+   要一個一個跟著改;用 stretch 就自動同高,以後改按鈕高度也不會漏掉這裡。
+   min-height:0 是必要的:#settingsPanel select 在觸控裝置上有 min-height:38px,
+   而手機橫向時 .btn 只有 36px——最小高度會變成地板,stretch 就縮不下去,又差 2px。
+   把地板拿掉,高度完全交給這一列最高的元素決定 */
+.combo-row #instrument{flex:0 1 auto;min-width:92px;max-width:200px;align-self:stretch;min-height:0}
 .combo-row .trans-group{display:inline-flex;align-items:center;gap:6px;flex:none;margin-left:auto}
 .combo-row .trans-group .btn{padding:4px 10px}
 .combo-row #transVal{min-width:4.6em;text-align:center}
