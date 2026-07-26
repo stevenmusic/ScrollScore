@@ -3,6 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<!-- 手機瀏覽器的網址列/狀態列會吃這個顏色。切換淺色主題時 applyTheme() 會一起改,
+     不然頁面變白了、上面那條還是黑的,看起來像沒對齊 -->
+<meta name="theme-color" content="#0C0A07">
 <title>ScrollScore — 橫向捲動樂譜播放器</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@600;700&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
@@ -38,8 +41,56 @@
   --fs-lg:16px;
   --fs-xl:19px;
   --fs-2xl:26px;
+  /* 表面色:原本這些半透明底色是散在各處寫死的,淺色主題沒辦法一次換掉。
+     收斂成語意變數之後,切換主題只要重新定義這幾個值 */
+  --surface-glass:rgba(32,26,15,.88);  /* 浮在頁面上的卡片/彈出層(搭配 blur) */
+  --surface-sheet:rgba(22,18,9,.9);    /* 底部抽屜 */
+  --surface-inset:rgba(22,18,9,.55);   /* 凹陷的輸入區塊 */
+  --surface-inset-hi:rgba(22,18,9,.75);/* 凹陷區塊 focus 時 */
+  --scrim:rgba(12,10,7,.88);           /* 對話框後的遮罩 */
+  --scrim-soft:rgba(8,6,3,.55);        /* 抽屜後的遮罩 */
+  --scrim-thin:rgba(12,10,7,.55);      /* 淡遮罩(倒數計時等) */
+  --card-tint:rgba(255,255,255,.035);  /* 設定卡片的極淡填色 */
+  --stage-glow:#171208;                /* 舞台頂端的暈光 */
+  --opaque-cover:#0b0906;              /* 匯出進度的不透明遮罩 */
   color-scheme:dark; /* 原生 <select> 彈出選單改用系統深色樣式,避免跳出淺色視窗破壞黑金質感 */
 }
+
+/* ══ 淺色主題 ══════════════════════════════════════════════════
+   同一組語意變數換一套值,版面與元件完全不用改寫。
+   金色在淺底上必須壓深才看得清楚:深色版的 --gold #C9A24B 在淺底上只有 1.9:1,
+   這裡的 #856418 對背景 5.12:1、對卡片 4.74:1,金色按鈕上的白字也有 5.17:1,
+   全部通過 WCAG AA 的 4.5:1。 */
+body.light{
+  --bg:#FBF7EE;
+  --panel:#F4EEE0;
+  --panel-2:#EDE6D4;
+  --gold:#856418;
+  --gold-bright:#6B5115;
+  --ivory:#241E12;        /* 淺色版的「主文字色」,名字沿用但實際是深色 */
+  --muted:#6F6450;
+  --muted-bright:#544B3B;
+  --line:#D8CDB2;
+  --shadow-sm:0 4px 14px rgba(90,72,30,.10);
+  --shadow-md:0 10px 26px rgba(90,72,30,.14);
+  --shadow-lg:0 18px 44px rgba(90,72,30,.18);
+  --surface-glass:rgba(252,249,241,.92);
+  --surface-sheet:rgba(251,247,238,.97);
+  --surface-inset:rgba(255,255,255,.7);
+  --surface-inset-hi:rgba(255,255,255,.95);
+  --scrim:rgba(60,48,22,.42);
+  --scrim-soft:rgba(60,48,22,.28);
+  --scrim-thin:rgba(255,253,246,.6);
+  --card-tint:rgba(133,100,24,.05);
+  --stage-glow:#FFFDF6;
+  --opaque-cover:#F7F2E6;
+  color-scheme:light;
+}
+/* 樂譜本身:深色版是用反相濾鏡把 OSMD 的黑字白紙翻成象牙色。
+   淺色版不需要翻——直接顯示原本的黑字,就是最自然的紙本樂譜。
+   (錄影模式早就是這樣做的,這裡沿用同一招) */
+body.light #score{filter:none}
+body.light #stage{background:#FFFDF6}
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{height:100%;overflow:hidden}
 body{
@@ -111,7 +162,7 @@ input[type=range]::-webkit-slider-thumb{
 #tempoPopover{
   position:absolute;top:calc(100% + 10px);right:0;z-index:60;
   display:flex;flex-direction:column;gap:10px;min-width:190px;
-  background:rgba(32,26,15,.88); /* --panel-2 的半透明版本,搭配blur維持玻璃感,同時比--panel亮一階 */
+  background:var(--surface-glass); /* --panel-2 的半透明版本,搭配blur維持玻璃感,同時比--panel亮一階 */
   backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
   border:1px solid var(--gold);border-radius:var(--radius-md);
   padding:14px 16px;box-shadow:var(--shadow-md);
@@ -123,7 +174,7 @@ input[type=range]::-webkit-slider-thumb{
 #tempoPopover input[type=range]{flex:1;width:auto}
 /* ── 設定面板:改成從螢幕底部滑出的抽屜(Bottom Sheet),不再往下推擠樂譜區 ── */
 #settingsBackdrop{
-  position:fixed;inset:0;z-index:58;background:rgba(8,6,3,.55);
+  position:fixed;inset:0;z-index:58;background:var(--scrim-soft);
   backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);
   opacity:0;pointer-events:none;transition:opacity .25s;
 }
@@ -134,7 +185,7 @@ input[type=range]::-webkit-slider-thumb{
   max-height:78vh;overflow-y:auto;
   padding:22px 14px calc(16px + env(safe-area-inset-bottom));
   border-top:1px solid var(--gold);border-radius:var(--radius-lg) var(--radius-lg) 0 0;
-  background:rgba(22,18,9,.9);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
+  background:var(--surface-sheet);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
   box-shadow:var(--shadow-lg);
   transform:translateY(100%);pointer-events:none;
   transition:transform .3s cubic-bezier(.32,.72,0,1);
@@ -155,7 +206,7 @@ input[type=range]::-webkit-slider-thumb{
   /* 每個控制項各自一列、左邊標籤欄固定寬度,所有控制項的左緣才會對齊。
      原本是 flex-wrap 讓元素自由流動,不同長度的標籤會把控制項推到參差不齊的位置 */
   display:flex;flex-direction:column;align-items:stretch;gap:10px;
-  padding:14px 16px;background:rgba(255,255,255,.035);
+  padding:14px 16px;background:var(--card-tint);
   border:1px solid var(--line);border-radius:var(--radius-md);
 }
 .settings-group .tempo-box,.settings-group .switch-row{width:100%}
@@ -225,7 +276,7 @@ input[type=range]::-webkit-slider-thumb{
   flex:1;position:relative;overflow:hidden;min-height:110px;
   display:flex;align-items:center;
   background:
-    radial-gradient(ellipse 120% 80% at 50% 0%, #171208 0%, var(--bg) 60%);
+    radial-gradient(ellipse 120% 80% at 50% 0%, var(--stage-glow) 0%, var(--bg) 60%);
 }
 /* ── 鍵盤/鼓組面板 ───────────────── */
 #keyboardCanvas{display:block;width:100%;height:150px;background:var(--bg);flex:none;margin-bottom:10px}
@@ -391,12 +442,12 @@ body.score-loaded #playline{display:block}
 .empty-card{
   display:flex;flex-direction:column;align-items:center;gap:10px;
   max-width:360px;padding:30px 32px;
-  background:rgba(22,18,9,.55);border:1px solid var(--line);border-radius:var(--radius-lg);
+  background:var(--surface-inset);border:1px solid var(--line);border-radius:var(--radius-lg);
   backdrop-filter:blur(2px);
   cursor:pointer;transition:background-color .15s,border-color .15s;
 }
 .empty-card:hover,.empty-card:focus-visible{
-  background:rgba(22,18,9,.75);border-color:var(--gold);outline:none;
+  background:var(--surface-inset-hi);border-color:var(--gold);outline:none;
 }
 .empty-card .mark{
   display:flex;align-items:center;justify-content:center;
@@ -437,7 +488,7 @@ footer{
 #seekPopover{
   position:absolute;bottom:calc(100% + 10px);right:0;z-index:60;
   display:flex;gap:6px;align-items:center;
-  background:rgba(32,26,15,.92);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  background:var(--surface-glass);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
   border:1px solid var(--gold);border-radius:var(--radius-md);padding:8px 10px;
   box-shadow:var(--shadow-md);
   opacity:0;transform:translateY(-4px);pointer-events:none;transition:opacity .15s,transform .15s;
@@ -463,7 +514,7 @@ footer{
 #shortcutOverlay{
   position:fixed;inset:0;z-index:70;display:none;
   align-items:center;justify-content:center;
-  background:rgba(12,10,7,.88);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);
+  background:var(--scrim);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);
 }
 #shortcutOverlay.show{display:flex}
 #shortcutOverlay .box{
@@ -506,7 +557,7 @@ body.recording #playline::before{border-top-color:#B8860B}
 #countdown{
   position:absolute;inset:0;display:none;align-items:center;justify-content:center;
   font-family:"Noto Serif TC",serif;font-size:120px;font-weight:700;color:var(--gold);
-  background:rgba(12,10,7,.55);z-index:20;
+  background:var(--scrim-thin);z-index:20;
 }
 body.recording #countdown{color:#B8860B;background:rgba(255,253,246,.7)}
 #exitrec{
@@ -524,7 +575,7 @@ input[type=file]{display:none}
   /* 這一層刻意不用 backdrop-filter:匯出期間它會整場顯示好幾分鐘,而即時模糊要持續重算整個
      視窗的背景。匯出同時還要即時編碼 1080p 影片,CPU 一旦吃滿,音訊執行緒就會來不及算完一個
      render quantum 而爆音/斷音。改用不透明底色,視覺上一樣看不到後面,但完全不花 GPU/CPU */
-  background:#0b0906;
+  background:var(--opaque-cover);
 }
 #exportOverlay.show{display:flex}
 #exportOverlay .box{
@@ -559,7 +610,7 @@ input[type=file]{display:none}
      改成 fixed 才是相對於真正的視窗置中 */
   position:fixed;inset:0;z-index:45;display:none;
   align-items:center;justify-content:center;
-  background:rgba(12,10,7,.88);backdrop-filter:blur(3px);
+  background:var(--scrim);backdrop-filter:blur(3px);
 }
 #formatOverlay.show{display:flex}
 #formatOverlay .box{
@@ -615,7 +666,7 @@ input[type=file]{display:none}
      改成 fixed 讓這層一定是相對於真正的視窗定位,不受 #stage 高度影響。 */
   position:fixed;inset:0;z-index:46;display:none;
   align-items:center;justify-content:center;
-  background:rgba(12,10,7,.9);backdrop-filter:blur(3px);
+  background:var(--scrim);backdrop-filter:blur(3px);
 }
 #previewOverlay.show{display:flex}
 #previewOverlay .box{
@@ -708,6 +759,9 @@ input[type=file]{display:none}
       </label>
       <label class="switch-row" title="把連續的整小節休止符合併成一個多小節休止記號">
         <span class="switch"><input type="checkbox" id="mergeRestMeasures"><span class="switch-track"></span></span>合併休止
+      </label>
+      <label class="switch-row" title="淺色主題:白紙黑字的樂譜,適合白天、明亮環境或投影">
+        <span class="switch"><input type="checkbox" id="lightTheme"><span class="switch-track"></span></span>淺色模式
       </label>
     </div>
   </div>
@@ -2840,11 +2894,28 @@ const MEASURE_BAND_RATIO = 0.22;
 function hlMeasureColor(){ return $("cursorColor").value; }
 function hlMeasureOpacity(){ return hlCursorOpacity() * MEASURE_BAND_RATIO; }
 function measureHlOn(){ return $("measureHl").checked; }
+/* 淺色/深色主題切換。版面與元件完全共用,只換 :root 那組語意變數。
+   theme-color 也要跟著換,不然 iOS 的狀態列會維持深色、跟頁面接不起來 */
+function lightThemeOn(){ const el = $("lightTheme"); return !!(el && el.checked); }
+function applyTheme(){
+  const on = lightThemeOn();
+  document.body.classList.toggle("light", on);
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute("content", on ? "#FBF7EE" : "#0C0A07");
+  applyHighlightStyles();                       // 游標顏色在淺底上要換算,見下方
+  resizeKeyboardCanvas();                       // 鍵盤畫布底色吃 --bg,換主題要重畫
+  drawKeyboardLive(playing ? currentSec() : pausedAtSec);
+}
+
 function applyHighlightStyles(){
   const root = document.documentElement.style;
-  root.setProperty("--cursor-col", hlCursorColor());
+  /* 淺色主題的譜面是白紙黑字,亮金游標畫在上面會跟匯出時一樣太淡看不清楚,
+     所以直接沿用匯出那條換算規則(保留色相、換成標題深度)。
+     等於淺色模式在螢幕上看到的,就是匯出影片裡會看到的顏色。 */
+  const ink = lightThemeOn() ? exportInkColor : (c => c);
+  root.setProperty("--cursor-col", ink(hlCursorColor()));
   root.setProperty("--cursor-op", String(hlCursorOpacity()));
-  root.setProperty("--measure-col", hlMeasureColor());
+  root.setProperty("--measure-col", ink(hlMeasureColor()));
   root.setProperty("--measure-op", String(hlMeasureOpacity()));
   $("cursorOpacityVal").textContent = $("cursorOpacity").value;
 
@@ -2887,6 +2958,7 @@ for (const id of ["cursorColor","cursorOpacity"]) {
 }
 $("reverbAmount").addEventListener("input", applyReverbAmount);
 $("measureHl").addEventListener("change", applyHighlightStyles);
+$("lightTheme").addEventListener("change", applyTheme);
 
 /* 快捷鍵對照表:點 footer 的鍵盤圖示打開(手機沒有 hover,tooltip 等於看不到) */
 function openShortcuts(){ $("shortcutOverlay").classList.add("show"); }
@@ -3002,6 +3074,7 @@ const PREF_FIELDS = [
   { id: "useRubato",         prop: "checked" },
   { id: "showTempoMarks",    prop: "checked" },
   { id: "mergeRestMeasures", prop: "checked" },
+  { id: "lightTheme",        prop: "checked" },
   // cursorColor 刻意不存:游標/播放軸/小節色塊每次重新開啟都回到預設金色。
   // 改顏色通常是為了某支影片的當下需求,不是長期偏好,下次打開又是上次那個顏色反而困擾。
   // 濃度與「小節高亮」開關屬於使用習慣,照樣記住。
@@ -3039,7 +3112,7 @@ function restorePrefs(){
 }
 restorePrefs();
 // 不管有沒有存過設定都要跑一次,把游標/小節高亮的顏色濃度寫進 CSS 變數並同步數字標籤
-setTimeout(() => { applyHighlightStyles(); applyReverbAmount(); }, 0);
+setTimeout(() => { applyTheme(); applyReverbAmount(); }, 0);
 for (const f of PREF_FIELDS) {
   const el = $(f.id);
   if (el) el.addEventListener(f.prop === "checked" ? "change" : "input", savePrefs);
