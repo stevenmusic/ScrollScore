@@ -718,7 +718,7 @@ input[type=file]{display:none}
       <div class="tempo-box" title="游標線、上方三角標記、小節色塊共用這個顏色">
         <span class="row-label">游標顏色</span>
         <input type="color" id="cursorColor" value="#E9CB7A" aria-label="游標與小節高亮顏色">
-        <span class="row-hint">重開網頁會回到金色</span>
+        <span class="row-hint">重開網頁會回到金色;匯出時會自動加深,以免在米色譜面上太淡</span>
       </div>
       <div class="tempo-box"><span class="row-label">游標濃度</span>
         <input type="range" id="cursorOpacity" min="10" max="100" value="100"><b id="cursorOpacityVal">100</b>
@@ -5234,6 +5234,24 @@ function computeExportLayout(cfg){
 }
 /* 匯出畫面的樂譜底色是亮米色(#FFFDF6),使用者挑的游標顏色如果偏亮(預設的淡金色就是),
    直接畫上去會幾乎看不見。這裡在亮度過高時等比壓暗到安全範圍,色相維持不變 */
+/* 匯出畫面的譜面底色是米色,亮色系的游標畫在上面會太淡看不清楚,所以匯出時(且只有匯出時)
+   把游標顏色的亮度壓到上限以下。這是使用者實際比對兩版之後選定的行為:
+   螢幕上是深色底,亮金 #E9CB7A 最好看;匯出是米色底,壓暗後的 #837245 才看得清楚。
+   兩邊顏色不一樣是刻意的,不是 bug——設定面板的游標顏色那一列也寫了這件事。
+   只作用在游標線與上方三角形;小節色塊本來就是低透明度的底色,維持原色不動。 */
+function darkenForLightBg(hex){
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex || "");
+  if (!m) return "#B8860B";
+  const n = parseInt(m[1], 16);
+  let r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  const MAX_LUM = 0.45;
+  if (lum > MAX_LUM) {
+    const k = MAX_LUM / lum;
+    r = Math.round(r * k); g = Math.round(g * k); b = Math.round(b * k);
+  }
+  return "#" + [r, g, b].map(v => v.toString(16).padStart(2, "0")).join("");
+}
 /* 依照 CSS background-size:cover 的邏輯裁切/縮放圖片,填滿指定區域不變形 */
 function drawImageCover(ctx, img, x, y, w, h){
   const imgRatio = img.width / img.height, boxRatio = w / h;
@@ -5278,9 +5296,7 @@ function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
   // 長超多,看起來又粗又突兀;貼著樂譜量才會跟著樂譜大小自然縮放
   const plPad = SCORE_H * 0.1;
   const plTop = topY - plPad, plBottom = topY + SCORE_H + plPad;
-  // 游標顏色直接用設定面板選的那個色,匯出畫面要跟現場畫面看起來一模一樣。
-  // (曾經為了在亮色譜面上更清楚而自動壓暗亮度,但那會讓匯出的游標跟畫面上看到的顏色不一致)
-  const curCol = hlCursorColor();
+  const curCol = darkenForLightBg(hlCursorColor()); // 米色譜面上要壓暗才看得清楚,見函式上方說明
   ctx.save();
   ctx.globalAlpha = hlCursorOpacity();
   ctx.strokeStyle = curCol; ctx.lineWidth = 4;
