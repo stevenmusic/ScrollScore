@@ -166,7 +166,10 @@ input[type=range]::-webkit-slider-thumb{
    (實測 320px 螢幕溢出 105px),所以這裡要覆寫回可換行 */
 .row-hint{
   font-size:var(--fs-2xs);color:var(--muted);opacity:.8;
-  white-space:normal;flex:1 1 100%;line-height:1.5;
+  /* 父層 .tempo-box 是 white-space:nowrap(為了讓「標籤 + 控制項」不要被拆行),
+     說明文字繼承到的話,句子一長就會變成一條不能斷的長線衝出面板,
+     所以這裡覆寫回可換行,並允許被壓縮(min-width:0) */
+  white-space:normal;flex:1 1 auto;min-width:0;line-height:1.5;
 }
 .settings-group input[type=range]{flex:1;min-width:90px;width:auto}
 .settings-group .tempo-box b{min-width:2.6em;text-align:right}
@@ -724,7 +727,7 @@ input[type=file]{display:none}
       <div class="tempo-box" title="游標線、上方三角標記、小節色塊、匯出影片的主標題共用這個顏色">
         <span class="row-label">游標顏色</span>
         <input type="color" id="cursorColor" value="#E9CB7A" aria-label="游標與小節高亮顏色">
-        <span class="row-hint">游標、三角標記、小節色塊、匯出影片的主標題共用這個顏色(重開網頁會回到金色)。匯出到米色譜面時只會自動加深,色相維持你選的;標題不會跟著下面的濃度變淡,以免看不清楚。</span>
+        <span class="row-hint">重開網頁會回到金色</span>
       </div>
       <div class="tempo-box"><span class="row-label">游標濃度</span>
         <input type="range" id="cursorOpacity" min="10" max="100" value="100"><b id="cursorOpacityVal">100</b>
@@ -5254,13 +5257,17 @@ function computeExportLayout(cfg){
      紅 #FF0000→#930000、天藍 #00A0FF→#005C93、粉 #FF69B4→#93004A;
    - 灰階(飽和度接近 0)不會被硬加上色相,只會變暗,#888888→#4A4A4A。
    游標線、上方三角形、小節色塊都套用同一條規則,匯出時三者才會像螢幕上一樣是同一個顏色。 */
-// 這組「深度」原本就是匯出標題那個金色 #8B6508 的 HSL 值,現在沿用成整組匯出標記的統一深度。
-// 它同時是可讀性的保證:不管使用者挑什麼色相,換算後都落在同一個明度/飽和度上,
-// 印在米色譜面(#FFFDF6)上的對比大約都是 5:1,標題不會因為選了淡色就變得看不清楚。
-const EXPORT_INK_L = 0.2882, EXPORT_INK_S = 0.8912;
+// 匯出標記的統一「深度」。這組值原本取自舊的固定標題色 #8B6508(L=0.288),但實際看下來偏暗,
+// 所以把明度提到 0.33,金色會從 #8B6808 變成 #9F7709,明顯亮一階。
+// 上限就卡在這附近:黃金色相本來就是所有色相裡對比最吃虧的,在米色底(#FFFDF6)上
+// L=0.33 還有 4.03:1,L=0.38 就掉到 3.13:1、再上去會低於 WCAG 對大字級文字與圖形元件
+// 要求的 3:1。所以 0.33 是「看起來夠亮」與「還留有安全邊際」的折衷。
+// 這組值同時是可讀性的保證:不管使用者挑什麼色相,換算後都落在同一個明度/飽和度上
+// (實測紅 7.74:1、天藍 5.69:1、灰 7.44:1),標題不會因為選了淡色就變得看不清楚。
+const EXPORT_INK_L = 0.33, EXPORT_INK_S = 0.8912;
 function exportInkColor(hex){
   const m = /^#?([0-9a-f]{6})$/i.exec(hex || "");
-  if (!m) return "#8B6508";
+  if (!m) return "#9F7709"; // 解析失敗時退回「預設金換算後」的顏色,跟正常路徑一致
   const n = parseInt(m[1], 16);
   const r = ((n >> 16) & 255) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
   const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
@@ -5373,7 +5380,7 @@ function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
       //   游標線/三角形 墨色 × 游標濃度(預設 100%)
       //   小節色塊     墨色 × 游標濃度 × 0.22,只是襯在音符底下的底色
       //   副標題/頻道名 維持深灰不變色——它們是說明性文字,全部跟著主色跑會變成整片同色而沒有層次
-      ctx.fillStyle = exportInkColor(hlCursorColor()); // 深度固定,對比約5.2:1(網頁標頭的--gold只有2.36:1,WCAG連大字級3:1都不過)
+      ctx.fillStyle = exportInkColor(hlCursorColor()); // 深度固定,金色在米色底上對比4.03:1(網頁標頭的--gold只有2.36:1,WCAG連大字級3:1都不過)
       ctx.textAlign = "center";
       ctx.fillText(cfg.title, W / 2, wmPadY);
     }
