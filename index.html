@@ -161,7 +161,13 @@ input[type=range]::-webkit-slider-thumb{
 .settings-group .tempo-box,.settings-group .switch-row{width:100%}
 .settings-group .tempo-box{flex-wrap:wrap}
 .row-label{width:5.2em;flex:none;color:var(--muted);font-size:var(--fs-sm)}
-.row-hint{font-size:var(--fs-2xs);color:var(--muted);opacity:.8}
+/* 說明文字獨占一整列並允許換行。父層 .tempo-box 是 white-space:nowrap(那是為了讓
+   「標籤 + 控制項」不要被拆行),但長句子套上去就會撐成一條 400px 的長線衝出面板
+   (實測 320px 螢幕溢出 105px),所以這裡要覆寫回可換行 */
+.row-hint{
+  font-size:var(--fs-2xs);color:var(--muted);opacity:.8;
+  white-space:normal;flex:1 1 100%;line-height:1.5;
+}
 .settings-group input[type=range]{flex:1;min-width:90px;width:auto}
 .settings-group .tempo-box b{min-width:2.6em;text-align:right}
 /* 「尚未匯入音檔(播放樂器合成音)」這類狀態文字很長,會把後面的「移除」擠到下一行變成孤兒。
@@ -718,7 +724,7 @@ input[type=file]{display:none}
       <div class="tempo-box" title="游標線、上方三角標記、小節色塊共用這個顏色">
         <span class="row-label">游標顏色</span>
         <input type="color" id="cursorColor" value="#E9CB7A" aria-label="游標與小節高亮顏色">
-        <span class="row-hint">重開網頁會回到金色;匯出時會自動換成跟標題同深度的顏色,以免在米色譜面上太淡</span>
+        <span class="row-hint">重開網頁會回到金色。匯出到米色譜面時只會自動加深,色相維持你選的;匯出標題固定是深金色,不受這裡影響。</span>
       </div>
       <div class="tempo-box"><span class="row-label">游標濃度</span>
         <input type="range" id="cursorOpacity" min="10" max="100" value="100"><b id="cursorOpacityVal">100</b>
