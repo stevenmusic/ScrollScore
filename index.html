@@ -718,7 +718,7 @@ input[type=file]{display:none}
       <div class="tempo-box" title="游標線、上方三角標記、小節色塊共用這個顏色">
         <span class="row-label">游標顏色</span>
         <input type="color" id="cursorColor" value="#E9CB7A" aria-label="游標與小節高亮顏色">
-        <span class="row-hint">重開網頁會回到金色;匯出時會自動加深,以免在米色譜面上太淡</span>
+        <span class="row-hint">重開網頁會回到金色;匯出時會自動換成跟標題同深度的顏色,以免在米色譜面上太淡</span>
       </div>
       <div class="tempo-box"><span class="row-label">游標濃度</span>
         <input type="range" id="cursorOpacity" min="10" max="100" value="100"><b id="cursorOpacityVal">100</b>
@@ -5234,23 +5234,49 @@ function computeExportLayout(cfg){
 }
 /* 匯出畫面的樂譜底色是亮米色(#FFFDF6),使用者挑的游標顏色如果偏亮(預設的淡金色就是),
    直接畫上去會幾乎看不見。這裡在亮度過高時等比壓暗到安全範圍,色相維持不變 */
-/* 匯出畫面的譜面底色是米色,亮色系的游標畫在上面會太淡看不清楚,所以匯出時(且只有匯出時)
-   把游標顏色的亮度壓到上限以下。這是使用者實際比對兩版之後選定的行為:
-   螢幕上是深色底,亮金 #E9CB7A 最好看;匯出是米色底,壓暗後的 #837245 才看得清楚。
+/* 匯出畫面的譜面底色是米色,螢幕上好看的亮色畫在上面會太淡,所以匯出時(且只有匯出時)要換算成
+   一組「適合印在淺色紙上」的深色。這是使用者比對過兩版之後選定的行為:螢幕是深色底,亮金
+   #E9CB7A 最好看;匯出是米色底,要換成跟匯出標題同一個深度的金色才看得清楚。
    兩邊顏色不一樣是刻意的,不是 bug——設定面板的游標顏色那一列也寫了這件事。
-   只作用在游標線與上方三角形;小節色塊本來就是低透明度的底色,維持原色不動。 */
-function darkenForLightBg(hex){
+
+   換算方式不是單純壓暗(單純壓暗會把顏色洗成灰濁的橄欖色,實測 #E9CB7A 會變成 #837245)。
+   改成保留使用者選的「色相」,把「明度」與「飽和度」換成匯出標題那個金色 #8B6508 的值
+   (HSL 的 L=0.288、S=0.891)。這樣:
+   - 預設金 #E9CB7A 會換算成 #8B6808,跟標題的 #8B6508 肉眼看不出差別(綠色差 3/255,
+     來自兩者色相相差 1.2°),等於使用者要的「游標跟標題同色」;
+   - 換成別的顏色也依同一條規則走,永遠是「你選的色相 + 標題的深度」,例如
+     紅 #FF0000→#930000、天藍 #00A0FF→#005C93、粉 #FF69B4→#93004A;
+   - 灰階(飽和度接近 0)不會被硬加上色相,只會變暗,#888888→#4A4A4A。
+   游標線、上方三角形、小節色塊都套用同一條規則,匯出時三者才會像螢幕上一樣是同一個顏色。 */
+const EXPORT_INK_L = 0.2882, EXPORT_INK_S = 0.8912; // 取自匯出標題色 #8B6508 的 HSL
+function exportInkColor(hex){
   const m = /^#?([0-9a-f]{6})$/i.exec(hex || "");
-  if (!m) return "#B8860B";
+  if (!m) return "#8B6508";
   const n = parseInt(m[1], 16);
-  let r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
-  const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
-  const MAX_LUM = 0.45;
-  if (lum > MAX_LUM) {
-    const k = MAX_LUM / lum;
-    r = Math.round(r * k); g = Math.round(g * k); b = Math.round(b * k);
+  const r = ((n >> 16) & 255) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+  const l = (max + min) / 2;
+  let h = 0, sat = 0;
+  if (d > 1e-6) {
+    sat = d / (1 - Math.abs(2 * l - 1));
+    if (max === r) h = ((g - b) / d) % 6;
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h *= 60; if (h < 0) h += 360;
   }
-  return "#" + [r, g, b].map(v => v.toString(16).padStart(2, "0")).join("");
+  const L = Math.min(l, EXPORT_INK_L);
+  const S = sat < 0.08 ? sat : Math.max(sat, EXPORT_INK_S); // 灰階不硬加色相
+  const c = (1 - Math.abs(2 * L - 1)) * S;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const mm = L - c / 2;
+  let rr, gg, bb;
+  if (h < 60)       { rr = c; gg = x; bb = 0; }
+  else if (h < 120) { rr = x; gg = c; bb = 0; }
+  else if (h < 180) { rr = 0; gg = c; bb = x; }
+  else if (h < 240) { rr = 0; gg = x; bb = c; }
+  else if (h < 300) { rr = x; gg = 0; bb = c; }
+  else              { rr = c; gg = 0; bb = x; }
+  return "#" + [rr, gg, bb].map(v => Math.round((v + mm) * 255).toString(16).padStart(2, "0")).join("");
 }
 /* 依照 CSS background-size:cover 的邏輯裁切/縮放圖片,填滿指定區域不變形 */
 function drawImageCover(ctx, img, x, y, w, h){
@@ -5282,7 +5308,7 @@ function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
     if (mb) {
       ctx.save();
       ctx.globalAlpha = hlMeasureOpacity();
-      ctx.fillStyle = hlMeasureColor();
+      ctx.fillStyle = exportInkColor(hlMeasureColor()); // 跟游標套用同一條換算規則,兩者在匯出畫面才會同色
       ctx.fillRect(off + mb.left * scale, topY, Math.max(0, (mb.right - mb.left) * scale), SCORE_H);
       ctx.restore();
     }
@@ -5296,7 +5322,7 @@ function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
   // 長超多,看起來又粗又突兀;貼著樂譜量才會跟著樂譜大小自然縮放
   const plPad = SCORE_H * 0.1;
   const plTop = topY - plPad, plBottom = topY + SCORE_H + plPad;
-  const curCol = darkenForLightBg(hlCursorColor()); // 米色譜面上要壓暗才看得清楚,見函式上方說明
+  const curCol = exportInkColor(hlCursorColor()); // 米色譜面上要換成深色版本,見函式上方說明
   ctx.save();
   ctx.globalAlpha = hlCursorOpacity();
   ctx.strokeStyle = curCol; ctx.lineWidth = 4;
