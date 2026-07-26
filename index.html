@@ -217,11 +217,17 @@ input[type=range]::-webkit-slider-thumb{
 .combo-row{gap:10px}
 /* flex-basis 必須是 0。用 auto 的話基準寬度 = 選單最長選項(「古典吉他(尼龍弦)」)的寬度,
    而 flex-wrap 是先看基準寬度決定要不要換行、之後才壓縮,320px 螢幕就會被擠成兩列 */
-/* 上限 200px:最長的選項「古典吉他(尼龍弦)」約 150px,200 已經很寬鬆。
-   不設上限的話 flex:1 會讓它在平板/桌機吃掉整條列(實測 iPad 上撐到 522px),
-   一個只有八個選項的下拉選單不需要那麼寬 */
-.combo-row #instrument{flex:1 1 0;min-width:96px;max-width:200px}
-.combo-row .trans-group{display:inline-flex;align-items:center;gap:6px;flex:none;margin-left:auto}
+/* 選單依內容決定寬度(flex-grow 0),不要用 flex:1 去撐滿剩下的空間。
+   實測最長的選項「古典吉他(尼龍弦)」文字只要 100px,加內距與箭頭約 145px 就夠了,
+   之前撐到 200px 純粹是被 flex:1 拉大的。窄螢幕仍可壓縮到 min-width。
+   移調那組也不再 margin-left:auto 釘到最右邊——釘住的話 iPad 中間會空 398px、
+   桌機空 574px,兩個明明相關的控制項被拉到天涯海角。改成緊接在選單右邊 */
+/* 這一列不換行。flex-wrap 是先用「基準寬度」決定換不換行、之後才壓縮,
+   而移調那組是 flex:none 不會縮,320px 螢幕就會被推到第二列(實測列寬 274 放不下 146+10+162)。
+   關掉換行之後改由選單負責壓縮,最窄縮到 min-width 就好 */
+.settings-group .combo-row{flex-wrap:nowrap}
+.combo-row #instrument{flex:0 1 auto;min-width:92px;max-width:200px}
+.combo-row .trans-group{display:inline-flex;align-items:center;gap:6px;flex:none}
 .combo-row .trans-group .btn{padding:4px 10px}
 .combo-row #transVal{min-width:4.6em;text-align:center}
 /* 說明文字獨占一整列並允許換行。父層 .tempo-box 是 white-space:nowrap(那是為了讓
