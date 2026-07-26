@@ -721,10 +721,10 @@ input[type=file]{display:none}
       <div class="tempo-box" title="模擬鋼琴在真實空間裡的殘響與左右聲像。取樣本身是近距離收音的乾聲,加一點空間感才不會聽起來貼在臉上"><span class="row-label">空間感</span>
         <input type="range" id="reverbAmount" min="0" max="100" value="30"><b id="reverbAmountVal">30</b>
       </div>
-      <div class="tempo-box" title="游標線、上方三角標記、小節色塊共用這個顏色">
+      <div class="tempo-box" title="游標線、上方三角標記、小節色塊、匯出影片的主標題共用這個顏色">
         <span class="row-label">游標顏色</span>
         <input type="color" id="cursorColor" value="#E9CB7A" aria-label="游標與小節高亮顏色">
-        <span class="row-hint">重開網頁會回到金色。匯出到米色譜面時只會自動加深,色相維持你選的;匯出標題固定是深金色,不受這裡影響。</span>
+        <span class="row-hint">游標、三角標記、小節色塊、匯出影片的主標題共用這個顏色(重開網頁會回到金色)。匯出到米色譜面時只會自動加深,色相維持你選的;標題不會跟著下面的濃度變淡,以免看不清楚。</span>
       </div>
       <div class="tempo-box"><span class="row-label">游標濃度</span>
         <input type="range" id="cursorOpacity" min="10" max="100" value="100"><b id="cursorOpacityVal">100</b>
@@ -5254,7 +5254,10 @@ function computeExportLayout(cfg){
      紅 #FF0000→#930000、天藍 #00A0FF→#005C93、粉 #FF69B4→#93004A;
    - 灰階(飽和度接近 0)不會被硬加上色相,只會變暗,#888888→#4A4A4A。
    游標線、上方三角形、小節色塊都套用同一條規則,匯出時三者才會像螢幕上一樣是同一個顏色。 */
-const EXPORT_INK_L = 0.2882, EXPORT_INK_S = 0.8912; // 取自匯出標題色 #8B6508 的 HSL
+// 這組「深度」原本就是匯出標題那個金色 #8B6508 的 HSL 值,現在沿用成整組匯出標記的統一深度。
+// 它同時是可讀性的保證:不管使用者挑什麼色相,換算後都落在同一個明度/飽和度上,
+// 印在米色譜面(#FFFDF6)上的對比大約都是 5:1,標題不會因為選了淡色就變得看不清楚。
+const EXPORT_INK_L = 0.2882, EXPORT_INK_S = 0.8912;
 function exportInkColor(hex){
   const m = /^#?([0-9a-f]{6})$/i.exec(hex || "");
   if (!m) return "#8B6508";
@@ -5363,7 +5366,14 @@ function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
     if (cfg.title) {
       ctx.textBaseline = "top";
       ctx.font = titleFontSize + "px 'Noto Serif TC', serif";
-      ctx.fillStyle = "#8B6508"; // 深金色,對比度5.2:1(網頁標頭的--gold只有2.36:1,WCAG連大字級3:1都不過)
+      // 主標題跟著游標顏色走(同一個色相、同一個深度),整張匯出畫面才是一套配色。
+      // 濃度層級的設計(由重到輕):
+      //   主標題       墨色 100%,而且刻意「不」乘上游標濃度——它是畫面的錨點,
+      //                使用者把游標調淡是為了讓游標不搶戲,不是要讓標題跟著看不見
+      //   游標線/三角形 墨色 × 游標濃度(預設 100%)
+      //   小節色塊     墨色 × 游標濃度 × 0.22,只是襯在音符底下的底色
+      //   副標題/頻道名 維持深灰不變色——它們是說明性文字,全部跟著主色跑會變成整片同色而沒有層次
+      ctx.fillStyle = exportInkColor(hlCursorColor()); // 深度固定,對比約5.2:1(網頁標頭的--gold只有2.36:1,WCAG連大字級3:1都不過)
       ctx.textAlign = "center";
       ctx.fillText(cfg.title, W / 2, wmPadY);
     }
