@@ -217,7 +217,10 @@ input[type=range]::-webkit-slider-thumb{
 .combo-row{gap:10px}
 /* flex-basis 必須是 0。用 auto 的話基準寬度 = 選單最長選項(「古典吉他(尼龍弦)」)的寬度,
    而 flex-wrap 是先看基準寬度決定要不要換行、之後才壓縮,320px 螢幕就會被擠成兩列 */
-.combo-row #instrument{flex:1 1 0;min-width:96px;max-width:none}
+/* 上限 200px:最長的選項「古典吉他(尼龍弦)」約 150px,200 已經很寬鬆。
+   不設上限的話 flex:1 會讓它在平板/桌機吃掉整條列(實測 iPad 上撐到 522px),
+   一個只有八個選項的下拉選單不需要那麼寬 */
+.combo-row #instrument{flex:1 1 0;min-width:96px;max-width:200px}
 .combo-row .trans-group{display:inline-flex;align-items:center;gap:6px;flex:none;margin-left:auto}
 .combo-row .trans-group .btn{padding:4px 10px}
 .combo-row #transVal{min-width:4.6em;text-align:center}
@@ -764,7 +767,7 @@ input[type=file]{display:none}
       <label class="switch-row" title="圓滑線與踏板記號的延音效果">
         <span class="switch"><input type="checkbox" id="legatoPedal" checked><span class="switch-track"></span></span>圓滑/踏板
       </label>
-      <label class="switch-row" title="模擬真人彈奏的節奏彈性(樂句抑揚、結尾漸慢、重音拉長),而非機械式的固定拍點。套用在整首曲子共用的主時間軸上,所有樂器/雙手會一起呼吸伸縮">
+      <label class="switch-row" id="rubatoRow" title="模擬真人彈奏的節奏彈性(樂句抑揚、結尾漸慢、重音拉長),而非機械式的固定拍點。套用在整首曲子共用的主時間軸上,所有樂器/雙手會一起呼吸伸縮">
         <span class="switch"><input type="checkbox" id="useRubato"><span class="switch-track"></span></span>彈性速度
       </label>
       <label class="switch-row" title="把正在演奏的那一小節整段用色塊標起來,視讀時更容易抓到位置">
@@ -3081,6 +3084,9 @@ $("exportTitleInput").addEventListener("input", () => {
    記住的值只會在還沒載入樂譜前短暫存在,記了也沒有意義。
    樂器不需要在這裡重新載入取樣音色——載入樂譜的流程本來就會依照當下選的樂器載入取樣,
    所以這裡只還原數值,不用在頁面載入時就建立 AudioContext(那會被瀏覽器擋下來)。 */
+/* 彈性速度暫時下架的旗標。宣告在這裡是因為 savePrefs() 會用到它,而 const 有暫時性死區,
+   放在後面會在存檔時炸掉 */
+const FEATURE_RUBATO = false;
 const PREF_KEY = "scrollscore_prefs";
 const PREF_FIELDS = [
   { id: "instrument",        prop: "value" },
@@ -3101,7 +3107,13 @@ const PREF_FIELDS = [
 function savePrefs(){
   try {
     const data = {};
+    // 已經存過的值先讀回來當底,才不會把「這次沒有寫入的欄位」洗掉
+    // (下架中的功能會被跳過,見下面的 skip)
+    try { Object.assign(data, JSON.parse(localStorage.getItem(PREF_KEY) || "{}") || {}); } catch (e) {}
     for (const f of PREF_FIELDS) {
+      // 功能被旗標下架時,它的開關是被程式強制關掉的,不是使用者的選擇。
+      // 這種值不可以蓋掉原本存的偏好,否則之後重新啟用,使用者的設定就被洗成關閉了
+      if (f.id === "useRubato" && !FEATURE_RUBATO) continue;
       const el = $(f.id);
       if (el) data[f.id] = el[f.prop];
     }
@@ -3127,6 +3139,22 @@ function restorePrefs(){
   }, 0);
 }
 restorePrefs();
+
+/* ── 彈性速度暫時下架 ──────────────────────────────────────────
+   模型還有已知缺陷,先不讓使用者在介面上看到,但整套程式碼原封不動留著
+   (buildRubatoMap / detectPhraseBoundaries / rubatoInterp / posToSec 的分派都還在)。
+   要放回來只要把這個旗標改成 true,開關就會重新出現,使用者以前存的偏好也還在。
+
+   一定要順手把勾選狀態關掉:如果只是視覺上隱藏,之前開過這個功能的人會變成
+   「介面上看不到、播放卻仍在套用彈性速度」,那比留著開關更糟。
+   這裡是直接改 checked 而不是透過事件,所以不會寫回 localStorage——
+   之後重新啟用時,使用者原本的偏好會原封不動回來。 */
+if (!FEATURE_RUBATO) {
+  const row = $("rubatoRow");
+  if (row) row.style.display = "none";
+  $("useRubato").checked = false;
+}
+
 // 不管有沒有存過設定都要跑一次,把游標/小節高亮的顏色濃度寫進 CSS 變數並同步數字標籤
 setTimeout(() => { applyTheme(); applyReverbAmount(); }, 0);
 for (const f of PREF_FIELDS) {
