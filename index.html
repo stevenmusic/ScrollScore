@@ -5081,6 +5081,12 @@ async function rasterizeScore(targetH){
   const srcH = parseFloat(svg.getAttribute("height")) || svg.clientHeight;
   const clone = svg.cloneNode(true);
   clone.setAttribute("xmlns","http://www.w3.org/2000/svg");
+  // preserveAspectRatio="none":一定要明確指定。沒有指定的話瀏覽器套用預設的 xMidYMid meet,
+  // 只要 SVG 的 width/height 屬性比例跟 viewBox 比例對不上(OSMD 在某些樂譜上會有零頭差),
+  // 畫進 drawImage 的目的地框時就會「等比縮放後置中留白」,整張樂譜被水平推移幾個 px。
+  // 而色塊、游標的位置是我們自己用 measurePixels 算的,不會跟著被推,兩者就對不齊了。
+  // 指定 none 之後內容一定完全填滿目的地框,樂譜像素座標與我們算的座標永遠是同一個線性對應。
+  clone.setAttribute("preserveAspectRatio","none");
   const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(clone)],{type:"image/svg+xml"}));
   const img = new Image();
   await new Promise((res,rej)=>{ img.onload=res; img.onerror=()=>rej(new Error("樂譜點陣化失敗")); img.src=url; });
@@ -5095,7 +5101,11 @@ async function rasterizeScore(targetH){
     tiles.push({ x, canvas: c });
   }
   URL.revokeObjectURL(url);
-  return { tiles, scale };
+  // 回傳的是「水平」縮放比。tiles 的寬度是 fullW = ceil(srcW * scale),因為取整,
+  // 實際的水平縮放是 fullW/srcW 而不是 scale(targetH/srcH)。差距雖然只有 1e-5 等級,
+  // 但樂譜長達一萬多 px,累積起來就是半個 px 的偏移。匯出時 scale 只用來換算 x
+  // (色塊、游標位移),所以直接回傳水平縮放比,讓色塊跟樂譜圖用完全相同的對應關係。
+  return { tiles, scale: fullW / srcW };
 }
 
 async function exportCombinedWithVideo(){
