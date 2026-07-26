@@ -212,6 +212,15 @@ input[type=range]::-webkit-slider-thumb{
 .settings-group .tempo-box,.settings-group .switch-row{width:100%}
 .settings-group .tempo-box{flex-wrap:wrap}
 .row-label{width:5.2em;flex:none;color:var(--muted);font-size:var(--fs-sm)}
+/* 樂器 + 移調並排的那一列。選單吃掉左邊剩下的寬度,移調那組固定寬度靠右。
+   transVal 給固定最小寬度,否則從「原調」變成「+2 半音」時整列寬度會跳動 */
+.combo-row{gap:10px}
+/* flex-basis 必須是 0。用 auto 的話基準寬度 = 選單最長選項(「古典吉他(尼龍弦)」)的寬度,
+   而 flex-wrap 是先看基準寬度決定要不要換行、之後才壓縮,320px 螢幕就會被擠成兩列 */
+.combo-row #instrument{flex:1 1 0;min-width:96px;max-width:none}
+.combo-row .trans-group{display:inline-flex;align-items:center;gap:6px;flex:none;margin-left:auto}
+.combo-row .trans-group .btn{padding:4px 10px}
+.combo-row #transVal{min-width:4.6em;text-align:center}
 /* 說明文字獨占一整列並允許換行。父層 .tempo-box 是 white-space:nowrap(那是為了讓
    「標籤 + 控制項」不要被拆行),但長句子套上去就會撐成一條 400px 的長線衝出面板
    (實測 320px 螢幕溢出 105px),所以這裡要覆寫回可換行 */
@@ -724,8 +733,11 @@ input[type=file]{display:none}
 <div id="settingsPanel">
   <div class="settings-group">
     <div class="settings-group-title">音色與調性</div>
-    <div class="tempo-box"><span class="row-label">樂器</span>
-      <select id="instrument">
+    <!-- 樂器與移調併成一列:兩個控制項本身就會顯示自己的值(「鋼琴」、「原調」/「+2 半音」),
+         左邊那兩個「樂器」「移調」標籤等於把同一件事講兩次,拿掉之後剛好騰出並排的寬度。
+         aria-label 保留,螢幕報讀器還是聽得到欄位名稱 -->
+    <div class="tempo-box combo-row">
+      <select id="instrument" aria-label="樂器">
         <option value="piano">鋼琴</option>
         <option value="strings">小提琴</option>
         <option value="cello">大提琴</option>
@@ -735,8 +747,12 @@ input[type=file]{display:none}
         <option value="clarinet">單簧管</option>
         <option value="drum">鼓組</option>
       </select>
+      <span class="trans-group" role="group" aria-label="移調">
+        <button class="btn" id="transDown" disabled title="降半音(請先載入樂譜)" aria-label="降半音">−</button>
+        <b id="transVal">原調</b>
+        <button class="btn" id="transUp" disabled title="升半音(請先載入樂譜)" aria-label="升半音">＋</button>
+      </span>
     </div>
-    <div class="tempo-box"><span class="row-label">移調</span> <button class="btn" id="transDown" style="padding:4px 10px" disabled title="請先載入樂譜">−</button><b id="transVal">原調</b><button class="btn" id="transUp" style="padding:4px 10px" disabled title="請先載入樂譜">＋</button></div>
   </div>
 
   <div class="settings-group">
