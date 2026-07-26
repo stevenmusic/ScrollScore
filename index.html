@@ -761,6 +761,13 @@ input[type=file]{display:none}
   <div class="settings-group">
     <div class="settings-group-title">播放與顯示</div>
     <div class="switch-grid">
+      <!-- 排列順序是照「這個開關做什麼事」分的,每一列兩個是同一類:
+           1. 預備拍 / 圓滑踏板   —— 只影響聲音,不動樂譜,切換是即時的
+           2. 速度記號 / 合併休止 —— 這兩個是唯一會呼叫 renderScore() 重新排版整份樂譜的,
+                                     而且會先 stopPlayback() 再從原位置接回去。行為一樣就該放在同一列;
+                                     原本一個在第2列右、一個在第3列左,對角線分開最看不出是同類
+           3. 小節高亮 / 淺色模式 —— 只改視覺呈現(寫 CSS 變數),不碰樂譜內容,也是即時的
+           彈性速度目前被 FEATURE_RUBATO 隱藏,DOM 位置留在聲音那一組,之後放回來就在原本的類別裡 -->
       <label class="switch-row" title="播放前先敲一小節節拍器,留時間把手放到樂器上">
         <span class="switch"><input type="checkbox" id="countIn"><span class="switch-track"></span></span>預備拍
       </label>
@@ -770,14 +777,14 @@ input[type=file]{display:none}
       <label class="switch-row" id="rubatoRow" title="模擬真人彈奏的節奏彈性(樂句抑揚、結尾漸慢、重音拉長),而非機械式的固定拍點。套用在整首曲子共用的主時間軸上,所有樂器/雙手會一起呼吸伸縮">
         <span class="switch"><input type="checkbox" id="useRubato"><span class="switch-track"></span></span>彈性速度
       </label>
-      <label class="switch-row" title="把正在演奏的那一小節整段用色塊標起來,視讀時更容易抓到位置">
-        <span class="switch"><input type="checkbox" id="measureHl"><span class="switch-track"></span></span>小節高亮
-      </label>
       <label class="switch-row" title="顯示樂譜上的速度記號">
         <span class="switch"><input type="checkbox" id="showTempoMarks" checked><span class="switch-track"></span></span>速度記號
       </label>
       <label class="switch-row" title="把連續的整小節休止符合併成一個多小節休止記號">
         <span class="switch"><input type="checkbox" id="mergeRestMeasures"><span class="switch-track"></span></span>合併休止
+      </label>
+      <label class="switch-row" title="把正在演奏的那一小節整段用色塊標起來,視讀時更容易抓到位置">
+        <span class="switch"><input type="checkbox" id="measureHl"><span class="switch-track"></span></span>小節高亮
       </label>
       <label class="switch-row" title="淺色主題:白紙黑字的樂譜,適合白天、明亮環境或投影">
         <span class="switch"><input type="checkbox" id="lightTheme"><span class="switch-track"></span></span>淺色模式
