@@ -512,7 +512,10 @@ input[type=file]{display:none}
   /* 同上:必須相對於視窗置中,否則手機橫向時會以被壓縮的 #stage 置中而被切到 */
   position:fixed;inset:0;z-index:40;display:none;
   align-items:center;justify-content:center;
-  background:rgba(12,10,7,.88);backdrop-filter:blur(3px);
+  /* 這一層刻意不用 backdrop-filter:匯出期間它會整場顯示好幾分鐘,而即時模糊要持續重算整個
+     視窗的背景。匯出同時還要即時編碼 1080p 影片,CPU 一旦吃滿,音訊執行緒就會來不及算完一個
+     render quantum 而爆音/斷音。改用不透明底色,視覺上一樣看不到後面,但完全不花 GPU/CPU */
+  background:#0b0906;
 }
 #exportOverlay.show{display:flex}
 #exportOverlay .box{
@@ -5360,8 +5363,23 @@ async function exportVideo(cfg){
 
     const cv = document.createElement("canvas");
     cv.width = W; cv.height = H;
-    const ctx = cv.getContext("2d");
-    const vStream = cv.captureStream(cfg.fps || 30);
+    // alpha:false —— 匯出畫面每一格都會先用不透明底色填滿,根本用不到透明通道。
+    // 關掉之後瀏覽器可以省去整張 1920×1080 的 alpha 合成,擷取與編碼路徑都比較輕
+    const ctx = cv.getContext("2d", { alpha: false });
+    // captureStream(0):不讓瀏覽器自己用計時器去「取樣」畫布,改成我們畫完一格就送一格。
+    // 用固定 fps 的話,瀏覽器的擷取計時器跟我們的繪製迴圈各跑各的,會重複擷取同一張畫面,
+    // 白白多做一份 1080p 的畫面複製與編碼工作。
+    // 但 requestFrame() 不是每個瀏覽器都有,而且 captureStream(0) 少了它就一格都不會產生
+    // (會匯出一個沒有畫面的檔案),所以先確認拿得到這個方法,拿不到就退回原本的固定 fps 擷取
+    let vStream = cv.captureStream(0);
+    let vTrack = vStream.getVideoTracks()[0];
+    let pushFrame;
+    if (vTrack && typeof vTrack.requestFrame === "function") {
+      pushFrame = () => vTrack.requestFrame();
+    } else {
+      vStream = cv.captureStream(cfg.fps || 30);
+      pushFrame = () => {};
+    }
     aDest = audioCtx.createMediaStreamDestination();
     masterLimiter.connect(aDest); // 從限幅器之後取音,匯出的影片才跟現場聽到的一樣不會破音
     const stream = new MediaStream([
@@ -5410,6 +5428,11 @@ async function exportVideo(cfg){
     }
     const total = rangeEnd - rangeStart;
 
+    // 進度文字與進度條每秒只會真的變化一兩次,但繪製迴圈是每秒 60 次。原本每一格都寫這三個
+    // DOM,等於每秒觸發 180 次樣式重算與重繪。匯出時 CPU 已經被即時編碼吃滿,這些多餘的重繪
+    // 會跟音訊執行緒搶資源,是造成合成過程「聲音斷斷續續」的其中一個來源。
+    // 改成只有顯示出來的值真的改變(整數百分比、整秒)時才寫入
+    let lastPct = -1, lastTimeText = "";
     await new Promise(resolve => {
       const draw = () => {
         if (exportCancelled) { resolve(); return; }
@@ -5417,10 +5440,15 @@ async function exportVideo(cfg){
         const sec = Math.min(Math.max(el - LEAD, 0), total);
         const songSec = sec + rangeStart; // 匯出片段內的相對時間 → 換算回整首曲子的實際位置,拿來對應樂譜捲動/鍵盤高亮
         drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib);
-        $("exportTime").textContent = fmt(sec) + " / " + fmt(total);
+        pushFrame();
+        const timeText = fmt(sec) + " / " + fmt(total);
+        if (timeText !== lastTimeText) { lastTimeText = timeText; $("exportTime").textContent = timeText; }
         const exportPct = Math.min(100, Math.round(sec / total * 100));
-        $("exportFill").style.width = exportPct + "%";
-        $("exportOverlayTitle").textContent = "合成中 " + exportPct + "%";
+        if (exportPct !== lastPct) {
+          lastPct = exportPct;
+          $("exportFill").style.width = exportPct + "%";
+          $("exportOverlayTitle").textContent = "合成中 " + exportPct + "%";
+        }
         if (el >= LEAD + total + TAIL) { resolve(); return; }
         scheduleFrame(draw, cfg.fps || 30);
       };
