@@ -5028,11 +5028,38 @@ $("previewConfirmBtn").addEventListener("click", () => {
 });
 $("exportCancel").addEventListener("click", () => { exportCancelled = true; });
 
+/* 匯出影片的容器/編碼組合。
+   關鍵:不能丟一個「只指定影像編碼」的 MP4 字串(例如 video/mp4;codecs=avc1),也不能丟裸的
+   video/mp4——這兩種寫法都是讓瀏覽器自己補音訊編碼,而桌機 Chrome 補的是 Opus。
+   MP4 容器裡包 Opus 雖然合規,但 QuickTime、Windows 內建播放器、多數剪輯軟體都不解這個組合,
+   使用者看到的就是「影片能播但沒聲音,並提示不支援 Opus 編碼」。
+   實測:在這個環境要求 video/mp4,錄出來是 MP4 容器 + VP9 影像 + Opus 音訊。
+   iOS/iPadOS Safari 的 video/mp4 本來就是 H.264 + AAC,所以手機平板不會遇到這個問題。
+   因此 MP4 只在「明確指定 AAC」時才採用;否則寧可退回 WebM——WebM 配 Opus 是正常且到處都能播的
+   組合,而且副檔名誠實,播放器不會被 .mp4 的外皮騙。裸的 video/mp4 只留給沒有 WebM 錄影能力的
+   Safari 當最後手段。 */
 function pickMime(){
-  const cands = ["video/mp4;codecs=avc1","video/mp4","video/webm;codecs=vp9","video/webm"];
+  const cands = [
+    "video/mp4;codecs=avc1.42E01E,mp4a.40.2", // H.264 baseline + AAC-LC,相容性最好
+    "video/mp4;codecs=avc1,mp4a.40.2",
+    "video/mp4;codecs=h264,aac",
+    "video/webm;codecs=vp9,opus",
+    "video/webm;codecs=vp8,opus",
+    "video/webm",
+    "video/mp4", // 只有 Safari 會走到這裡,它的 video/mp4 就是 H.264 + AAC
+  ];
   for (const m of cands)
     if (window.MediaRecorder && MediaRecorder.isTypeSupported(m)) return m;
   return "";
+}
+function mimeExt(mime){ return (mime && mime.indexOf("mp4") >= 0) ? "mp4" : "webm"; }
+/* 匯出完成時把實際用到的格式寫進狀態列——萬一某台機器的播放器挑食,一眼就知道拿到的是什麼 */
+function mimeLabel(mime){
+  if (!mime) return "瀏覽器預設格式";
+  const box = mime.indexOf("mp4") >= 0 ? "MP4" : "WebM";
+  if (/mp4a|aac/i.test(mime)) return box + " / AAC 音訊";
+  if (/opus/i.test(mime)) return box + " / Opus 音訊";
+  return box;
 }
 
 async function rasterizeScore(targetH){
@@ -5137,7 +5164,7 @@ async function exportCombinedWithVideo(){
     const blob = new Blob(chunks, { type: mime || "video/webm" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url; a.download = "scrollscore-combined.webm"; a.click();
+    a.href = url; a.download = "scrollscore-combined." + mimeExt(mime); a.click();
     $("combineStatus").textContent = "完成,已下載";
   } catch (err) {
     console.error(err);
@@ -5405,14 +5432,14 @@ async function exportVideo(cfg){
     await stopped;
     if (!exportCancelled) {
       const blob = new Blob(chunks, { type: mime || "video/webm" });
-      const ext = (mime && mime.indexOf("mp4") >= 0) ? "mp4" : "webm";
+      const ext = mimeExt(mime);
       const rangeTag = cfg.startSec != null ? "-" + fmt(rangeStart).replace(":","m") + "s-" + fmt(rangeEnd).replace(":","m") + "s" : "";
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
       a.download = "scrollscore-" + W + "x" + H + rangeTag + "." + ext;
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(()=>URL.revokeObjectURL(a.href), 30000);
-      setStatus("影片輸出完成(" + (blob.size/1048576).toFixed(1) + " MB)");
+      setStatus("影片輸出完成(" + (blob.size/1048576).toFixed(1) + " MB," + mimeLabel(mime) + ")");
     } else {
       setStatus("已取消輸出");
     }
