@@ -4200,12 +4200,15 @@ function playSampledInstrument(instKey, freq, when, dur, legato, pedal, chordAnc
      後者會讓短音衰減得快、長音衰減得慢,同一台鋼琴上不該有這種差異,聽起來會忽快忽慢很不一致。
      這裡用固定時間常數 DECAY_TAU:同樣音高不管寫多長,每秒衰減的比例都一樣。
      實作要用 setTargetAtTime,不能用「先算好終點音量、再 exponentialRampToValueAtTime 過去」——
-     後者要事先幫終點設下限(不然踩踏板撐超過幾秒後算出來的目標音量趨近0,ramp會失敗),但下限
-     一旦被長音/踏板音觸發,那段時間的衰減速率就被迫變慢,等於又把「長音衰減得比短音慢」的老問題
-     用另一種方式生出來,而且放開時的收尾 ramp 還可能因為終點被下限墊高而變成「音量不減反增」。
-     setTargetAtTime 是永遠往0逼近的真正等比衰減,沒有終點時間的限制,不需要下限也不會有這兩個問題。 */
+     後者要事先幫終點設下限(不然踩踏板撐超過幾秒後算出來的目標音量趨近0,ramp會失敗)。
+     這個下限之前只是拿來防止 ramp 失敗的技術性 workaround,結果意外撐出「踏板音撐超過幾秒就
+     卡在6%不再往下掉」的效果——聽起來像踏板共鳴延音,拿掉下限、改用 setTargetAtTime 後這個
+     效果也跟著消失,踏板段落變乾。真正的物理原因是:踏板放下時制音器離開所有弦,沒被彈的弦
+     跟著彈的弦共振,整體衰減速度本來就會比不踩踏板慢很多,不是「衰減到某個比例後不再衰減」。
+     所以改成踩踏板時直接拉長 DECAY_TAU(衰減變慢、延音變長),沒踩踏板時維持原速——
+     這樣延音感是用「衰減速率」做出來的,音量會持續、平滑地往下降,不會再卡在一個固定樓地板上。 */
   const DECAYING = instKey === "piano" || instKey === "guitar" || instKey === "guitarnylon";
-  const DECAY_TAU = 2.2; // 秒:約每 2.2 秒衰減到 37%,接近真實鋼琴中音域的衰減速度
+  const DECAY_TAU = pedal ? 5.5 : 2.2; // 秒:不踩踏板約2.2秒到37%(真實鋼琴中音域);踩踏板時其他弦共振,延音明顯拉長
   const attackEnd = attackSec > 0.005 ? when + attackSec : when;
   const decayEnd = Math.max(when + Math.max(sustain, 0.02), attackEnd + 0.005);
   let heldLevel = peakGain;
@@ -4457,10 +4460,12 @@ function schedulePiano(freq, when, dur, legato, pedal, harmonyEndSec, artic){
   g.gain.setValueAtTime(0, when);
   g.gain.linearRampToValueAtTime(peak, when + 0.012);
   // 同取樣路徑:鋼琴弦是持續自然衰減,而且衰減速度是每秒固定比例(短音長音都一樣),
-  // 用 setTargetAtTime 而不是「算好終點再 ramp 過去」,理由跟下限造成的問題見 playSampledInstrument 內的說明
+  // 踩踏板時拉長時間常數做出延音感;用 setTargetAtTime 而不是「算好終點再 ramp 過去」,
+  // 理由跟下限造成的問題見 playSampledInstrument 內的說明
   const synthDecayEnd = when + Math.max(sustain, 0.02);
-  g.gain.setTargetAtTime(0, when + 0.012, 2.2);
-  const synthHeldLevel = peak * Math.exp(-(synthDecayEnd - (when + 0.012)) / 2.2);
+  const synthTau = pedal ? 5.5 : 2.2;
+  g.gain.setTargetAtTime(0, when + 0.012, synthTau);
+  const synthHeldLevel = peak * Math.exp(-(synthDecayEnd - (when + 0.012)) / synthTau);
   g.gain.exponentialRampToValueAtTime(Math.min(0.0001, synthHeldLevel * 0.5), synthDecayEnd + releaseTail);
   osc.connect(lp); osc2.connect(g2); g2.connect(lp);
   lp.connect(g);
