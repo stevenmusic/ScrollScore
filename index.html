@@ -3516,7 +3516,7 @@ function startAudioFrom(fromSec){
           : harmonyEndSec;
         const noteTech = (isGuitar && n.glissTargetFreq != null) ? Object.assign({}, tech, { glissTargetFreq: n.glissTargetFreq }) : tech;
         if (n.drum) scheduleDrum(n.key, startCtxTime + t + rollT);
-        else scheduleNote(n.freq, startCtxTime + t + rollT, durSec, ev.legato, ev.pedalOn, chordAnchors, noteHarmonyEndSec, ev.artic, noteTech);
+        else scheduleNote(n.freq, startCtxTime + t + rollT, durSec, ev.legato, ev.pedalOn, chordAnchors, noteHarmonyEndSec, ev.artic, noteTech, n.staff);
       } catch (e) {
         errCount++; lastErr = e;
         console.error("排程音符失敗:", e);
@@ -4122,7 +4122,14 @@ function applyArticulation(sustain, peakGain, dur, artic){
   return { sustain: s, peakGain: g };
 }
 
-function playSampledInstrument(instKey, freq, when, dur, legato, pedal, chordAnchors, harmonyEndSec, artic, tech){
+/* 雙手音量平衡:大譜表裡 staff 1 是高音譜號(右手),staff 2 是低音譜號(左手)。
+   右手通常負責主旋律,左手是伴奏,真人彈奏時右手習慣上會比左手突出一些——
+   單一譜表的樂器(小提琴、長笛等)沒有這個問題,staff 一律是 1,不受影響。 */
+const RIGHT_HAND_GAIN = 1.15; // 約 +1.2dB,右手(旋律)
+const LEFT_HAND_GAIN = 0.85;  // 約 -1.4dB,左手(伴奏)
+function handBalanceGain(staff){ return (staff || 1) === 1 ? RIGHT_HAND_GAIN : LEFT_HAND_GAIN; }
+
+function playSampledInstrument(instKey, freq, when, dur, legato, pedal, chordAnchors, harmonyEndSec, artic, tech, staff){
   const list = instrumentBuffers[instKey];
   if (!list || !list.length) return false;
   const targetMidi = freqToMidi(freq);
@@ -4163,6 +4170,7 @@ function playSampledInstrument(instKey, freq, when, dur, legato, pedal, chordAnc
     else if (legato) tail = 0.6;
   }
   ({ sustain, peakGain } = applyArticulation(sustain, peakGain, dur, artic));
+  peakGain *= handBalanceGain(staff);
   // 吉他技法對音量包絡的影響:泛音(harmonic)延音較久、起音柔和、音量略輕;
   // 悶音(pizzicato/palm mute)衰減快;搥弦/勾弦(hammerPull)不是重新撥弦,起音要柔和、音量略小
   let attackSec = 0.004; // 預設幾乎立即到峰值,模擬撥弦的短促起音
@@ -4269,7 +4277,7 @@ function playSampledInstrument(instKey, freq, when, dur, legato, pedal, chordAnc
 
 /* 顫音(單音 tremolo):古典吉他經典技法(如《阿罕布拉宮的回憶》),同一個音快速反覆撥彈,
    marks(1/2/3)決定每次重彈的音符長度(八分/十六分/三十二分音符),而不是音符本身撐滿整個時值 */
-function scheduleTremolo(freq, when, dur, marks, legato, pedal, chordAnchors, harmonyEndSec, artic){
+function scheduleTremolo(freq, when, dur, marks, legato, pedal, chordAnchors, harmonyEndSec, artic, staff){
   const pulseWhole = Math.pow(2, -(marks + 2)); // 1=0.125(八分),2=0.0625(十六分),3=0.03125(三十二分)
   const pulseSec = Math.max(wholeToSec(pulseWhole), 0.05); // 太快的話至少保留可辨識的最短間隔
   const count = Math.max(1, Math.round(dur / pulseSec));
@@ -4278,19 +4286,19 @@ function scheduleTremolo(freq, when, dur, marks, legato, pedal, chordAnchors, ha
     const pulseWhen = when + i * actualPulseSec;
     // 只有最後一次重彈才套用和聲/踏板延音(harmonyEndSec),前面每次都是正常撥弦的短促衰減
     const isLast = i === count - 1;
-    scheduleNote(freq, pulseWhen, actualPulseSec, legato, pedal, chordAnchors, isLast ? harmonyEndSec : null, isLast ? artic : null);
+    scheduleNote(freq, pulseWhen, actualPulseSec, legato, pedal, chordAnchors, isLast ? harmonyEndSec : null, isLast ? artic : null, null, staff);
   }
 }
-function scheduleNote(freq, when, dur, legato, pedal, chordAnchors, harmonyEndSec, artic, tech){
+function scheduleNote(freq, when, dur, legato, pedal, chordAnchors, harmonyEndSec, artic, tech, staff){
   if (!$("legatoPedal").checked) { legato = false; pedal = false; harmonyEndSec = null; tech = null; }
   const inst = currentInstrument();
   const isGuitarInst = inst === "guitar" || inst === "guitarnylon";
   // 顫音(單音tremolo):把一個音符拆成好幾次快速重彈,而不是單一個音撐滿時值
   if (tech && tech.tremolo && isGuitarInst) {
-    scheduleTremolo(freq, when, dur, tech.tremolo, legato, pedal, chordAnchors, harmonyEndSec, artic);
+    scheduleTremolo(freq, when, dur, tech.tremolo, legato, pedal, chordAnchors, harmonyEndSec, artic, staff);
     return;
   }
-  if (REAL_INSTRUMENTS[inst] && playSampledInstrument(inst, freq, when, dur, legato, pedal, chordAnchors, harmonyEndSec, artic, isGuitarInst ? tech : null)) return;
+  if (REAL_INSTRUMENTS[inst] && playSampledInstrument(inst, freq, when, dur, legato, pedal, chordAnchors, harmonyEndSec, artic, isGuitarInst ? tech : null, staff)) return;
   // 真實取樣尚未載入完成或缺失時,退回合成音色,絕不會沒有聲音
   switch (inst) {
     case "strings":  scheduleStrings(freq, when, dur); break;
@@ -4299,7 +4307,7 @@ function scheduleNote(freq, when, dur, legato, pedal, chordAnchors, harmonyEndSe
     case "guitar":   scheduleGuitar(freq, when, dur, harmonyEndSec, tech); break;
     case "guitarnylon": scheduleGuitar(freq, when, dur, harmonyEndSec, tech); break;
     case "clarinet": scheduleClarinet(freq, when, dur); break;
-    default:         schedulePiano(freq, when, dur, legato, pedal, harmonyEndSec, artic);
+    default:         schedulePiano(freq, when, dur, legato, pedal, harmonyEndSec, artic, staff);
   }
 }
 
@@ -4418,7 +4426,7 @@ $("bgImageClearBtn").addEventListener("click", () => {
   setStatus("已移除背景圖片");
 });
 
-function schedulePiano(freq, when, dur, legato, pedal, harmonyEndSec, artic){
+function schedulePiano(freq, when, dur, legato, pedal, harmonyEndSec, artic, staff){
   const osc = audioCtx.createOscillator();
   const osc2 = audioCtx.createOscillator();
   const g = audioCtx.createGain();
@@ -4439,6 +4447,7 @@ function schedulePiano(freq, when, dur, legato, pedal, harmonyEndSec, artic){
     else if (legato) { sustain = Math.max(dur * 1.15, 0.08); releaseTail = 0.35; }
   }
   ({ sustain, peakGain: peak } = applyArticulation(sustain, peak, dur, artic));
+  peak *= handBalanceGain(staff);
   g.gain.setValueAtTime(0, when);
   g.gain.linearRampToValueAtTime(peak, when + 0.012);
   // 同取樣路徑:鋼琴弦是持續自然衰減,而且衰減速度是每秒固定比例(短音長音都一樣),
@@ -5654,7 +5663,7 @@ async function exportVideo(cfg){
             : harmonyEndSec;
           const noteTech = (isGuitar && n.glissTargetFreq != null) ? Object.assign({}, tech, { glissTargetFreq: n.glissTargetFreq }) : tech;
           if (n.drum) scheduleDrum(n.key, startCtxTime + (t - rangeStart) + rollT);
-          else scheduleNote(n.freq, startCtxTime + (t - rangeStart) + rollT, durSec, ev.legato, ev.pedalOn, chordAnchors, noteHarmonyEndSec, ev.artic, noteTech);
+          else scheduleNote(n.freq, startCtxTime + (t - rangeStart) + rollT, durSec, ev.legato, ev.pedalOn, chordAnchors, noteHarmonyEndSec, ev.artic, noteTech, n.staff);
         }
       }
     }
