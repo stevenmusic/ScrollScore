@@ -4198,26 +4198,18 @@ function playSampledInstrument(instKey, freq, when, dur, legato, pedal, chordAnc
        不會自己衰減。先前誤把衰減套用到這些樂器上,長音會自己愈來愈小聲,明顯不自然。
      另外衰減速度必須是「每秒固定比例」,而不是「不管多長都在音符結束時剛好衰減到某個比例」——
      後者會讓短音衰減得快、長音衰減得慢,同一台鋼琴上不該有這種差異,聽起來會忽快忽慢很不一致。
-     這裡用固定時間常數 DECAY_TAU:同樣音高不管寫多長,每秒衰減的比例都一樣。
-     實作要用 setTargetAtTime,不能用「先算好終點音量、再 exponentialRampToValueAtTime 過去」——
-     後者要事先幫終點設下限(不然踩踏板撐超過幾秒後算出來的目標音量趨近0,ramp會失敗),但下限
-     一旦被長音/踏板音觸發,那段時間的衰減速率就被迫變慢,等於又把「長音衰減得比短音慢」的老問題
-     用另一種方式生出來,而且放開時的收尾 ramp 還可能因為終點被下限墊高而變成「音量不減反增」。
-     setTargetAtTime 是永遠往0逼近的真正等比衰減,沒有終點時間的限制,不需要下限也不會有這兩個問題。 */
+     這裡用固定時間常數 DECAY_TAU:同樣音高不管寫多長,每秒衰減的比例都一樣。 */
   const DECAYING = instKey === "piano" || instKey === "guitar" || instKey === "guitarnylon";
   const DECAY_TAU = 2.2; // 秒:約每 2.2 秒衰減到 37%,接近真實鋼琴中音域的衰減速度
   const attackEnd = attackSec > 0.005 ? when + attackSec : when;
   const decayEnd = Math.max(when + Math.max(sustain, 0.02), attackEnd + 0.005);
-  let heldLevel = peakGain;
   if (DECAYING) {
-    g.gain.setTargetAtTime(0, attackEnd, DECAY_TAU);
-    heldLevel = peakGain * Math.exp(-(decayEnd - attackEnd) / DECAY_TAU);
+    const endLevel = Math.max(0.06, Math.exp(-(decayEnd - when) / DECAY_TAU));
+    g.gain.exponentialRampToValueAtTime(Math.max(0.0002, peakGain * endLevel), decayEnd);
   } else {
     g.gain.setValueAtTime(peakGain, decayEnd); // 弓弦/吹奏:發聲期間維持穩定音量
   }
-  // 放開時的收尾一定要比放開當下的音量更小,不能單純固定目標0.0001——
-  // 音符撐得夠久的話,自然衰減早就已經低於0.0001了,再朝0.0001 ramp反而是往上升
-  g.gain.exponentialRampToValueAtTime(Math.min(0.0001, heldLevel * 0.5), decayEnd + tail);
+  g.gain.exponentialRampToValueAtTime(0.0001, decayEnd + tail);
   // 泛音/悶音的音色調整:泛音濾掉較多高頻讓聲音更純淨清亮,悶音濾掉更多高頻讓聲音變暗悶
   let filterNode = null;
   if (tech && (tech.harmonic || tech.pizzicato)) {
@@ -4457,11 +4449,11 @@ function schedulePiano(freq, when, dur, legato, pedal, harmonyEndSec, artic){
   g.gain.setValueAtTime(0, when);
   g.gain.linearRampToValueAtTime(peak, when + 0.012);
   // 同取樣路徑:鋼琴弦是持續自然衰減,而且衰減速度是每秒固定比例(短音長音都一樣),
-  // 用 setTargetAtTime 而不是「算好終點再 ramp 過去」,理由跟下限造成的問題見 playSampledInstrument 內的說明
+  // 不是「不管多長都在結束時剛好掉到某個比例」(細節見 playSampledInstrument 內的說明)
   const synthDecayEnd = when + Math.max(sustain, 0.02);
-  g.gain.setTargetAtTime(0, when + 0.012, 2.2);
-  const synthHeldLevel = peak * Math.exp(-(synthDecayEnd - (when + 0.012)) / 2.2);
-  g.gain.exponentialRampToValueAtTime(Math.min(0.0001, synthHeldLevel * 0.5), synthDecayEnd + releaseTail);
+  const synthEndLevel = Math.max(0.06, Math.exp(-(synthDecayEnd - when) / 2.2));
+  g.gain.exponentialRampToValueAtTime(Math.max(0.0002, peak * synthEndLevel), synthDecayEnd);
+  g.gain.exponentialRampToValueAtTime(0.0001, synthDecayEnd + releaseTail);
   osc.connect(lp); osc2.connect(g2); g2.connect(lp);
   lp.connect(g);
   // 合成音備援路徑也要有同樣的聲像與殘響,否則取樣載入前後的空間感會突然改變
