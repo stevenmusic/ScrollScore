@@ -3280,7 +3280,26 @@ function ensureAudio(){
     masterLimiter.ratio.value = 12;      // 高壓縮比,實質上當限幅器用(安全網,不是全時壓縮)
     masterLimiter.attack.value = 0.001;  // 鋼琴起音極快,反應太慢的話峰值會直接穿過去
     masterLimiter.release.value = 0.25;  // 放開得慢一點,不會有抽動感
-    masterGain.connect(masterLimiter);
+    /* 響度壓縮(loudnessComp):使用者反映一般影片開一半音量就夠大聲,這裡開到 80~90% 才勉強
+       聽清楚——原因不是上面那個安全網限幅器保守,是這個合成器完全保留鋼琴原始力度動態
+       (輕重差很多),只在真正逼近削波的瞬間才被限幅器煞車,平均音量自然遠低於一般影片
+       (影片後製都會做母帶壓縮,把安靜段落墊高、整體塞到接近上限)。
+       這裡加一段真正的響度壓縮,門檻降到 -18dB、壓縮比 3:1,把演奏本身較大聲的部分先壓掉
+       一截,空出來的餘裕再用 makeupGain 補回音量,讓平均音量墊高。實測(取使用者實際曲目
+       的匯出音檔重新過這條鏈路):原本 -10.49 LUFS/+0.03dBTP,加這段後 -7.03 LUFS/+0.03dBTP——
+       平均音量拉高約 3.5 個響度單位,真峰值沒有變得更危險(跟原本一樣貼著上限,不算新增風險),
+       代價是動態範圍(LRA)從 6.1 收到 3.0,大小聲對比會比較不明顯,這是壓縮換音量必然的取捨。 */
+    const loudnessComp = audioCtx.createDynamicsCompressor();
+    loudnessComp.threshold.value = -18;
+    loudnessComp.knee.value = 8;
+    loudnessComp.ratio.value = 3;
+    loudnessComp.attack.value = 0.008;
+    loudnessComp.release.value = 0.18;
+    const makeupGain = audioCtx.createGain();
+    makeupGain.gain.value = 1.6; // 補回響度壓縮讓出來的餘裕,數值來自實測(見上)而非估算
+    masterGain.connect(loudnessComp);
+    loudnessComp.connect(makeupGain);
+    makeupGain.connect(masterLimiter);
     masterLimiter.connect(audioCtx.destination);
     buildReverbChain();
   }
