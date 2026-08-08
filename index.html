@@ -498,7 +498,12 @@ footer{
 #progressbar{flex:1;height:3px;background:var(--line);border-radius:2px;position:relative;cursor:pointer;touch-action:none}
 /* 視覺上維持細線,但實際可觸控/點擊區域上下各多抓 12px,手機上更容易拖到 */
 #progressbar::before{content:"";position:absolute;left:0;right:0;top:-12px;bottom:-12px}
-#progressfill{height:100%;width:0%;background:var(--gold);transition:width .1s linear;border-radius:2px;pointer-events:none}
+/* width 是 layout 屬性,每次寫入都逼瀏覽器重新排版——這個元素卻是播放中每個 rAF 影格(每秒
+   最多60次)都會被寫入的,跟同一個影格裡的 canvas 繪製、捲動搶效能。改用 transform:scaleX()
+   只吃 compositor,不觸發 layout。原本掛的 transition:width .1s 也拿掉:拖曳進度條時使用者
+   要的是手指黏著滑塊的即時感,轉場只會讓滑塊感覺慢半拍;播放時已經是每影格更新,轉場一樣沒有
+   意義,只會不斷被下一影格打斷重新起跑。 */
+#progressfill{height:100%;width:100%;background:var(--gold);transform:scaleX(0);transform-origin:left;border-radius:2px;pointer-events:none}
 /* 拖曳進度條時,滑塊正上方即時顯示精確時間碼 */
 #seekTooltip{
   position:absolute;bottom:calc(100% + 10px);left:0;transform:translateX(-50%);
@@ -4882,7 +4887,7 @@ function stopPlayback(){
   cancelAnimationFrame(rafId);
   resetScroll();
   updateTimeLabel(0);
-  $("progressfill").style.width = "0%";
+  $("progressfill").style.transform = "scaleX(0)";
   drawKeyboardLive(0);
   if (!exporting) releaseWakeLock();
 }
@@ -4922,7 +4927,7 @@ function tick(){
   if (sec >= totalSec()) { stopPlayback(); return; }
   const x = xAtSec(sec);
   $("scroller").style.transform = "translateX(" + (playlineX() - x) + "px)";
-  $("progressfill").style.width = (sec / totalSec() * 100).toFixed(2) + "%";
+  $("progressfill").style.transform = "scaleX(" + (sec / totalSec()) + ")";
   updateTimeLabel(sec);
   drawKeyboardLive(sec);
   updateMeasureHighlight(sec);
@@ -4946,7 +4951,7 @@ function seekTo(sec){
   else pausedAtSec = sec;
   const x = xAtSec(sec);
   $("scroller").style.transform = "translateX(" + (playlineX() - x) + "px)";
-  $("progressfill").style.width = (sec / totalSec() * 100).toFixed(2) + "%";
+  $("progressfill").style.transform = "scaleX(" + (sec / totalSec()) + ")";
   updateTimeLabel(sec);
   drawKeyboardLive(sec);
   updateMeasureHighlight(sec);
