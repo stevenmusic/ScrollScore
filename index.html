@@ -131,6 +131,9 @@ header h1 span{color:var(--ivory);font-weight:600}
 .btn:active{background:var(--gold);color:var(--bg)}
 .btn.primary{background:var(--gold);color:var(--bg);font-weight:700}
 .btn.primary:disabled{opacity:.35}
+/* 淺色模式的頁首圖示按鈕:開著的時候跟 .btn.primary 用同一套「這是啟用狀態」視覺語言,
+   不用另外發明一種樣式 */
+#themeToggle[aria-pressed="true"]{background:var(--gold);color:var(--bg)}
 .btn:disabled{opacity:.35;cursor:not-allowed}
 /* 樂譜載入前,播放/停止先整個隱藏(而不只是變淡),Header 只留「載入樂譜」這個唯一動作,
    載入成功後才讓它們出現在原本的位置 */
@@ -735,6 +738,13 @@ input[type=file]{display:none}
     </button>
   </div>
   <div class="header-right">
+    <button class="btn" id="themeToggle" aria-label="淺色模式" aria-pressed="false" title="切換淺色/深色主題">
+      <svg id="themeIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="9"/>
+        <path d="M12 3a9 9 0 000 18z" fill="currentColor" stroke="none"/>
+      </svg>
+    </button>
+    <input type="checkbox" id="lightTheme" hidden>
     <div class="tempo-compact">
       <button class="btn" id="tempoToggle" aria-label="速度">
         <span id="tempoDisplay">100</span><span id="tempoBpmLabel"> BPM</span><span id="tempoUnitSuffix"></span><span class="caret">▾</span>
@@ -785,8 +795,9 @@ input[type=file]{display:none}
            2. 速度記號 / 合併休止 —— 這兩個是唯一會呼叫 renderScore() 重新排版整份樂譜的,
                                      而且會先 stopPlayback() 再從原位置接回去。行為一樣就該放在同一列;
                                      原本一個在第2列右、一個在第3列左,對角線分開最看不出是同類
-           3. 小節高亮 / 淺色模式 —— 只改視覺呈現(寫 CSS 變數),不碰樂譜內容,也是即時的
-           彈性速度目前被 FEATURE_RUBATO 隱藏,DOM 位置留在聲音那一組,之後放回來就在原本的類別裡 -->
+           3. 小節高亮 —— 只改視覺呈現(寫 CSS 變數),不碰樂譜內容,也是即時的,現在自己一列
+           彈性速度目前被 FEATURE_RUBATO 隱藏,DOM 位置留在聲音那一組,之後放回來就在原本的類別裡。
+           淺色模式已經搬到頁首常駐圖示按鈕(#themeToggle),不再放在這個面板裡 -->
       <label class="switch-row" title="播放前先敲一小節節拍器,留時間把手放到樂器上">
         <span class="switch"><input type="checkbox" id="countIn"><span class="switch-track"></span></span>預備拍
       </label>
@@ -804,9 +815,6 @@ input[type=file]{display:none}
       </label>
       <label class="switch-row" title="把正在演奏的那一小節整段用色塊標起來,視讀時更容易抓到位置">
         <span class="switch"><input type="checkbox" id="measureHl"><span class="switch-track"></span></span>小節高亮
-      </label>
-      <label class="switch-row" title="淺色主題:白紙黑字的樂譜,適合白天、明亮環境或投影">
-        <span class="switch"><input type="checkbox" id="lightTheme"><span class="switch-track"></span></span>淺色模式
       </label>
     </div>
   </div>
@@ -2945,6 +2953,7 @@ function lightThemeOn(){ const el = $("lightTheme"); return !!(el && el.checked)
 function applyTheme(){
   const on = lightThemeOn();
   document.body.classList.toggle("light", on);
+  $("themeToggle").setAttribute("aria-pressed", String(on));
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) meta.setAttribute("content", on ? "#FBF7EE" : "#0C0A07");
   applyHighlightStyles();                       // 游標顏色在淺底上要換算,見下方
@@ -3004,6 +3013,13 @@ for (const id of ["cursorColor","cursorOpacity"]) {
 $("reverbAmount").addEventListener("input", applyReverbAmount);
 $("measureHl").addEventListener("change", applyHighlightStyles);
 $("lightTheme").addEventListener("change", applyTheme);
+/* 淺色模式現在的主要入口是頁首圖示按鈕,不是設定面板裡的開關——按鈕本身不記狀態,
+   只負責切換那顆隱藏的 checkbox 再 dispatch change,applyTheme 跟 PREF_FIELDS 的
+   savePrefs 監聽都掛在那顆 checkbox 上,觸發一次 change 兩邊都會跑,不用在這裡各呼叫一次 */
+$("themeToggle").addEventListener("click", () => {
+  $("lightTheme").checked = !$("lightTheme").checked;
+  $("lightTheme").dispatchEvent(new Event("change"));
+});
 
 /* 快捷鍵對照表:點 footer 的鍵盤圖示打開(手機沒有 hover,tooltip 等於看不到) */
 function openShortcuts(){ $("shortcutOverlay").classList.add("show"); }
