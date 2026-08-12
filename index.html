@@ -409,6 +409,15 @@ input[type=range]::-webkit-slider-thumb{
    把觸控目標從 44px 收到 40px 剛好放得下——仍高於 WCAG 2.2 AA(2.5.8)要求的 24px,
    只是略低於 Apple HIG 建議的 44pt,兩害相權取換行傷害較小的那邊。
    必須放在 pointer:coarse 之後才不會被上面的 min-width:44px 蓋掉 */
+/* ── 使用者在系統關掉動態效果時,一律不要有轉場與動畫 ──────────────
+   四個專案(ScrollScore / SightScore / LoudNorm / HarmonyMap)共用同一組斷點,
+   這條是其中之一 */
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{
+    animation-duration:.01ms !important;animation-iteration-count:1 !important;
+    transition-duration:.01ms !important;scroll-behavior:auto !important;
+  }
+}
 @media (pointer:coarse) and (max-width:420px){
   /* 觸控目標寬度也連續縮放:320px 只放得下 38px(仍遠高於 WCAG 2.2 AA 2.5.8 要求的 24px,
      而且高度維持 44px),400px 以上就回到 Apple HIG 建議的 44px */
