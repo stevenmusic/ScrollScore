@@ -501,6 +501,14 @@ body.score-loaded #playline{display:block}
   cursor:pointer;margin-top:4px;padding:4px;
 }
 .link-btn:active{color:var(--gold-bright)}
+/* Hub 頁是後來才生的,工具頁原本沒有回首頁的路徑——這裡補一個安靜的小連結,
+   不用 .btn 那套實心/邊框樣式,免得跟品牌字並排時搶視覺重量 */
+.home-link{
+  display:inline-flex;align-items:center;gap:4px;flex:none;
+  color:var(--muted);font-size:var(--fs-sm);text-decoration:none;
+  padding:6px 4px;border-radius:var(--radius-sm);transition:color .15s;
+}
+.home-link:hover,.home-link:focus-visible{color:var(--gold-bright)}
 /* ── 底部狀態列 ─────────────────── */
 footer{
   padding:10px 14px calc(10px + env(safe-area-inset-bottom));
@@ -732,6 +740,9 @@ input[type=file]{display:none}
 
 <header>
   <div class="header-left">
+    <a href="https://stevenmusic.github.io/" class="home-link" aria-label="回首頁" title="回首頁">
+      <span aria-hidden="true">←</span><span class="btn-label">首頁</span>
+    </a>
     <h1>Scroll<span>Score</span></h1>
     <button class="btn primary" id="loadBtn" aria-label="載入樂譜">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
