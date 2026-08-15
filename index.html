@@ -513,16 +513,14 @@ body.score-loaded #playline{display:block}
   padding:6px 4px;border-radius:var(--radius-sm);transition:color .15s;
 }
 .home-link:hover,.home-link:focus-visible{color:var(--gold-bright)}
-/* fitHeaderRow() 放不下單排時的收窄手段:文字按鈕改圖示(跟手機窄螢幕同一套樣式),不綁定特定螢幕寬度,
-   平板寬度(~600~900px)那種「完整文字放不下、但其實不算真的很窄」的情況也能用同一套邏輯收窄 */
-body.header-icons-only .btn{padding:0 10px;height:34px;font-size:var(--fs-sm)}
-body.header-icons-only .btn-label{display:none}
-body.header-icons-only .header-left .btn svg,body.header-icons-only #settingsToggle svg{margin:0}
-body.header-icons-only #tempoToggle{padding:0 12px;font-size:var(--fs-sm)}
-/* 圖示化還不夠時再壓一輪間距(極窄裝置,如 320px 的 iPhone SE),不動箭頭/品牌名本身大小 */
+/* fitHeaderRow() 放不下單排時的收窄手段:只藏文字,不動按鈕本身的 padding/height——
+   按鈕邊框(圓角/高度)維持跟平常一樣,只是裡面的字不見了、寬度跟著內容自然變窄,
+   不會因為收合層級不同而讓同一顆按鈕忽大忽小、形狀跑掉。 */
+body.header-tempo-compact #tempoBpmLabel{display:none} /* BPM 三個字先收,數字保留 */
+body.header-icons-only .btn-label{display:none}        /* 其餘按鈕的文字都收起來,只留圖示 */
+/* 上面兩步還不夠時,壓一輪按鈕間距跟回首頁連結的內距(不是按鈕,沒有邊框,壓縮不影響按鈕形狀) */
 body.header-ultra-compact header,body.header-ultra-compact .header-left,body.header-ultra-compact .header-right{gap:2px}
 body.header-ultra-compact .home-link{padding:6px 1px}
-body.header-ultra-compact .btn{padding:0 6px}
 /* fitHeaderRow() 最後手段:連間距都壓過了還放不下,才隱藏非核心的主題/語言切換鈕
    (箭頭、品牌名、載入/播放/回到開頭/速度/設定這些一律保留) */
 .header-collapsed{display:none!important}
@@ -3604,10 +3602,12 @@ $("langToggle").addEventListener("click", () => {
 /* ── 頁首自動收合:不管螢幕多寬、瀏覽器字型渲染的實際像素差多少,直接量測「header-left
    跟 header-right 是否還在同一排」,比窮舉斷點更可靠——手機直向、平板寬度、匯入樂譜後
    播放/回到開頭一起冒出來,都是同一套邏輯處理,不用為每種狀況各修一次斷點。
-   回首頁箭頭、品牌名固定在左上角,不收(跟其他專案一致)。放不下時依序收窄按鈕本身,
-   不動箭頭/品牌名:先圖示化、再壓間距,實在不夠才隱藏主題/語言切換這兩個非核心功能。 */
+   回首頁箭頭、品牌名固定在左上角,不收(跟其他專案一致);按鈕的邊框/高度也不收(只藏文字),
+   維持一致的外觀。放不下時依序:先收「BPM」三個字(只留數字)、其餘按鈕文字改圖示、
+   再壓一輪間距,實在不夠才隱藏主題/語言切換這兩個非核心功能。 */
 const HEADER_COLLAPSE_STEPS = [
-  { bodyClass: "header-icons-only" },   // 文字按鈕改圖示
+  { bodyClass: "header-tempo-compact" }, // 「BPM」先收,只留數字
+  { bodyClass: "header-icons-only" },    // 其餘按鈕文字改圖示
   { bodyClass: "header-ultra-compact" }, // 按鈕間距再壓一輪
   { hide: "#themeToggle" },              // 非核心:主題可以晚點再調
   { hide: "#langToggle" }                // 非核心:語言可以晚點再調
