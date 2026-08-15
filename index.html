@@ -106,7 +106,10 @@ header{
   background:var(--panel);
   position:relative;z-index:65; /* 要蓋過 settingsBackdrop/settingsPanel,不然面板打開後蓋住整個視窗,「設定」鈕會點不到 */
 }
-.header-left,.header-right{display:flex;align-items:center;flex-wrap:wrap;gap:8px 10px}
+/* flex-wrap:nowrap 是刻意的:header 本身允許換行(見上),但這兩個群組內部不換行,
+   放不下時整組一起換到下一排,不會有「群組內的按鈕各自斷行、兩個群組交錯疊在一起」的亂排
+   (回首頁連結、語言切換加進頁首後,平板寬度~600~900px 這段也會放不下單排,同一套邏輯處理) */
+.header-left,.header-right{display:flex;align-items:center;flex-wrap:nowrap;gap:8px 10px}
 /* 品牌名用流體字級(clamp)而不是斷點階梯。用斷點的話,430px 的 Pro Max 跟 320px 的 SE
    會拿到同一個字級,大螢幕明明放得下卻被迫用小字,看起來就是「字太小」。
    改成跟著視窗寬度連續縮放:窄機收到剛好放得下,寬機自然長回原本的大小。
@@ -322,7 +325,7 @@ input[type=range]::-webkit-slider-thumb{
   /* 頂欄的內距與間距同樣跟著寬度連續縮放,不用斷點硬切。
      之前用階梯式斷點會出現「375px 比 390px 還寬鬆」的反轉(375 落在 ≤380 那一階,
      按鈕跟間距都比較小),流體值就不會有這種跳動 */
-  header{padding:8px clamp(6px, 2.2vw, 10px);gap:clamp(4px, 1.4vw, 6px);flex-wrap:nowrap}
+  header{padding:8px clamp(6px, 2.2vw, 10px);gap:clamp(4px, 1.4vw, 6px)}
   .header-left,.header-right{gap:clamp(4px, 1.4vw, 6px)}
   #tempoToggle{padding:0 clamp(8px, 2.4vw, 12px);font-size:var(--fs-sm)}
   /* 「BPM」剛出現的那一段(約 385~400px)是整條頂欄最擠的地方,只剩個位數的餘裕。
