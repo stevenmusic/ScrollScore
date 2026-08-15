@@ -513,14 +513,19 @@ body.score-loaded #playline{display:block}
   padding:6px 4px;border-radius:var(--radius-sm);transition:color .15s;
 }
 .home-link:hover,.home-link:focus-visible{color:var(--gold-bright)}
-/* 頁首放不下單排時,由 fitHeaderRow() 依重要性動態收起的元素(見對應的 JS) */
-.header-collapsed{display:none!important}
-/* fitHeaderRow() 收到最後一步:文字按鈕改圖示(跟手機窄螢幕同一套樣式),不綁定特定螢幕寬度,
+/* fitHeaderRow() 放不下單排時的收窄手段:文字按鈕改圖示(跟手機窄螢幕同一套樣式),不綁定特定螢幕寬度,
    平板寬度(~600~900px)那種「完整文字放不下、但其實不算真的很窄」的情況也能用同一套邏輯收窄 */
 body.header-icons-only .btn{padding:0 10px;height:34px;font-size:var(--fs-sm)}
 body.header-icons-only .btn-label{display:none}
 body.header-icons-only .header-left .btn svg,body.header-icons-only #settingsToggle svg{margin:0}
 body.header-icons-only #tempoToggle{padding:0 12px;font-size:var(--fs-sm)}
+/* 圖示化還不夠時再壓一輪間距(極窄裝置,如 320px 的 iPhone SE),不動箭頭/品牌名本身大小 */
+body.header-ultra-compact header,body.header-ultra-compact .header-left,body.header-ultra-compact .header-right{gap:2px}
+body.header-ultra-compact .home-link{padding:6px 1px}
+body.header-ultra-compact .btn{padding:0 6px}
+/* fitHeaderRow() 最後手段:連間距都壓過了還放不下,才隱藏非核心的主題/語言切換鈕
+   (箭頭、品牌名、載入/播放/回到開頭/速度/設定這些一律保留) */
+.header-collapsed{display:none!important}
 /* ── 底部狀態列 ─────────────────── */
 footer{
   padding:10px 14px calc(10px + env(safe-area-inset-bottom));
@@ -3599,15 +3604,13 @@ $("langToggle").addEventListener("click", () => {
 /* ── 頁首自動收合:不管螢幕多寬、瀏覽器字型渲染的實際像素差多少,直接量測「header-left
    跟 header-right 是否還在同一排」,比窮舉斷點更可靠——手機直向、平板寬度、匯入樂譜後
    播放/回到開頭一起冒出來,都是同一套邏輯處理,不用為每種狀況各修一次斷點。
-   放不下的話依重要性由低到高依序收窄,讓真正在用的載入/播放/速度/設定永遠留在原地
-   不被擠掉:先收回首頁連結、品牌名(練習中都不是核心功能),平板寬度(~600~900px)這兩個
-   收掉後,完整文字的桌機按鈕(「載入樂譜」「回到開頭」等)有時還是放不下,最後一步整組
-   改用手機那套「圖示按鈕」樣式收窄寬度。真的窄到連這樣都放不下,才退回讓 header 換行
-   (見前面 .header-left,.header-right{flex-wrap:nowrap} 的說明),不會整排按鈕亂掉。 */
+   回首頁箭頭、品牌名固定在左上角,不收(跟其他專案一致)。放不下時依序收窄按鈕本身,
+   不動箭頭/品牌名:先圖示化、再壓間距,實在不夠才隱藏主題/語言切換這兩個非核心功能。 */
 const HEADER_COLLAPSE_STEPS = [
-  { hide: ".home-link" },       // 最不重要:練習中很少需要點回首頁
-  { hide: "header h1" },        // 其次:品牌名,使用中看不看得到不影響操作
-  { bodyClass: "header-icons-only" } // 最後手段:文字按鈕改圖示,大幅收窄但仍保留所有功能
+  { bodyClass: "header-icons-only" },   // 文字按鈕改圖示
+  { bodyClass: "header-ultra-compact" }, // 按鈕間距再壓一輪
+  { hide: "#themeToggle" },              // 非核心:主題可以晚點再調
+  { hide: "#langToggle" }                // 非核心:語言可以晚點再調
 ];
 function headerIsOneRow(hl, hr){
   // 兩個群組高度不完全一樣(例如回首頁連結的行高跟按鈕差 1~2px),用 align-items:center
