@@ -119,6 +119,9 @@ body:not(.score-loaded) #transportBar,body.header-merged #transportBar{display:n
    放不下時整組一起換到下一排,不會有「群組內的按鈕各自斷行、兩個群組交錯疊在一起」的亂排
    (回首頁連結、語言切換加進頁首後,平板寬度~600~900px 這段也會放不下單排,同一套邏輯處理) */
 .header-left,.header-right{display:flex;align-items:center;flex-wrap:nowrap;gap:8px 10px}
+/* 箭頭+品牌名獨立包一層,間距固定不受任何收合層級影響——樂譜載入前後、任何收合狀態下,
+   兩者的相對位置/間距永遠一致,不會因為載入樂譜、頁首要擠進更多按鈕而跟著跳動 */
+.brand{display:flex;align-items:center;gap:8px 10px;flex:none}
 /* 品牌名用流體字級(clamp)而不是斷點階梯。用斷點的話,430px 的 Pro Max 跟 320px 的 SE
    會拿到同一個字級,大螢幕明明放得下卻被迫用小字,看起來就是「字太小」。
    改成跟著視窗寬度連續縮放:窄機收到剛好放得下,寬機自然長回原本的大小。
@@ -523,11 +526,12 @@ body.score-loaded #playline{display:block}
    不會因為收合層級不同而讓同一顆按鈕忽大忽小、形狀跑掉。 */
 body.header-tempo-compact #tempoBpmLabel{display:none} /* BPM 三個字先收,數字保留 */
 body.header-icons-only .btn-label{display:none}        /* 其餘按鈕的文字都收起來,只留圖示 */
-/* 上面兩步還不夠時,壓到 0 間距跟回首頁連結的內距(不是按鈕,沒有邊框,壓縮不影響按鈕形狀)——
-   所有按鈕(含主題/語言)一律保留、維持一致的圓形/膠囊外觀,不整顆隱藏、不改邊框比例 */
+/* 上面兩步還不夠時,壓到 0 間距(.brand 是箭頭+品牌名獨立的一層,不受影響,見上面 .brand 的
+   說明)、header 右邊內距收窄——右邊內距不影響箭頭起始位置,左邊內距刻意不動,
+   否則樂譜載入前後、收合層級不同時,箭頭會跟著跳動。所有按鈕(含主題/語言)一律保留、
+   維持一致的圓形/膠囊外觀,不整顆隱藏、不改邊框比例 */
 body.header-ultra-compact header,body.header-ultra-compact .header-left,body.header-ultra-compact .header-right{gap:0}
-body.header-ultra-compact header{padding-left:4px;padding-right:4px}
-body.header-ultra-compact .home-link{padding:6px 0}
+body.header-ultra-compact header{padding-right:4px}
 /* 觸控裝置(手機)另外有 min-width:44px(甚至縮到 38px)的無障礙最小觸控範圍規則,
    在極窄手機、又要求全部按鈕都留著、箭頭品牌名都不能動的前提下,單靠上面幾步還是不夠——
    最後只好把觸控目標壓到 WCAG 2.2 AA(2.5.8)要求的最低下限 24px,屬於「換行 vs 觸控區域
@@ -764,10 +768,12 @@ input[type=file]{display:none}
 
 <header>
   <div class="header-left">
-    <a href="https://stevenmusic.github.io/" class="home-link" data-i18n-attr="aria-label:homeLinkLabel,title:homeLinkLabel">
-      <span aria-hidden="true">←</span><span class="btn-label" data-i18n="homeLinkLabel">首頁</span>
-    </a>
-    <h1>Scroll<span>Score</span></h1>
+    <div class="brand">
+      <a href="https://stevenmusic.github.io/" class="home-link" data-i18n-attr="aria-label:homeLinkLabel,title:homeLinkLabel">
+        <span aria-hidden="true">←</span><span class="btn-label" data-i18n="homeLinkLabel">首頁</span>
+      </a>
+      <h1>Scroll<span>Score</span></h1>
+    </div>
   </div>
   <div class="header-right">
     <button class="btn" id="themeToggle" data-i18n-attr="aria-label:themeToggleLabel,title:themeToggleTitle" aria-pressed="false">
