@@ -3633,17 +3633,25 @@ const HEADER_COLLAPSE_STEPS = [
   { bodyClass: "header-icons-only" },    // 其餘按鈕文字改圖示
   { bodyClass: "header-ultra-compact" }  // 按鈕間距再壓一輪
 ];
+// 手機瀏覽器實際渲染的字型寬度跟這支程式量測當下的環境會有落差(尤其中文字型),
+// 剛好卡在邊緣時,量測當下量到「放得下」,但實際渲染出來可能因為極小的字型度量差異
+// 就超出去。留一段安全餘裕,不要卡在邊緣上決定要不要合併。
+const HEADER_FIT_SAFETY_MARGIN = 20;
 function headerIsOneRow(hl, hr){
   // 兩個群組高度不完全一樣(例如回首頁連結的行高跟按鈕差 1~2px),用 align-items:center
   // 對齊同一排時,top 也會跟著差個 1~2px——這不是真的換行,真的換行時 top 會差整排高度
   // (至少 28px 起跳)。容許值取兩者中間,才能分辨「同排但高度略有差異」跟「真的換到下一排」。
   const sameRow = Math.abs(hl.getBoundingClientRect().top - hr.getBoundingClientRect().top) < 10;
-  // 理論上放不下 flex-wrap:wrap 會自動換行,但不同瀏覽器/字型渲染的實際寬度跟這裡量到的
-  // 有落差時(手機瀏覽器的中文字型度量, headless 測試環境量不到真實字型的差異),
-  // 可能會出現「還沒真的換行、但最右邊的按鈕已經被推出螢幕外」的破版——直接檢查最右側
-  // 元素有沒有超出可視寬度,雙重保險,不只靠「有沒有換行」這一個訊號 */
-  const viewportW = window.innerWidth || document.documentElement.clientWidth;
-  const noOverflow = hr.getBoundingClientRect().right <= viewportW + 0.5;
+  // 安全餘裕要比較「按鈕全部展開實際需要多寬」跟「頁首扣掉左右內距、群組間距後還剩多少
+  // 空間」,不能直接看 header-right 的右邊緣離螢幕邊緣多遠——那個距離只反映頁首固定的
+  // 右內距(通常只有 10~14px),不管螢幕多寬幾乎都差不多,拿來當「還有多少餘裕」的指標
+  // 完全量錯東西,會導致明明螢幕還很寬也判定放不下。
+  const header = document.querySelector("header");
+  const cs = getComputedStyle(header);
+  const avail = header.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)
+    - parseFloat(cs.columnGap || cs.gap || 0);
+  const needed = hl.scrollWidth + hr.scrollWidth;
+  const noOverflow = needed <= avail - HEADER_FIT_SAFETY_MARGIN;
   return sameRow && noOverflow;
 }
 function setHeaderCollapseStep(step, on){
