@@ -513,6 +513,14 @@ body.score-loaded #playline{display:block}
   padding:6px 4px;border-radius:var(--radius-sm);transition:color .15s;
 }
 .home-link:hover,.home-link:focus-visible{color:var(--gold-bright)}
+/* 頁首放不下單排時,由 fitHeaderRow() 依重要性動態收起的元素(見對應的 JS) */
+.header-collapsed{display:none!important}
+/* fitHeaderRow() 收到最後一步:文字按鈕改圖示(跟手機窄螢幕同一套樣式),不綁定特定螢幕寬度,
+   平板寬度(~600~900px)那種「完整文字放不下、但其實不算真的很窄」的情況也能用同一套邏輯收窄 */
+body.header-icons-only .btn{padding:0 10px;height:34px;font-size:var(--fs-sm)}
+body.header-icons-only .btn-label{display:none}
+body.header-icons-only .header-left .btn svg,body.header-icons-only #settingsToggle svg{margin:0}
+body.header-icons-only #tempoToggle{padding:0 12px;font-size:var(--fs-sm)}
 /* ── 底部狀態列 ─────────────────── */
 footer{
   padding:10px 14px calc(10px + env(safe-area-inset-bottom));
@@ -3582,7 +3590,73 @@ function refreshDynamicI18nText(){
 $("langToggle").addEventListener("click", () => {
   applyLanguage(currentLang === "en" ? "zh" : "en");
   refreshDynamicI18nText();
+  scheduleFitHeaderRow(); // 中英文按鈕寬度不同(尤其「BPM」跟中文字),切換後重新量測
 });
+
+/* ── 頁首自動收合:不管螢幕多寬、瀏覽器字型渲染的實際像素差多少,直接量測「header-left
+   跟 header-right 是否還在同一排」,比窮舉斷點更可靠——手機直向、平板寬度、匯入樂譜後
+   播放/回到開頭一起冒出來,都是同一套邏輯處理,不用為每種狀況各修一次斷點。
+   放不下的話依重要性由低到高依序收窄,讓真正在用的載入/播放/速度/設定永遠留在原地
+   不被擠掉:先收回首頁連結、品牌名(練習中都不是核心功能),平板寬度(~600~900px)這兩個
+   收掉後,完整文字的桌機按鈕(「載入樂譜」「回到開頭」等)有時還是放不下,最後一步整組
+   改用手機那套「圖示按鈕」樣式收窄寬度。真的窄到連這樣都放不下,才退回讓 header 換行
+   (見前面 .header-left,.header-right{flex-wrap:nowrap} 的說明),不會整排按鈕亂掉。 */
+const HEADER_COLLAPSE_STEPS = [
+  { hide: ".home-link" },       // 最不重要:練習中很少需要點回首頁
+  { hide: "header h1" },        // 其次:品牌名,使用中看不看得到不影響操作
+  { bodyClass: "header-icons-only" } // 最後手段:文字按鈕改圖示,大幅收窄但仍保留所有功能
+];
+function headerIsOneRow(hl, hr){
+  // 兩個群組高度不完全一樣(例如回首頁連結的行高跟按鈕差 1~2px),用 align-items:center
+  // 對齊同一排時,top 也會跟著差個 1~2px——這不是真的換行,真的換行時 top 會差整排高度
+  // (至少 28px 起跳)。容許值取兩者中間,才能分辨「同排但高度略有差異」跟「真的換到下一排」。
+  return Math.abs(hl.getBoundingClientRect().top - hr.getBoundingClientRect().top) < 10;
+}
+function setHeaderCollapseStep(step, on){
+  if (step.hide) {
+    const el = document.querySelector(step.hide);
+    if (el) el.classList.toggle("header-collapsed", on);
+  } else if (step.bodyClass) {
+    document.body.classList.toggle(step.bodyClass, on);
+  }
+}
+/* fitHeaderRow() 收合步驟裡有一步是切 body 的 class(header-icons-only),
+   而下面 bodyClassObserver 正是在看 body 的 class 屬性——不斷開的話,自己收合 body class
+   這個動作會被自己的 observer 偵測到,又排一次 scheduleFitHeaderRow(),變成永遠停不下來的
+   重複量測(每次都收合再打開再收合,不會壞掉,但會一直空轉,白白耗電)。量測前先斷開、
+   量測完再接回去,只讓「不是我們自己造成」的變化(語言切換以外的外部改動)觸發重新量測。 */
+function fitHeaderRow(){
+  const hl = document.querySelector(".header-left");
+  const hr = document.querySelector(".header-right");
+  if (!hl || !hr) return;
+  bodyClassObserver.disconnect();
+  for (const step of HEADER_COLLAPSE_STEPS) setHeaderCollapseStep(step, false);
+  if (!headerIsOneRow(hl, hr)) {
+    for (const step of HEADER_COLLAPSE_STEPS) {
+      setHeaderCollapseStep(step, true);
+      if (headerIsOneRow(hl, hr)) break;
+    }
+  }
+  bodyClassObserver.observe(document.body, { attributes: true, attributeFilter: ["class"] });
+}
+let headerFitScheduled = false;
+function scheduleFitHeaderRow(){
+  if (headerFitScheduled) return;
+  headerFitScheduled = true;
+  requestAnimationFrame(() => { headerFitScheduled = false; fitHeaderRow(); });
+}
+// 監看 body 的 class(score-loaded 開關)跟播放/回到開頭鈕的 disabled 狀態,
+// 不管未來從哪裡觸發這些變化,都會自動重新量測,不必到處手動補呼叫
+const bodyClassObserver = new MutationObserver(scheduleFitHeaderRow);
+bodyClassObserver.observe(document.body, { attributes: true, attributeFilter: ["class"] });
+new MutationObserver(scheduleFitHeaderRow).observe(document.querySelector(".header-left"), { attributes: true, attributeFilter: ["disabled"], subtree: true });
+window.addEventListener("resize", scheduleFitHeaderRow);
+window.addEventListener("orientationchange", scheduleFitHeaderRow);
+// 品牌名跟頁首按鈕都用 Google Fonts(Noto Sans/Serif TC),網頁字型是非同步載入、
+// 換上真正字型前先用系統預設字體顯示(FOUT)——換字型前後,同樣的文字實際渲染寬度不一樣,
+// 字型還沒載入完成前量到的結果換字後可能就不準了,字型就緒後必須再量一次
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(scheduleFitHeaderRow);
+scheduleFitHeaderRow();
 
 /* 快捷鍵對照表:點 footer 的鍵盤圖示打開(手機沒有 hover,tooltip 等於看不到) */
 function openShortcuts(){ $("shortcutOverlay").classList.add("show"); }
