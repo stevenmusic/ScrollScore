@@ -350,7 +350,7 @@ input[type=range]::-webkit-slider-thumb{
   /* 「BPM」剛出現的那一段(約 385~400px)是整條頂欄最擠的地方,只剩個位數的餘裕。
      讓這三個字自己也跟著寬度縮放,把那一段的餘裕拉回兩位數 */
   #tempoBpmLabel{font-size:clamp(11px, 3.1vw, 13px)}
-  .btn{padding:0 6px;height:34px;font-size:var(--fs-sm)}
+  .btn{padding:0 10px;height:34px;font-size:var(--fs-sm)}
   .btn-label{display:none}
   #transportBar .btn svg,#settingsToggle svg{margin:0}
   #settingsPanel{padding:8px 10px;gap:8px 12px}
@@ -369,7 +369,7 @@ input[type=range]::-webkit-slider-thumb{
      這個寬度以下留著的話,載入樂譜後頂欄會換行,多吃 47px 的樂譜高度。
      只留數字跟下拉箭頭,展開的速度面板裡仍然寫著「速度」,不會不知道那個數字是什麼 */
   #tempoBpmLabel{display:none}
-  .btn{padding:0 5px;height:32px}
+  .btn{padding:0 8px;height:32px}
   input[type=range]{width:48px}
   /* 320~380px 的機身高度也短(SE 只有 568px),面板卡片的內距與列距再收一輪,
      讓設定不用捲動就看得完 */
@@ -378,7 +378,7 @@ input[type=range]::-webkit-slider-thumb{
 }
 /* 最舊款極窄機型(320px):再壓縮一輪按鈕內距與滑桿/數字框寬度 */
 @media (max-width:340px){
-  .btn{padding:0 4px}
+  .btn{padding:0 5px}
   input[type=range]{width:34px}
   .tempo-box input[type=number]{width:34px;height:26px;line-height:26px;padding:0 2px}
 }
