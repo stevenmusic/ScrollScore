@@ -521,7 +521,13 @@ body.header-icons-only .btn-label{display:none}        /* 其餘按鈕的文字�
 /* 上面兩步還不夠時,壓到 0 間距跟回首頁連結的內距(不是按鈕,沒有邊框,壓縮不影響按鈕形狀)——
    所有按鈕(含主題/語言)一律保留、維持一致的圓形/膠囊外觀,不整顆隱藏、不改邊框比例 */
 body.header-ultra-compact header,body.header-ultra-compact .header-left,body.header-ultra-compact .header-right{gap:0}
+body.header-ultra-compact header{padding-left:4px;padding-right:4px}
 body.header-ultra-compact .home-link{padding:6px 0}
+/* 觸控裝置(手機)另外有 min-width:44px(甚至縮到 38px)的無障礙最小觸控範圍規則,
+   在極窄手機、又要求全部按鈕都留著、箭頭品牌名都不能動的前提下,單靠上面幾步還是不夠——
+   最後只好把觸控目標壓到 WCAG 2.2 AA(2.5.8)要求的最低下限 24px,屬於「換行 vs 觸控區域
+   變小」兩害相權的取捨,跟前面 320px 那個案例(40px)同樣道理,只是這裡逼到底線 */
+body.header-ultra-compact .btn{min-width:24px;padding:0 3px}
 /* ── 底部狀態列 ─────────────────── */
 footer{
   padding:10px 14px calc(10px + env(safe-area-inset-bottom));
