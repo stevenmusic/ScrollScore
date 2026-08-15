@@ -3955,6 +3955,37 @@ function pianoPanFor(freq){
   const t = Math.max(0, Math.min(1, (freqToMidi(freq) - 21) / 87));
   return (t - 0.5) * 0.64;
 }
+/* 除了鋼琴以外,原本所有樂器(弦樂、長笛、吉他、單簧管)一律 pan=0 置中,直接音完全沒有寬度、
+   只有殘響尾巴帶一點立體感,合奏起來像所有樂器疊在同一個點發聲。這裡比照真實錄音/管弦樂編排
+   慣例給每個樂器一個舞台位置:獨奏的弓弦類/木管類固定偏一邊(獨奏者站位很少剛好在正中央),
+   吉他跟鋼琴一樣依音高微幅擺動(從低音弦到高音弦一樣有實際的空間排列),幅度縮小到鋼琴的七成
+   (吉他琴頸沒有鋼琴音板那麼寬,擺動不該一樣誇張)。 */
+function instrumentPanFor(instKey, freq){
+  switch (instKey) {
+    case "piano": return pianoPanFor(freq);
+    case "guitar": case "guitarnylon": return pianoPanFor(freq) * 0.7;
+    case "strings": return -0.22;
+    case "cello": return 0.18;
+    case "flute": return -0.1;
+    case "clarinet": return 0.12;
+    default: return 0;
+  }
+}
+/* 聲像 + 殘響送出共用小工具:原本每個樂器/鼓件各自重複一份「建 panner、接 masterGain、
+   建 send 接 reverbBus」的樣板,鼓組/鈸片甚至完全沒接殘響送出(等於在無殘響的乾房間裡打鼓,
+   跟其他樂器的空間感對不起來)。統一收斂到這裡,新增聲部只要呼叫這個就會自動有聲像跟空間感。 */
+function connectWithPan(node, pan, reverbSend){
+  const panner = audioCtx.createStereoPanner ? audioCtx.createStereoPanner() : null;
+  const out = panner || node;
+  if (panner) { node.connect(panner); panner.connect(masterGain); }
+  else { node.connect(masterGain); }
+  if (reverbBus && reverbSend) {
+    const send = audioCtx.createGain();
+    send.gain.value = reverbSend;
+    out.connect(send); send.connect(reverbBus);
+  }
+  return panner;
+}
 
 const PLAY_ICON_D = "M8 5v14l11-7z";
 const PAUSE_ICON_D = "M6 5h4v14H6zM14 5h4v14h-4z";
@@ -4620,6 +4651,26 @@ const DRUM_PIECES = {
   57: "crash2", 52: "crash2",
   51: "ride", 59: "ride", 53: "ride"
 };
+/* 鼓組原本每一件(含鈸片)都是直接接 masterGain,等於全部疊在正中央同一個點,完全沒有
+   立體感,也完全沒送殘響(等於在無響室裡打鼓)。這裡直接沿用畫面上鼓組面板的實際左右佈局
+   (DRUM_PAD_LAYOUT 的 x 座標)換算聲像,讓耳朵聽到的位置跟眼睛看到的發光位置對得起來;
+   殘響送出量按樂器特性給(鈸片/落地鼓延音長,送多一點顯出空間大小;鼓皮類敲擊感重,送少一點
+   避免糊掉打點的清晰度)。 */
+const DRUM_PAD_X = {};
+for (const _pad of DRUM_PAD_LAYOUT) DRUM_PAD_X[_pad.id] = _pad.x;
+const DRUM_PAN_WIDTH = 0.8; // 跟其他樂器的聲像幅度量級一致,不要比它們誇張
+function drumPanForKey(key){
+  const x = DRUM_PAD_X[DRUM_PIECES[key] || "snare"];
+  return x == null ? 0 : (x - 0.5) * 2 * DRUM_PAN_WIDTH;
+}
+const DRUM_REVERB_SEND = {
+  kick: 0.10, snare: 0.20, hihatClosed: 0.12, hihatOpen: 0.22,
+  tomHi: 0.26, tomMid: 0.26, tomFloor: 0.28, crash1: 0.38, crash2: 0.38, ride: 0.30
+};
+function drumReverbSendForKey(key){
+  const send = DRUM_REVERB_SEND[DRUM_PIECES[key] || "snare"];
+  return send != null ? send : 0.2;
+}
 const DRUM_FLASH_SEC = 0.22; // 打擊後視覺餘光衰減時間
 let drumScanCursor = 0, drumScanLastSec = -1;
 function getActiveDrumHitsAt(sec, calib){
@@ -4815,28 +4866,11 @@ function playSampledInstrument(instKey, freq, when, dur, legato, pedal, chordAnc
     filterNode.frequency.value = tech.harmonic ? Math.min(freq * 5, 4500) : Math.min(freq * 2.5, 1800);
   }
   if (filterNode) { src.connect(filterNode); filterNode.connect(g); } else { src.connect(g); }
-  /* 聲像 + 殘響送出。鋼琴依音高擺左右(低音左、高音右),其他樂器維持置中——
-     那個位置感是鋼琴弦排列的物理特性,套到小提琴或長笛上反而不對。
+  /* 聲像 + 殘響送出。鋼琴依音高擺左右(低音左、高音右),吉他比照但幅度較窄,
+     其他獨奏樂器給固定的舞台位置(見 instrumentPanFor),不再全部疊在正中央。
      踏板踩著時送多一點進殘響:真實鋼琴踏板一踩,所有沒被制音的弦會跟著共鳴,
      整體空間感明顯變大。這是用殘響量去逼近那個效果,不是真的在模擬弦間共振。 */
-  const panner = audioCtx.createStereoPanner ? audioCtx.createStereoPanner() : null;
-  if (panner) {
-    panner.pan.value = (instKey === "piano") ? pianoPanFor(freq) : 0;
-    g.connect(panner);
-    panner.connect(masterGain);
-    if (reverbBus) {
-      const send = audioCtx.createGain();
-      send.gain.value = pedal ? 0.85 : 0.5;
-      panner.connect(send); send.connect(reverbBus);
-    }
-  } else {
-    g.connect(masterGain);
-    if (reverbBus) {
-      const send = audioCtx.createGain();
-      send.gain.value = pedal ? 0.85 : 0.5;
-      g.connect(send); send.connect(reverbBus);
-    }
-  }
+  connectWithPan(g, instrumentPanFor(instKey, freq), pedal ? 0.85 : 0.5);
   // 滑音(glissando/slide):音高在演奏期間持續滑向下一個音,模擬手指在同一條弦上滑動把位
   if (tech && tech.glissTargetFreq) {
     const targetRate = rate * (tech.glissTargetFreq / freq);
@@ -5058,23 +5092,7 @@ function schedulePiano(freq, when, dur, legato, pedal, harmonyEndSec, artic, sta
   osc.connect(lp); osc2.connect(g2); g2.connect(lp);
   lp.connect(g);
   // 合成音備援路徑也要有同樣的聲像與殘響,否則取樣載入前後的空間感會突然改變
-  const sPan = audioCtx.createStereoPanner ? audioCtx.createStereoPanner() : null;
-  if (sPan) {
-    sPan.pan.value = pianoPanFor(freq);
-    g.connect(sPan); sPan.connect(masterGain);
-    if (reverbBus) {
-      const send = audioCtx.createGain();
-      send.gain.value = pedal ? 0.85 : 0.5;
-      sPan.connect(send); send.connect(reverbBus);
-    }
-  } else {
-    g.connect(masterGain);
-    if (reverbBus) {
-      const send = audioCtx.createGain();
-      send.gain.value = pedal ? 0.85 : 0.5;
-      g.connect(send); send.connect(reverbBus);
-    }
-  }
+  connectWithPan(g, pianoPanFor(freq), pedal ? 0.85 : 0.5);
   osc.start(when); osc2.start(when);
   const stopAt = when + sustain + releaseTail + 0.05;
   osc.stop(stopAt); osc2.stop(stopAt);
@@ -5100,7 +5118,8 @@ function scheduleStrings(freq, when, dur){
     o.connect(lp); o.start(when); o.stop(when + sustain + 0.4);
     oscs.push(o);
   }
-  lp.connect(g); g.connect(masterGain);
+  lp.connect(g);
+  connectWithPan(g, instrumentPanFor("strings", freq), 0.4);
   scheduled.push(...oscs);
 }
 
@@ -5128,8 +5147,8 @@ function scheduleFlute(freq, when, dur){
   const noise = audioCtx.createBufferSource(); noise.buffer = buf;
   const hp = audioCtx.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = 3500;
   const ng = audioCtx.createGain(); ng.gain.value = 0.02;
-  noise.connect(hp); hp.connect(ng); ng.connect(masterGain);
-  g.connect(masterGain);
+  noise.connect(hp); hp.connect(ng); ng.connect(g); // 氣音跟著音符本體一起送出,同一個聲像跟殘響量
+  connectWithPan(g, instrumentPanFor("flute", freq), 0.45);
   o.start(when); o2.start(when); noise.start(when);
   const stopAt = when + sustain + 0.3;
   o.stop(stopAt); o2.stop(stopAt); noise.stop(stopAt);
@@ -5160,7 +5179,8 @@ function scheduleGuitar(freq, when, dur, harmonyEndSec, tech){
   o2.type = "triangle"; o2.frequency.setValueAtTime(freq * 2, when);
   const g2 = audioCtx.createGain(); g2.gain.value = 0.15;
   o.connect(lp); o2.connect(g2); g2.connect(lp);
-  lp.connect(g); g.connect(masterGain);
+  lp.connect(g);
+  connectWithPan(g, instrumentPanFor("guitar", freq), 0.4);
   // 滑音(glissando/slide)/抓弦(bend):兩顆振盪器的頻率一起做 ramp,維持基音+泛音同步變化
   if (tech && tech.glissTargetFreq) {
     const glissDur = Math.max(dur * 0.85, 0.05);
@@ -5212,7 +5232,8 @@ function scheduleClarinet(freq, when, dur){
   g.gain.exponentialRampToValueAtTime(0.0001, when + sustain + 0.22);
   const o = audioCtx.createOscillator();
   o.type = "square"; o.frequency.value = freq;
-  o.connect(lp); lp.connect(g); g.connect(masterGain);
+  o.connect(lp); lp.connect(g);
+  connectWithPan(g, instrumentPanFor("clarinet", freq), 0.4);
   o.start(when);
   const stopAt = when + sustain + 0.3;
   o.stop(stopAt);
@@ -5266,7 +5287,7 @@ function loadCymbalKit(){
 
 /* 銅鈸取樣是音樂廳實錄,自然延音拖得比一般鼓組取樣長很多(原始檔案殘響甚至長達十幾秒),
    直接整段播放在快速的段落裡會糊成一片,所以要主動包一個振幅包絡收尾,而不是照樣放給它自然結束 */
-function playCymbalSample(name, when, gain, sustainSec, rate){
+function playCymbalSample(name, when, gain, sustainSec, rate, pan, reverbSend){
   const buf = cymbalBuffers[name];
   if (!buf) return false;
   const src = audioCtx.createBufferSource();
@@ -5276,14 +5297,15 @@ function playCymbalSample(name, when, gain, sustainSec, rate){
   g.gain.setValueAtTime(gain, when);
   g.gain.setValueAtTime(gain, when + sustainSec * 0.5);
   g.gain.exponentialRampToValueAtTime(0.0001, when + sustainSec);
-  src.connect(g); g.connect(masterGain);
+  src.connect(g);
+  connectWithPan(g, pan || 0, reverbSend);
   src.start(when);
   src.stop(when + sustainSec + 0.1);
   scheduled.push(src);
   return true;
 }
 
-function playSample(name, when, gain, rate){
+function playSample(name, when, gain, rate, pan, reverbSend){
   const buf = kitBuffers[name];
   if (!buf) return false;
   const src = audioCtx.createBufferSource();
@@ -5291,7 +5313,8 @@ function playSample(name, when, gain, rate){
   if (rate) src.playbackRate.value = rate;
   const g = audioCtx.createGain();
   g.gain.value = gain;
-  src.connect(g); g.connect(masterGain);
+  src.connect(g);
+  connectWithPan(g, pan || 0, reverbSend);
   src.start(when);
   scheduled.push(src);
   return true;
@@ -5301,7 +5324,7 @@ function playSample(name, when, gain, rate){
    不是憑空合成一個不相干的音色 —— 只是把它裁得很短(切掉鼓皮鼓弦共鳴的延音尾巴,只留下打擊瞬間)、
    加高通濾掉低頻的「蓬」聲、拉高一點點音高(模擬打在鼓框而不是鼓皮上),這樣音色才會跟其他鼓件
    聽起來像同一套鼓,而不是另外拼上去的東西 */
-function playRimClickFromSample(when, gain){
+function playRimClickFromSample(when, gain, pan, reverbSend){
   const buf = kitBuffers["snare"];
   if (!buf) return false;
   const src = audioCtx.createBufferSource();
@@ -5312,7 +5335,8 @@ function playRimClickFromSample(when, gain){
   const g = audioCtx.createGain();
   g.gain.setValueAtTime(gain, when);
   g.gain.exponentialRampToValueAtTime(0.0001, when + 0.045);
-  src.connect(hp); hp.connect(g); g.connect(masterGain);
+  src.connect(hp); hp.connect(g);
+  connectWithPan(g, pan || 0, reverbSend);
   src.start(when);
   src.stop(when + 0.07);
   scheduled.push(src);
@@ -5321,7 +5345,7 @@ function playRimClickFromSample(when, gain){
 
 /* 金屬銅鈸合成:九方波非諧波泛音堆疊(敲擊的「叮」)+ 濾波白噪音(鈸片震動的「沙沙」共鳴),
    兩層疊加是真實鈸聲(尤其爵士 ride)的關鍵 —— 純泛音堆疊只有攻擊聲、沒有那種會延續的沙沙聲底 */
-function synthCymbal(when, decay, hpFreq, gain, noiseMix){
+function synthCymbal(when, decay, hpFreq, gain, noiseMix, pan, reverbSend){
   noiseMix = noiseMix != null ? noiseMix : 0.35;
   const ratios = [1, 1.79, 2.43, 3.86, 4.34, 5.43, 6.79, 8.21, 10.1];
   const bp = audioCtx.createBiquadFilter();
@@ -5331,7 +5355,8 @@ function synthCymbal(when, decay, hpFreq, gain, noiseMix){
   const pingGain = audioCtx.createGain();
   pingGain.gain.setValueAtTime(gain * (1 - noiseMix * 0.6), when);
   pingGain.gain.exponentialRampToValueAtTime(0.0001, when + decay * 0.75);
-  bp.connect(hp); hp.connect(pingGain); pingGain.connect(masterGain);
+  bp.connect(hp); hp.connect(pingGain);
+  connectWithPan(pingGain, pan || 0, reverbSend);
   for (const r of ratios) {
     const o = audioCtx.createOscillator();
     o.type = "square"; o.frequency.value = 220 * r;
@@ -5351,56 +5376,59 @@ function synthCymbal(when, decay, hpFreq, gain, noiseMix){
   noiseGain.gain.setValueAtTime(0.0001, when);
   noiseGain.gain.linearRampToValueAtTime(gain * noiseMix, when + Math.min(0.02, decay * 0.15));
   noiseGain.gain.exponentialRampToValueAtTime(0.0001, when + bufSec);
-  noiseSrc.connect(noiseHp); noiseHp.connect(noiseGain); noiseGain.connect(masterGain);
+  noiseSrc.connect(noiseHp); noiseHp.connect(noiseGain);
+  connectWithPan(noiseGain, pan || 0, reverbSend);
   noiseSrc.start(when); noiseSrc.stop(when + bufSec);
   scheduled.push(noiseSrc);
 }
 
 function scheduleDrum(key, when){
+  const pan = drumPanForKey(key), send = drumReverbSendForKey(key);
   switch (key) {
     case 35: case 36: // Kick
-      if (!playSample("kick", when, 1.0)) synthKick(when); break;
+      if (!playSample("kick", when, 1.0, null, pan, send)) synthKick(when, pan, send); break;
     case 38: case 40: // Snare
-      if (!playSample("snare", when, 0.95)) synthSnare(when, 0.95); break;
+      if (!playSample("snare", when, 0.95, null, pan, send)) synthSnare(when, 0.95, pan, send); break;
     case 37:          // Side stick / rim click:優先裁短同一套小鼓取樣(音色才會跟整組鼓一致),
-      if (!playRimClickFromSample(when, 0.85)) synthRimClick(when, 0.7); break; // 取樣載入失敗才退回合成音
+      if (!playRimClickFromSample(when, 0.85, pan, send)) synthRimClick(when, 0.7, pan, send); break; // 取樣載入失敗才退回合成音
     case 39:          // Clap → snare 替代
-      playSample("snare", when, 0.8) || synthSnare(when, 0.8); break;
+      playSample("snare", when, 0.8, null, pan, send) || synthSnare(when, 0.8, pan, send); break;
     case 42:          // Closed hi-hat
-      if (!playSample("hihat", when, 0.75)) synthCymbal(when, 0.06, 8000, 0.25, 0.25); break;
+      if (!playSample("hihat", when, 0.75, null, pan, send)) synthCymbal(when, 0.06, 8000, 0.25, 0.25, pan, send); break;
     case 44:          // Pedal hi-hat
-      if (!playSample("hihat", when, 0.45, 1.1)) synthCymbal(when, 0.05, 8000, 0.16, 0.2); break;
+      if (!playSample("hihat", when, 0.45, 1.1, pan, send)) synthCymbal(when, 0.05, 8000, 0.16, 0.2, pan, send); break;
     case 46:          // Open hi-hat:優先用 VCSL 真實開鈸錄音
-      if (!playCymbalSample("hihatOpen", when, 0.8, 0.45)) synthCymbal(when, 0.45, 7000, 0.28, 0.4); break;
+      if (!playCymbalSample("hihatOpen", when, 0.8, 0.45, null, pan, send)) synthCymbal(when, 0.45, 7000, 0.28, 0.4, pan, send); break;
     case 41: case 43: // Floor toms
-      if (!playSample("tom3", when, 0.95)) synthTom(when, 90); break;
+      if (!playSample("tom3", when, 0.95, null, pan, send)) synthTom(when, 90, pan, send); break;
     case 45: case 47: // Mid toms
-      if (!playSample("tom2", when, 0.95)) synthTom(when, 130); break;
+      if (!playSample("tom2", when, 0.95, null, pan, send)) synthTom(when, 130, pan, send); break;
     case 48: case 50: // High toms
-      if (!playSample("tom1", when, 0.95)) synthTom(when, 175); break;
+      if (!playSample("tom1", when, 0.95, null, pan, send)) synthTom(when, 175, pan, send); break;
     case 49: case 57: case 55: case 52: // Crash / splash / china:優先用 VCSL 真實鈸片錄音
-      if (!playCymbalSample("crash", when, 0.85, 1.8)) synthCymbal(when, 1.6, 5500, 0.4, 0.45); break;
+      if (!playCymbalSample("crash", when, 0.85, 1.8, null, pan, send)) synthCymbal(when, 1.6, 5500, 0.4, 0.45, pan, send); break;
     case 51: case 59: // Ride:爵士鼓的主要律動聲部,優先用真實 suspended cymbal 錄音才會有那種會「唱歌」的質感
-      if (!playCymbalSample("ride", when, 0.8, 1.4)) synthCymbal(when, 1.3, 8500, 0.22, 0.55); break;
+      if (!playCymbalSample("ride", when, 0.8, 1.4, null, pan, send)) synthCymbal(when, 1.3, 8500, 0.22, 0.55, pan, send); break;
     case 53:          // Ride bell:鈴心敲擊,優先用真實錄音的鈴心版本,音色乾淨集中
-      if (!playCymbalSample("rideBell", when, 0.85, 0.7)) synthCymbal(when, 0.6, 11000, 0.32, 0.12); break;
+      if (!playCymbalSample("rideBell", when, 0.85, 0.7, null, pan, send)) synthCymbal(when, 0.6, 11000, 0.32, 0.12, pan, send); break;
     default:
-      playSample("snare", when, 0.7) || synthSnare(when, 0.7);
+      playSample("snare", when, 0.7, null, pan, send) || synthSnare(when, 0.7, pan, send);
   }
 }
 
 /* 取樣載入失敗時的合成備援 */
-function synthKick(when){
+function synthKick(when, pan, reverbSend){
   const o = audioCtx.createOscillator(), g = audioCtx.createGain();
   o.type = "sine";
   o.frequency.setValueAtTime(150, when);
   o.frequency.exponentialRampToValueAtTime(45, when + 0.12);
   g.gain.setValueAtTime(1.0, when);
   g.gain.exponentialRampToValueAtTime(0.001, when + 0.4);
-  o.connect(g); g.connect(masterGain);
+  o.connect(g);
+  connectWithPan(g, pan || 0, reverbSend);
   o.start(when); o.stop(when + 0.45); scheduled.push(o);
 }
-function synthSnare(when, vol){
+function synthSnare(when, vol, pan, reverbSend){
   const len = audioCtx.sampleRate * 0.2;
   const buf = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
   const d = buf.getChannelData(0);
@@ -5408,18 +5436,20 @@ function synthSnare(when, vol){
   const src = audioCtx.createBufferSource(); src.buffer = buf;
   const hp = audioCtx.createBiquadFilter(); hp.type="highpass"; hp.frequency.value=1400;
   const g = audioCtx.createGain(); g.gain.value = vol;
-  src.connect(hp); hp.connect(g); g.connect(masterGain);
+  src.connect(hp); hp.connect(g);
+  connectWithPan(g, pan || 0, reverbSend);
   src.start(when); scheduled.push(src);
   const o = audioCtx.createOscillator(), og = audioCtx.createGain();
   o.type="triangle"; o.frequency.value=185;
   og.gain.setValueAtTime(vol*0.5, when);
   og.gain.exponentialRampToValueAtTime(0.001, when+0.1);
-  o.connect(og); og.connect(masterGain);
+  o.connect(og);
+  connectWithPan(og, pan || 0, reverbSend);
   o.start(when); o.stop(when+0.12); scheduled.push(o);
 }
 /* Rim click(側擊/邊擊):鼓棒直接敲在鼓框上,聲音又短又乾、偏木頭感,跟小鼓的鼓皮+鼓弦共鳴完全不同,
    不能借用小鼓取樣調音高矇混過去 —— 用「短促的高頻噪點」做打點的清脆感,疊一顆快速衰減的短音給木頭音高感 */
-function synthRimClick(when, gain){
+function synthRimClick(when, gain, pan, reverbSend){
   gain = gain != null ? gain : 0.7;
   const bufSec = 0.03;
   const noiseBuf = audioCtx.createBuffer(1, Math.ceil(audioCtx.sampleRate * bufSec), audioCtx.sampleRate);
@@ -5432,7 +5462,8 @@ function synthRimClick(when, gain){
   const ng = audioCtx.createGain();
   ng.gain.setValueAtTime(gain * 0.75, when);
   ng.gain.exponentialRampToValueAtTime(0.0001, when + bufSec);
-  noiseSrc.connect(hp); hp.connect(ng); ng.connect(masterGain);
+  noiseSrc.connect(hp); hp.connect(ng);
+  connectWithPan(ng, pan || 0, reverbSend);
   noiseSrc.start(when); noiseSrc.stop(when + bufSec + 0.01);
   scheduled.push(noiseSrc);
 
@@ -5442,18 +5473,20 @@ function synthRimClick(when, gain){
   o.frequency.exponentialRampToValueAtTime(850, when + 0.025);
   og.gain.setValueAtTime(gain * 0.5, when);
   og.gain.exponentialRampToValueAtTime(0.0001, when + 0.04);
-  o.connect(og); og.connect(masterGain);
+  o.connect(og);
+  connectWithPan(og, pan || 0, reverbSend);
   o.start(when); o.stop(when + 0.05);
   scheduled.push(o);
 }
-function synthTom(when, freq){
+function synthTom(when, freq, pan, reverbSend){
   const o = audioCtx.createOscillator(), g = audioCtx.createGain();
   o.type = "sine";
   o.frequency.setValueAtTime(freq*1.5, when);
   o.frequency.exponentialRampToValueAtTime(freq, when + 0.08);
   g.gain.setValueAtTime(0.9, when);
   g.gain.exponentialRampToValueAtTime(0.001, when + 0.35);
-  o.connect(g); g.connect(masterGain);
+  o.connect(g);
+  connectWithPan(g, pan || 0, reverbSend);
   o.start(when); o.stop(when + 0.4); scheduled.push(o);
 }
 
