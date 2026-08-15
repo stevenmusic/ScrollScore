@@ -3637,7 +3637,14 @@ function headerIsOneRow(hl, hr){
   // 兩個群組高度不完全一樣(例如回首頁連結的行高跟按鈕差 1~2px),用 align-items:center
   // 對齊同一排時,top 也會跟著差個 1~2px——這不是真的換行,真的換行時 top 會差整排高度
   // (至少 28px 起跳)。容許值取兩者中間,才能分辨「同排但高度略有差異」跟「真的換到下一排」。
-  return Math.abs(hl.getBoundingClientRect().top - hr.getBoundingClientRect().top) < 10;
+  const sameRow = Math.abs(hl.getBoundingClientRect().top - hr.getBoundingClientRect().top) < 10;
+  // 理論上放不下 flex-wrap:wrap 會自動換行,但不同瀏覽器/字型渲染的實際寬度跟這裡量到的
+  // 有落差時(手機瀏覽器的中文字型度量, headless 測試環境量不到真實字型的差異),
+  // 可能會出現「還沒真的換行、但最右邊的按鈕已經被推出螢幕外」的破版——直接檢查最右側
+  // 元素有沒有超出可視寬度,雙重保險,不只靠「有沒有換行」這一個訊號 */
+  const viewportW = window.innerWidth || document.documentElement.clientWidth;
+  const noOverflow = hr.getBoundingClientRect().right <= viewportW + 0.5;
+  return sameRow && noOverflow;
 }
 function setHeaderCollapseStep(step, on){
   document.body.classList.toggle(step.bodyClass, on);
@@ -3699,6 +3706,10 @@ window.addEventListener("orientationchange", scheduleFitHeaderRow);
 // 字型還沒載入完成前量到的結果換字後可能就不準了,字型就緒後必須再量一次
 if (document.fonts && document.fonts.ready) document.fonts.ready.then(scheduleFitHeaderRow);
 scheduleFitHeaderRow();
+// 保底再補兩次延遲重新量測:字型置換、Safari 位址列收合等排版變化不一定會確實觸發上面
+// 那些事件監聽,晚一點再量一次確保最終還是對的(已經合併/收合正確的話,這兩次是空操作)
+setTimeout(scheduleFitHeaderRow, 300);
+setTimeout(scheduleFitHeaderRow, 1200);
 
 /* 快捷鍵對照表:點 footer 的鍵盤圖示打開(手機沒有 hover,tooltip 等於看不到) */
 function openShortcuts(){ $("shortcutOverlay").classList.add("show"); }
