@@ -149,7 +149,10 @@ header h1 span{color:var(--ivory);font-weight:600}
 /* 淺色模式的頁首圖示按鈕:開著的時候跟 .btn.primary 用同一套「這是啟用狀態」視覺語言,
    不用另外發明一種樣式 */
 #themeToggle[aria-pressed="true"]{background:var(--gold);color:var(--bg)}
-#langToggle{min-width:2.7em;justify-content:center;font-weight:700;letter-spacing:.02em}
+/* 跟主題/設定那些圖示按鈕一樣統一用正圓形:aspect-ratio:1 讓寬度自動跟著 .btn 當下的
+   高度走(不同斷點高度不一樣,不用每個斷點各寫一次),「EN」/「中」都只有一兩個字,
+   圓形裝得下,視覺上也跟其他圖示按鈕一致,不會忽圓忽橢圓 */
+#langToggle{aspect-ratio:1;padding:0;font-weight:700;letter-spacing:.02em}
 .btn:disabled{opacity:.35;cursor:not-allowed}
 /* 樂譜載入前,播放/停止先整個隱藏(而不只是變淡);整個第二排(#transportBar)本身
    也是載入後才出現,這裡是雙重保險,避免兩者的顯示時機萬一沒對齊 */
@@ -178,6 +181,10 @@ input[type=range]::-webkit-slider-thumb{
 .tempo-compact{position:relative}
 #tempoToggle{color:var(--gold-bright);font-variant-numeric:tabular-nums}
 #tempoToggle .caret{font-size:10px;color:var(--muted);margin-left:1px}
+/* 速度可以是 40~400(2或3位數),數字位數不同的話這個按鈕(連帶右邊的設定鈕)寬度會跟著變、
+   位置就跟著跳動——固定保留 3 位數的寬度、靠右對齊,不管樂譜實際是幾 BPM,按鈕寬度都一樣,
+   後面的按鈕也就不會跟著移動 */
+#tempoDisplay{display:inline-block;min-width:3ch;text-align:right}
 #tempoPopover{
   position:absolute;top:calc(100% + 10px);right:0;z-index:60;
   display:flex;flex-direction:column;gap:10px;min-width:190px;
