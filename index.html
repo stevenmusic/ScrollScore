@@ -106,6 +106,15 @@ header{
   background:var(--panel);
   position:relative;z-index:65; /* 要蓋過 settingsBackdrop/settingsPanel,不然面板打開後蓋住整個視窗,「設定」鈕會點不到 */
 }
+/* 第二排(載入/播放/回到開頭):樣式比照頁首,同一條分隔線的視覺語言延續下去,
+   但靠右對齊、獨立成自己的一排——不會跟第一排(箭頭/品牌名/主題/語言/速度/設定)
+   搶位置,第一排永遠維持原本的單排,不因為樂譜載入而跟著換行或位移 */
+#transportBar{
+  display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;
+  gap:8px 14px;padding:10px 14px;border-bottom:1px solid var(--line);
+  background:var(--panel);position:relative;z-index:64;
+}
+body:not(.score-loaded) #transportBar{display:none}
 /* flex-wrap:nowrap 是刻意的:header 本身允許換行(見上),但這兩個群組內部不換行,
    放不下時整組一起換到下一排,不會有「群組內的按鈕各自斷行、兩個群組交錯疊在一起」的亂排
    (回首頁連結、語言切換加進頁首後,平板寬度~600~900px 這段也會放不下單排,同一套邏輯處理) */
@@ -139,9 +148,9 @@ header h1 span{color:var(--ivory);font-weight:600}
 #themeToggle[aria-pressed="true"]{background:var(--gold);color:var(--bg)}
 #langToggle{min-width:2.7em;justify-content:center;font-weight:700;letter-spacing:.02em}
 .btn:disabled{opacity:.35;cursor:not-allowed}
-/* 樂譜載入前,播放/停止先整個隱藏(而不只是變淡),Header 只留「載入樂譜」這個唯一動作,
-   載入成功後才讓它們出現在原本的位置 */
-.header-left .btn:disabled{display:none}
+/* 樂譜載入前,播放/停止先整個隱藏(而不只是變淡);整個第二排(#transportBar)本身
+   也是載入後才出現,這裡是雙重保險,避免兩者的顯示時機萬一沒對齊 */
+#transportBar .btn:disabled{display:none}
 .tempo-box{display:flex;align-items:center;gap:8px;font-size:var(--fs-sm);color:var(--muted);white-space:nowrap}
 .tempo-box b{color:var(--gold-bright);font-size:var(--fs-lg);min-width:34px;text-align:right;font-variant-numeric:tabular-nums}
 .tempo-box input[type=number]{
@@ -325,7 +334,7 @@ input[type=range]::-webkit-slider-thumb{
   /* 頂欄的內距與間距同樣跟著寬度連續縮放,不用斷點硬切。
      之前用階梯式斷點會出現「375px 比 390px 還寬鬆」的反轉(375 落在 ≤380 那一階,
      按鈕跟間距都比較小),流體值就不會有這種跳動 */
-  header{padding:8px clamp(6px, 2.2vw, 10px);gap:clamp(4px, 1.4vw, 6px)}
+  header,#transportBar{padding:8px clamp(6px, 2.2vw, 10px);gap:clamp(4px, 1.4vw, 6px)}
   .header-left,.header-right{gap:clamp(4px, 1.4vw, 6px)}
   #tempoToggle{padding:0 clamp(8px, 2.4vw, 12px);font-size:var(--fs-sm)}
   /* 「BPM」剛出現的那一段(約 385~400px)是整條頂欄最擠的地方,只剩個位數的餘裕。
@@ -333,7 +342,7 @@ input[type=range]::-webkit-slider-thumb{
   #tempoBpmLabel{font-size:clamp(11px, 3.1vw, 13px)}
   .btn{padding:0 6px;height:34px;font-size:var(--fs-sm)}
   .btn-label{display:none}
-  .header-left .btn svg,#settingsToggle svg{margin:0}
+  #transportBar .btn svg,#settingsToggle svg{margin:0}
   #settingsPanel{padding:8px 10px;gap:8px 12px}
   .tempo-box{font-size:var(--fs-xs);gap:6px}
   .tempo-label{display:none}
@@ -365,7 +374,7 @@ input[type=range]::-webkit-slider-thumb{
 }
 /* 手機橫向 / 螢幕高度極矮:樂譜區最容易被擠不見,優先壓縮頂欄與鍵盤高度 */
 @media (max-height:420px){
-  header{padding:5px 10px;gap:4px 8px}
+  header,#transportBar{padding:5px 10px;gap:4px 8px}
   header h1{font-size:var(--fs-sm)}
   .btn{padding:0 10px;height:28px;font-size:var(--fs-xs)}
   #settingsPanel{padding:5px 10px;gap:5px 10px}
@@ -466,10 +475,6 @@ input[type=color]{
 }
 input[type=color]::-webkit-color-swatch-wrapper{padding:3px}
 input[type=color]::-webkit-color-swatch{border:none;border-radius:2px}
-/* 還沒載入樂譜時,畫面正中央已經有一張大的「點擊這裡載入樂譜」卡片,頂欄再擺一顆小上傳鈕
-   是同一件事做兩次,而它佔掉的正好是品牌名需要的寬度。所以空狀態只留品牌名;
-   載入樂譜之後中央那張卡片會消失,這時才把上傳鈕放回頂欄,否則就沒有換下一首歌的入口了 */
-body:not(.score-loaded) #loadBtn{display:none}
 body.score-loaded #playline{display:block}
 #playline::before{
   content:"";position:absolute;top:-2px;left:50%;transform:translateX(-50%);
@@ -763,18 +768,6 @@ input[type=file]{display:none}
       <span aria-hidden="true">←</span><span class="btn-label" data-i18n="homeLinkLabel">首頁</span>
     </a>
     <h1>Scroll<span>Score</span></h1>
-    <button class="btn primary" id="loadBtn" data-i18n-attr="aria-label:loadBtnLabel">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-      <span class="btn-label" data-i18n="loadBtnLabel">載入樂譜</span>
-    </button>
-    <button class="btn" id="playBtn" disabled data-i18n-attr="aria-label:playLabelPlay">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path id="playIcon" d="M8 5v14l11-7z"/></svg>
-      <span id="playLabel" class="btn-label" data-i18n="playLabelPlay">播放</span>
-    </button>
-    <button class="btn" id="stopBtn" disabled data-i18n-attr="aria-label:stopBtnLabel,title:stopBtnTitle">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2.6v12H6zm4.4 6l8.6 6V6z"/></svg>
-      <span class="btn-label" data-i18n="stopBtnLabel">回到開頭</span>
-    </button>
   </div>
   <div class="header-right">
     <button class="btn" id="themeToggle" data-i18n-attr="aria-label:themeToggleLabel,title:themeToggleTitle" aria-pressed="false">
@@ -800,6 +793,23 @@ input[type=file]{display:none}
   </div>
   <input type="file" id="fileInput" accept=".xml,.musicxml,.mxl">
 </header>
+<!-- 第二排:載入/播放/回到開頭。樂譜載入前不出現(跟原本 loadBtn 的行為一致,
+     載入前的載入動作交給舞台中央的大卡片),載入後才靠右浮現在第一排下方,
+     不影響第一排(箭頭/品牌名/主題/語言/速度/設定)原本的位置 -->
+<div id="transportBar">
+  <button class="btn primary" id="loadBtn" data-i18n-attr="aria-label:loadBtnLabel">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+    <span class="btn-label" data-i18n="loadBtnLabel">載入樂譜</span>
+  </button>
+  <button class="btn" id="playBtn" disabled data-i18n-attr="aria-label:playLabelPlay">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path id="playIcon" d="M8 5v14l11-7z"/></svg>
+    <span id="playLabel" class="btn-label" data-i18n="playLabelPlay">播放</span>
+  </button>
+  <button class="btn" id="stopBtn" disabled data-i18n-attr="aria-label:stopBtnLabel,title:stopBtnTitle">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2.6v12H6zm4.4 6l8.6 6V6z"/></svg>
+    <span class="btn-label" data-i18n="stopBtnLabel">回到開頭</span>
+  </button>
+</div>
 <div id="settingsBackdrop"></div>
 
 <div id="settingsPanel">
@@ -3648,11 +3658,10 @@ function scheduleFitHeaderRow(){
   headerFitScheduled = true;
   requestAnimationFrame(() => { headerFitScheduled = false; fitHeaderRow(); });
 }
-// 監看 body 的 class(score-loaded 開關)跟播放/回到開頭鈕的 disabled 狀態,
-// 不管未來從哪裡觸發這些變化,都會自動重新量測,不必到處手動補呼叫
+// 監看 body 的 class 變化(語言/主題切換等都會動到 class),不管從哪裡觸發都自動重新量測,
+// 不必到處手動補呼叫。第一排(頁首)內容不再受樂譜載入與否影響,不需要另外監看 disabled 狀態
 const bodyClassObserver = new MutationObserver(scheduleFitHeaderRow);
 bodyClassObserver.observe(document.body, { attributes: true, attributeFilter: ["class"] });
-new MutationObserver(scheduleFitHeaderRow).observe(document.querySelector(".header-left"), { attributes: true, attributeFilter: ["disabled"], subtree: true });
 window.addEventListener("resize", scheduleFitHeaderRow);
 window.addEventListener("orientationchange", scheduleFitHeaderRow);
 // 品牌名跟頁首按鈕都用 Google Fonts(Noto Sans/Serif TC),網頁字型是非同步載入、
@@ -4048,66 +4057,6 @@ function connectWithPan(node, pan, reverbSend){
     out.connect(send); send.connect(reverbBus);
   }
   return panner;
-}
-
-/* ── 鋼琴專用:模擬雙麥克風收音的空間深度 ──────────────────────────────
-   原本鋼琴只有單一顆 panner 依音高擺位(近距離單點收音),不管彈哪個音,直接音永遠只從
-   一個明確的點發出來,聽起來扁平。真實鋼琴錄音幾乎都是雙麥克風(近距離主麥克風 + 稍遠的
-   輔助/環境麥克風)混音,輔助麥克風收到的是稍微延遲、高頻略被空氣吸收變暗、且因為麥克風
-   擺位不同而跟主麥克風聲像相反的訊號——這是鋼琴錄音聽起來「有深度、包圍感」而不是「貼在
-   耳朵上」的關鍵。這裡不重新觸發一次取樣(成本太高,且會讓能量倍增、破壞既有的削波餘裕),
-   而是把主音源已經套好包絡的訊號($g$)另外分流一份,加短延遲(模擬多繞的路程)、
-   低通濾波(模擬距離感/空氣吸收)、聲像跟主音源鏡像(模擬麥克風擺在琴的另一側),
-   音量壓得比主音源小很多,只用來補寬度跟空間感,不會喧賓奪主。 */
-function addPianoRoomDepth(g, freq){
-  if (!reverbBus || !audioCtx.createStereoPanner) return; // 沒有殘響鏈路/不支援聲像時就不加,退回單點鋼琴音色
-  const roomDelay = audioCtx.createDelay(0.05);
-  roomDelay.delayTime.value = 0.015; // 比主麥克風晚一點點到,模擬多繞的路程,是真實的距離感而非人工加寬
-  const roomLP = audioCtx.createBiquadFilter();
-  roomLP.type = "lowpass";
-  roomLP.frequency.value = Math.min(Math.max(freq * 3, 900), 3200); // 遠一點的麥克風,細節/高頻自然會少一些
-  const roomGain = audioCtx.createGain();
-  roomGain.gain.value = 0.24; // 遠小於主音源,只補空間感,不是第二台鋼琴
-  const roomPan = audioCtx.createStereoPanner();
-  roomPan.pan.value = -pianoPanFor(freq); // 跟主音源鏡像對稱,同一個音同時從兩個方向撐開音場
-  g.connect(roomDelay); roomDelay.connect(roomLP); roomLP.connect(roomGain);
-  roomGain.connect(roomPan); roomPan.connect(masterGain);
-  const send = audioCtx.createGain();
-  send.gain.value = 0.65; // 遠麥克風本來就收到更多反射音,送混響的比例比主音源高
-  roomPan.connect(send); send.connect(reverbBus);
-}
-
-/* ── 鋼琴專用:延音踏板的同情共鳴(sympathetic resonance) ──────────────────
-   真實鋼琴踩下延音踏板時,制音器全部離弦,彈下去的那個音會透過泛音關係帶動其他「沒被彈到
-   但沒被制音」的弦一起微微震動——尤其是八度、五度這類泛音對得上的音,共鳴最明顯。這是踏板
-   段落聽起來「飽滿、有空氣感、餘韻豐富」的主要原因,單純把殘響量調大模擬不出這種「音準對得
-   上」的共鳴質感。這裡在踏板音符上疊加極低音量、緩慢淡入的八度(上下)跟五度泛音層,幾乎
-   全部送進殘響匯流排、只留一點點直接音,讓它聽起來像瀰漫在空間裡的光暈,而不是憑空多出來
-   的一個新音源。沒踩踏板(斷奏/正常演奏)不觸發,因為真實鋼琴放開踏板時制音器會壓住那些
-   沒彈的弦,共鳴不會發生。 */
-function scheduleSympatheticResonance(freq, when, sustain, tail){
-  if (!reverbBus || !audioCtx.createStereoPanner) return;
-  const partials = [
-    { ratio: 2,   gain: 0.05  }, // 高八度:泛音能量傳遞最強
-    { ratio: 0.5, gain: 0.045 }, // 低八度
-    { ratio: 1.5, gain: 0.02  }  // 完全五度
-  ];
-  const fadeIn = Math.min(0.1, Math.max(sustain * 0.35, 0.03)); // 共鳴需要一點時間才會被帶動,不是瞬間出現
-  const dur = sustain + tail + 1.1; // 共鳴的餘韻比原音符本身再拖長一點,才有「踏板放開後還在空氣裡」的感覺
-  for (const p of partials) {
-    const o = audioCtx.createOscillator();
-    o.type = "sine";
-    o.frequency.value = freq * p.ratio;
-    const g = audioCtx.createGain();
-    g.gain.setValueAtTime(0.0001, when);
-    g.gain.linearRampToValueAtTime(p.gain, when + fadeIn);
-    g.gain.exponentialRampToValueAtTime(0.0001, when + dur);
-    o.connect(g);
-    connectWithPan(g, pianoPanFor(freq * p.ratio), 0.9); // 幾乎全送殘響,直接音只留一點點定位感
-    o.start(when);
-    o.stop(when + dur + 0.1);
-    scheduled.push(o);
-  }
 }
 
 const PLAY_ICON_D = "M8 5v14l11-7z";
@@ -4974,10 +4923,6 @@ function playSampledInstrument(instKey, freq, when, dur, legato, pedal, chordAnc
      踏板踩著時送多一點進殘響:真實鋼琴踏板一踩,所有沒被制音的弦會跟著共鳴,
      整體空間感明顯變大。這是用殘響量去逼近那個效果,不是真的在模擬弦間共振。 */
   connectWithPan(g, (instKey === "piano") ? pianoPanFor(freq) : 0, pedal ? 0.85 : 0.5);
-  if (instKey === "piano") {
-    addPianoRoomDepth(g, freq); // 每個音都補一點雙麥克風空間感,不限踏板
-    if (pedal) scheduleSympatheticResonance(freq, when, sustain, tail); // 踏板音符才有同情共鳴
-  }
   // 滑音(glissando/slide):音高在演奏期間持續滑向下一個音,模擬手指在同一條弦上滑動把位
   if (tech && tech.glissTargetFreq) {
     const targetRate = rate * (tech.glissTargetFreq / freq);
@@ -5198,10 +5143,8 @@ function schedulePiano(freq, when, dur, legato, pedal, harmonyEndSec, artic, sta
   g.gain.exponentialRampToValueAtTime(0.0001, synthDecayEnd + releaseTail);
   osc.connect(lp); osc2.connect(g2); g2.connect(lp);
   lp.connect(g);
-  // 合成音備援路徑也要有同樣的聲像、殘響跟共鳴,否則取樣載入前後的空間感會突然改變
+  // 合成音備援路徑也要有同樣的聲像與殘響,否則取樣載入前後的空間感會突然改變
   connectWithPan(g, pianoPanFor(freq), pedal ? 0.85 : 0.5);
-  addPianoRoomDepth(g, freq);
-  if (pedal) scheduleSympatheticResonance(freq, when, sustain, releaseTail);
   osc.start(when); osc2.start(when);
   const stopAt = when + sustain + releaseTail + 0.05;
   osc.stop(stopAt); osc2.stop(stopAt);
