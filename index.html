@@ -526,17 +526,6 @@ body.score-loaded #playline{display:block}
    不會因為收合層級不同而讓同一顆按鈕忽大忽小、形狀跑掉。 */
 body.header-tempo-compact #tempoBpmLabel{display:none} /* BPM 三個字先收,數字保留 */
 body.header-icons-only .btn-label{display:none}        /* 其餘按鈕的文字都收起來,只留圖示 */
-/* 上面兩步還不夠時,壓到 0 間距(.brand 是箭頭+品牌名獨立的一層,不受影響,見上面 .brand 的
-   說明)、header 右邊內距收窄——右邊內距不影響箭頭起始位置,左邊內距刻意不動,
-   否則樂譜載入前後、收合層級不同時,箭頭會跟著跳動。所有按鈕(含主題/語言)一律保留、
-   維持一致的圓形/膠囊外觀,不整顆隱藏、不改邊框比例 */
-body.header-ultra-compact header,body.header-ultra-compact .header-left,body.header-ultra-compact .header-right{gap:0}
-body.header-ultra-compact header{padding-right:4px}
-/* 觸控裝置(手機)另外有 min-width:44px(甚至縮到 38px)的無障礙最小觸控範圍規則,
-   在極窄手機、又要求全部按鈕都留著、箭頭品牌名都不能動的前提下,單靠上面幾步還是不夠——
-   最後只好把觸控目標壓到 WCAG 2.2 AA(2.5.8)要求的最低下限 24px,屬於「換行 vs 觸控區域
-   變小」兩害相權的取捨,跟前面 320px 那個案例(40px)同樣道理,只是這裡逼到底線 */
-body.header-ultra-compact .btn{min-width:24px;padding:0 3px}
 /* ── 底部狀態列 ─────────────────── */
 footer{
   padding:10px 14px calc(10px + env(safe-area-inset-bottom));
@@ -3624,14 +3613,14 @@ $("langToggle").addEventListener("click", () => {
    會直接併回頁首(接在品牌名後面),跟原本的單排版面一樣;不管螢幕多寬、瀏覽器字型
    渲染的實際像素差多少,直接量測「header-left 跟 header-right 是否還在同一排」,
    比窮舉斷點更可靠。回首頁箭頭、品牌名固定在左上角,不收;按鈕一律不整顆隱藏、
-   邊框/高度也不收(只藏文字),維持一致的圓形外觀。合併後放不下,依序:先收「BPM」
-   三個字(只留數字)、其餘按鈕文字改圖示、再壓一輪間距;全部試過還是放不下,
-   才放棄合併——三顆按鈕搬回 #transportBar,自己獨立成右下方的第二排。 */
+   邊框/高度/間距也不收(只藏文字)——按鈕維持正常大小的圓形,不會為了硬塞進一排
+   被壓縮得又小又擠。合併後放不下,依序:先收「BPM」三個字(只留數字)、其餘按鈕
+   文字改圖示;兩步都試過還是放不下,就不再繼續壓縮按鈕大小,直接放棄合併——
+   三顆按鈕搬回 #transportBar,自己獨立成右下方的第二排,按鈕維持原本舒適的大小。 */
 const TRANSPORT_BTN_IDS = ["loadBtn", "playBtn", "stopBtn"];
 const HEADER_COLLAPSE_STEPS = [
   { bodyClass: "header-tempo-compact" }, // 「BPM」先收,只留數字
-  { bodyClass: "header-icons-only" },    // 其餘按鈕文字改圖示
-  { bodyClass: "header-ultra-compact" }  // 按鈕間距再壓一輪
+  { bodyClass: "header-icons-only" }     // 其餘按鈕文字改圖示
 ];
 // 手機瀏覽器實際渲染的字型寬度跟這支程式量測當下的環境會有落差(尤其中文字型),
 // 剛好卡在邊緣時,量測當下量到「放得下」,但實際渲染出來可能因為極小的字型度量差異
