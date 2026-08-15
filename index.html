@@ -331,7 +331,7 @@ input[type=range]::-webkit-slider-thumb{
   /* 「BPM」剛出現的那一段(約 385~400px)是整條頂欄最擠的地方,只剩個位數的餘裕。
      讓這三個字自己也跟著寬度縮放,把那一段的餘裕拉回兩位數 */
   #tempoBpmLabel{font-size:clamp(11px, 3.1vw, 13px)}
-  .btn{padding:0 10px;height:34px;font-size:var(--fs-sm)}
+  .btn{padding:0 6px;height:34px;font-size:var(--fs-sm)}
   .btn-label{display:none}
   .header-left .btn svg,#settingsToggle svg{margin:0}
   #settingsPanel{padding:8px 10px;gap:8px 12px}
@@ -350,7 +350,7 @@ input[type=range]::-webkit-slider-thumb{
      這個寬度以下留著的話,載入樂譜後頂欄會換行,多吃 47px 的樂譜高度。
      只留數字跟下拉箭頭,展開的速度面板裡仍然寫著「速度」,不會不知道那個數字是什麼 */
   #tempoBpmLabel{display:none}
-  .btn{padding:0 8px;height:32px}
+  .btn{padding:0 5px;height:32px}
   input[type=range]{width:48px}
   /* 320~380px 的機身高度也短(SE 只有 568px),面板卡片的內距與列距再收一輪,
      讓設定不用捲動就看得完 */
@@ -359,7 +359,7 @@ input[type=range]::-webkit-slider-thumb{
 }
 /* 最舊款極窄機型(320px):再壓縮一輪按鈕內距與滑桿/數字框寬度 */
 @media (max-width:340px){
-  .btn{padding:0 5px}
+  .btn{padding:0 4px}
   input[type=range]{width:34px}
   .tempo-box input[type=number]{width:34px;height:26px;line-height:26px;padding:0 2px}
 }
@@ -518,12 +518,10 @@ body.score-loaded #playline{display:block}
    不會因為收合層級不同而讓同一顆按鈕忽大忽小、形狀跑掉。 */
 body.header-tempo-compact #tempoBpmLabel{display:none} /* BPM 三個字先收,數字保留 */
 body.header-icons-only .btn-label{display:none}        /* 其餘按鈕的文字都收起來,只留圖示 */
-/* 上面兩步還不夠時,壓一輪按鈕間距跟回首頁連結的內距(不是按鈕,沒有邊框,壓縮不影響按鈕形狀) */
-body.header-ultra-compact header,body.header-ultra-compact .header-left,body.header-ultra-compact .header-right{gap:2px}
-body.header-ultra-compact .home-link{padding:6px 1px}
-/* fitHeaderRow() 最後手段:連間距都壓過了還放不下,才隱藏非核心的主題/語言切換鈕
-   (箭頭、品牌名、載入/播放/回到開頭/速度/設定這些一律保留) */
-.header-collapsed{display:none!important}
+/* 上面兩步還不夠時,壓到 0 間距跟回首頁連結的內距(不是按鈕,沒有邊框,壓縮不影響按鈕形狀)——
+   所有按鈕(含主題/語言)一律保留、維持一致的圓形/膠囊外觀,不整顆隱藏、不改邊框比例 */
+body.header-ultra-compact header,body.header-ultra-compact .header-left,body.header-ultra-compact .header-right{gap:0}
+body.header-ultra-compact .home-link{padding:6px 0}
 /* ── 底部狀態列 ─────────────────── */
 footer{
   padding:10px 14px calc(10px + env(safe-area-inset-bottom));
@@ -3602,15 +3600,13 @@ $("langToggle").addEventListener("click", () => {
 /* ── 頁首自動收合:不管螢幕多寬、瀏覽器字型渲染的實際像素差多少,直接量測「header-left
    跟 header-right 是否還在同一排」,比窮舉斷點更可靠——手機直向、平板寬度、匯入樂譜後
    播放/回到開頭一起冒出來,都是同一套邏輯處理,不用為每種狀況各修一次斷點。
-   回首頁箭頭、品牌名固定在左上角,不收(跟其他專案一致);按鈕的邊框/高度也不收(只藏文字),
-   維持一致的外觀。放不下時依序:先收「BPM」三個字(只留數字)、其餘按鈕文字改圖示、
-   再壓一輪間距,實在不夠才隱藏主題/語言切換這兩個非核心功能。 */
+   回首頁箭頭、品牌名固定在左上角,不收;按鈕一律不整顆隱藏、邊框/高度也不收(只藏文字),
+   全部按鈕永遠留著、維持一致的圓形外觀。放不下時依序:先收「BPM」三個字(只留數字)、
+   其餘按鈕文字改圖示、再壓一輪間距。 */
 const HEADER_COLLAPSE_STEPS = [
   { bodyClass: "header-tempo-compact" }, // 「BPM」先收,只留數字
   { bodyClass: "header-icons-only" },    // 其餘按鈕文字改圖示
-  { bodyClass: "header-ultra-compact" }, // 按鈕間距再壓一輪
-  { hide: "#themeToggle" },              // 非核心:主題可以晚點再調
-  { hide: "#langToggle" }                // 非核心:語言可以晚點再調
+  { bodyClass: "header-ultra-compact" }  // 按鈕間距再壓一輪
 ];
 function headerIsOneRow(hl, hr){
   // 兩個群組高度不完全一樣(例如回首頁連結的行高跟按鈕差 1~2px),用 align-items:center
@@ -3619,12 +3615,7 @@ function headerIsOneRow(hl, hr){
   return Math.abs(hl.getBoundingClientRect().top - hr.getBoundingClientRect().top) < 10;
 }
 function setHeaderCollapseStep(step, on){
-  if (step.hide) {
-    const el = document.querySelector(step.hide);
-    if (el) el.classList.toggle("header-collapsed", on);
-  } else if (step.bodyClass) {
-    document.body.classList.toggle(step.bodyClass, on);
-  }
+  document.body.classList.toggle(step.bodyClass, on);
 }
 /* fitHeaderRow() 收合步驟裡有一步是切 body 的 class(header-icons-only),
    而下面 bodyClassObserver 正是在看 body 的 class 屬性——不斷開的話,自己收合 body class
