@@ -185,6 +185,14 @@ input[type=range]::-webkit-slider-thumb{
    位置就跟著跳動——固定保留 3 位數的寬度、靠右對齊,不管樂譜實際是幾 BPM,按鈕寬度都一樣,
    後面的按鈕也就不會跟著移動 */
 #tempoDisplay{display:inline-block;min-width:3ch;text-align:right}
+/* 中英文切換時文字長度不同,按鈕會跟著變寬、把右邊(或同排)的按鈕一起擠動——
+   固定保留較長那個語言的寬度,兩種語言下按鈕大小都一樣,切換語言按鈕不會位移 */
+.btn-label{display:inline-block}
+.home-link .btn-label{min-width:35px;text-align:center}
+#settingsToggle .btn-label{min-width:51px;text-align:center}
+#loadBtn .btn-label{min-width:77px;text-align:center}
+#stopBtn .btn-label{min-width:56px;text-align:center}
+#playLabel{min-width:40px;text-align:center}
 #tempoPopover{
   position:absolute;top:calc(100% + 10px);right:0;z-index:60;
   display:flex;flex-direction:column;gap:10px;min-width:190px;
