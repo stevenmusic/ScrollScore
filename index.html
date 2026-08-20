@@ -3578,6 +3578,9 @@ for (const id of ["cursorColor","cursorOpacity"]) {
 $("reverbAmount").addEventListener("input", applyReverbAmount);
 $("measureHl").addEventListener("change", applyHighlightStyles);
 $("lightTheme").addEventListener("change", applyTheme);
+$("lightTheme").addEventListener("change", () => {
+  try { localStorage.setItem(THEME_KEY, lightThemeOn() ? "light" : "dark"); } catch (e) {}
+});
 /* 淺色模式現在的主要入口是頁首圖示按鈕,不是設定面板裡的開關——按鈕本身不記狀態,
    只負責切換那顆隱藏的 checkbox 再 dispatch change,applyTheme 跟 PREF_FIELDS 的
    savePrefs 監聽都掛在那顆 checkbox 上,觸發一次 change 兩邊都會跑,不用在這裡各呼叫一次 */
@@ -3847,7 +3850,8 @@ const PREF_FIELDS = [
   { id: "useRubato",         prop: "checked" },
   { id: "showTempoMarks",    prop: "checked" },
   { id: "mergeRestMeasures", prop: "checked" },
-  { id: "lightTheme",        prop: "checked" },
+  /* lightTheme 已經搬到共用的 sm_theme(見下方「主題偏好」),不再存在這包 JSON 裡。
+     舊值還留在既有使用者的 localStorage 中,storedTheme() 會讀它當備援。 */
   // cursorColor 刻意不存:游標/播放軸/小節色塊每次重新開啟都回到預設金色。
   // 改顏色通常是為了某支影片的當下需求,不是長期偏好,下次打開又是上次那個顏色反而困擾。
   // 濃度與「小節高亮」開關屬於使用習慣,照樣記住。
@@ -3890,6 +3894,30 @@ function restorePrefs(){
   }, 0);
 }
 restorePrefs();
+
+/* ── 主題偏好 ─────────────────────────────────────────────────
+   跟 sm_lang 一樣是四個工具共用的 localStorage key,值只有 "light" / "dark"。
+   四個工具都掛在同一個 origin(stevenmusic.github.io/<tool>/),在任一個工具切過主題,
+   其他三個打開就是同一個。
+
+   沒存過的時候各工具用「自己的」預設,而不是硬湊成同一個(ScrollScore 是深色)。
+   使用者按過一次切換鈕之後 sm_theme 才會存在,從那一刻起四個工具才一致——共用的是
+   「使用者的選擇」,不是「還沒選之前的預設」,這跟 sm_lang 沒存過就回到 zh 是同一個模式。
+
+   舊版把這個值放在 PREF_KEY 那包 JSON 的 lightTheme 欄位。既有使用者升上來的時候
+   sm_theme 還是空的,所以這裡讀舊欄位當備援,不然人家設好的淺色會被默默重設成深色。
+   舊欄位只讀不寫,使用者下次切換就會寫進 sm_theme。 */
+const THEME_KEY = "sm_theme";
+function storedTheme(){
+  try {
+    const v = localStorage.getItem(THEME_KEY);
+    if (v === "light" || v === "dark") return v;
+    const legacy = JSON.parse(localStorage.getItem(PREF_KEY) || "null");
+    if (legacy && typeof legacy.lightTheme === "boolean") return legacy.lightTheme ? "light" : "dark";
+  } catch (e) {}
+  return "dark";
+}
+$("lightTheme").checked = storedTheme() === "light";
 
 /* ── 彈性速度暫時下架 ──────────────────────────────────────────
    模型還有已知缺陷,先不讓使用者在介面上看到,但整套程式碼原封不動留著
