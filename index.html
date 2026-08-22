@@ -4505,75 +4505,53 @@ function rebuildKeyboardRange(){
 }
 rebuildKeyboardRange(); // 初始建立(此時還沒有樂譜,會用預設88鍵)
 
-const KB_ROUNDRECT = (ctx, cx, cy, cw, ch, r) => {
-  if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(cx, cy, cw, ch, r); }
-  else { ctx.beginPath(); ctx.rect(cx, cy, cw, ch); }
-};
-// 白鍵:漸層 + 立體邊緣 + 按下時的光暈(觸鍵瞬間更亮,之後轉為持續的普通高亮)。info=null畫靜止狀態
-function drawWhiteKeyAt(ctx, kx, y, kw, h, info){
-  const staff = info && info.staff;
-  const attack = info && info.attack;
-  let baseColor = staff === 2 ? ["#5FE0CE", "#22887A"] : staff === 1 ? ["#FFDA7A", "#C4901A"] : ["#FFFDF6", "#DDD6C4"];
-  if (attack) baseColor = staff === 2 ? ["#B6FFF4", "#3FBFAE"] : ["#FFF3CC", "#F2B94B"];
-  const g = ctx.createLinearGradient(kx, y, kx, y + h);
-  g.addColorStop(0, baseColor[0]);
-  g.addColorStop(0.85, baseColor[1]);
-  g.addColorStop(1, baseColor[1]);
-  if (staff) {
-    ctx.save();
-    ctx.shadowColor = staff === 2 ? "rgba(63,191,174,0.85)" : "rgba(242,185,75,0.85)";
-    ctx.shadowBlur = attack ? 24 : 14;
-  }
-  KB_ROUNDRECT(ctx, kx, y, kw, h, [3, 3, 6, 6]);
-  ctx.fillStyle = g;
-  ctx.fill();
-  if (staff) ctx.restore();
-  // 鍵縫陰影
-  ctx.strokeStyle = "rgba(0,0,0,0.35)"; ctx.lineWidth = 1;
-  KB_ROUNDRECT(ctx, kx, y, kw, h, [3, 3, 6, 6]); ctx.stroke();
-  // 頂端高光細線,增加立體感
-  ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(kx + 2, y + 1); ctx.lineTo(kx + kw - 2, y + 1); ctx.stroke();
-}
-// 黑鍵:漸層 + 陰影,疊在白鍵上方。info=null畫靜止狀態
-function drawBlackKeyAt(ctx, kx, y, blackW, blackH, info){
-  const staff = info && info.staff;
-  const attack = info && info.attack;
-  let baseColor = staff === 2 ? ["#3FBFAE", "#0F5F56"] : staff === 1 ? ["#F2B94B", "#8A6410"] : ["#3a3a3a", "#0a0a0a"];
-  if (attack) baseColor = staff === 2 ? ["#8FFFF0", "#22887A"] : staff === 1 ? ["#FFE39A", "#C4901A"] : baseColor;
-  // 黑鍵投影到白鍵上
-  ctx.fillStyle = "rgba(0,0,0,0.45)";
-  ctx.fillRect(kx - 1, y + blackH, blackW + 2, 6);
-
-  const g = ctx.createLinearGradient(kx, y, kx, y + blackH);
-  g.addColorStop(0, baseColor[0]);
-  g.addColorStop(1, baseColor[1]);
-  if (staff) {
-    ctx.save();
-    ctx.shadowColor = staff === 2 ? "rgba(63,191,174,0.9)" : "rgba(242,185,75,0.9)";
-    ctx.shadowBlur = 12;
-  }
-  KB_ROUNDRECT(ctx, kx, y, blackW, blackH, [2, 2, 4, 4]);
-  ctx.fillStyle = g;
-  ctx.fill();
-  if (staff) ctx.restore();
-  // 黑鍵頂端光澤
-  ctx.fillStyle = "rgba(255,255,255,0.18)";
-  ctx.fillRect(kx + blackW * 0.15, y + 2, blackW * 0.3, blackH * 0.35);
-}
-/* 靜止(沒有任何鍵被彈)狀態的鍵盤畫面快取——見 drawKeyboard 內的說明 */
-let kbBaseCache = null;
-function buildKeyboardBase(w, h){
-  const off = document.createElement("canvas");
-  off.width = w; off.height = h;
-  const octx = off.getContext("2d");
+function drawKeyboard(ctx, x, y, w, h, activeMap){
   const whiteW = w / KB_WHITE_KEYS.length;
-  const baseGrad = octx.createLinearGradient(0, 0, 0, h);
+
+  // 底板陰影,讓整個鍵盤看起來有深度
+  const baseGrad = ctx.createLinearGradient(0, y, 0, y + h);
   baseGrad.addColorStop(0, "#050403");
   baseGrad.addColorStop(1, "#0C0A07");
-  octx.fillStyle = baseGrad;
-  octx.fillRect(0, 0, w, h);
-  for (let i = 0; i < KB_WHITE_KEYS.length; i++) drawWhiteKeyAt(octx, i * whiteW, 0, whiteW - 1, h, null);
+  ctx.fillStyle = baseGrad;
+  ctx.fillRect(x, y, w, h);
+
+  const rr = (cx, cy, cw, ch, r) => {
+    if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(cx, cy, cw, ch, r); }
+    else { ctx.beginPath(); ctx.rect(cx, cy, cw, ch); }
+  };
+
+  // 白鍵:漸層 + 立體邊緣 + 按下時的光暈(觸鍵瞬間更亮,之後轉為持續的普通高亮)
+  for (let i = 0; i < KB_WHITE_KEYS.length; i++) {
+    const m = KB_WHITE_KEYS[i];
+    const kx = x + i * whiteW;
+    const kw = whiteW - 1;
+    const info = activeMap.get(m);
+    const staff = info && info.staff;
+    const attack = info && info.attack;
+    let baseColor = staff === 2 ? ["#5FE0CE", "#22887A"] : staff === 1 ? ["#FFDA7A", "#C4901A"] : ["#FFFDF6", "#DDD6C4"];
+    if (attack) baseColor = staff === 2 ? ["#B6FFF4", "#3FBFAE"] : ["#FFF3CC", "#F2B94B"];
+    const g = ctx.createLinearGradient(kx, y, kx, y + h);
+    g.addColorStop(0, baseColor[0]);
+    g.addColorStop(0.85, baseColor[1]);
+    g.addColorStop(1, baseColor[1]);
+    if (staff) {
+      ctx.save();
+      ctx.shadowColor = staff === 2 ? "rgba(63,191,174,0.85)" : "rgba(242,185,75,0.85)";
+      ctx.shadowBlur = attack ? 24 : 14;
+    }
+    rr(kx, y, kw, h, [3, 3, 6, 6]);
+    ctx.fillStyle = g;
+    ctx.fill();
+    if (staff) ctx.restore();
+    // 鍵縫陰影
+    ctx.strokeStyle = "rgba(0,0,0,0.35)"; ctx.lineWidth = 1;
+    rr(kx, y, kw, h, [3, 3, 6, 6]); ctx.stroke();
+    // 頂端高光細線,增加立體感
+    ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(kx + 2, y + 1); ctx.lineTo(kx + kw - 2, y + 1); ctx.stroke();
+  }
+
+  // 黑鍵:漸層 + 陰影,疊在白鍵上方
   const blackH = h * 0.6, blackW = whiteW * 0.62;
   for (let m = KB_LOW; m <= KB_HIGH; m++) {
     if (!isBlackKey(m)) continue;
@@ -4581,50 +4559,31 @@ function buildKeyboardBase(w, h){
     while (isBlackKey(leftWhite)) leftWhite--;
     const li = KB_WHITE_IDX[leftWhite];
     if (li === undefined) continue;
-    drawBlackKeyAt(octx, (li + 1) * whiteW - blackW / 2, 0, blackW, blackH, null);
-  }
-  return off;
-}
-/* 效能:原本每一幀都把全部88鍵重畫一次(每個鍵各自建漸層、畫圓角矩形、可能還有shadowBlur——
-   shadowBlur是Canvas 2D數一數二貴的操作),即時播放通常還撐得住,但匯出影片時「畫布繪製+
-   H.264編碼」要搶同一顆CPU,手機上一旦每幀繪製跟不上目標fps,幀與幀對應到的音樂時間點就會
-   跳來跳去而不是平滑推進(實測匯出影格率掉到6.7fps,音訊完全不受影響,因為音訊是Web Audio
-   自己的時鐘在跑,兩者本來就是分開的)。
+    const kx = x + (li + 1) * whiteW - blackW / 2;
+    const info = activeMap.get(m);
+    const staff = info && info.staff;
+    const attack = info && info.attack;
+    let baseColor = staff === 2 ? ["#3FBFAE", "#0F5F56"] : staff === 1 ? ["#F2B94B", "#8A6410"] : ["#3a3a3a", "#0a0a0a"];
+    if (attack) baseColor = staff === 2 ? ["#8FFFF0", "#22887A"] : staff === 1 ? ["#FFE39A", "#C4901A"] : baseColor;
+    // 黑鍵投影到白鍵上
+    ctx.fillStyle = "rgba(0,0,0,0.45)";
+    ctx.fillRect(kx - 1, y + blackH, blackW + 2, 6);
 
-   絕大多數鍵在任何一個瞬間都是「沒被彈到」的靜止狀態,而靜止狀態的畫面在同一個尺寸下永遠
-   長一樣。把「全部靜止」的畫面快取成一張離屏畫布,每幀只要貼一次這張圖,再只針對真正在響
-   的少數幾個鍵疊上去重畫,把每幀成本從「全部88鍵」降到「當下真的在響的那幾個」。
-   黑鍵疊在白鍵之上,所以凡是重畫過的白鍵,兩側緊鄰的黑鍵也要跟著一起重畫(不管那個黑鍵本身
-   有沒有在響)——不然剛畫上去的白鍵會把快取圖裡疊在邊界上的黑鍵蓋掉一小角。 */
-function drawKeyboard(ctx, x, y, w, h, activeMap){
-  const whiteW = w / KB_WHITE_KEYS.length;
-  if (!kbBaseCache || kbBaseCache.w !== w || kbBaseCache.h !== h || kbBaseCache.low !== KB_LOW || kbBaseCache.high !== KB_HIGH) {
-    kbBaseCache = { w, h, low: KB_LOW, high: KB_HIGH, canvas: buildKeyboardBase(w, h) };
-  }
-  ctx.drawImage(kbBaseCache.canvas, x, y);
-  const blackH = h * 0.6, blackW = whiteW * 0.62;
-  const activeWhiteIdx = [];
-  for (const [m, info] of activeMap) {
-    if (isBlackKey(m)) continue;
-    const i = KB_WHITE_IDX[m];
-    if (i === undefined) continue;
-    activeWhiteIdx.push(i);
-    drawWhiteKeyAt(ctx, x + i * whiteW, y, whiteW - 1, h, info);
-  }
-  const blackNeedsRedraw = new Set();
-  for (const [m] of activeMap) if (isBlackKey(m)) blackNeedsRedraw.add(m);
-  for (const i of activeWhiteIdx) {
-    const whiteMidi = KB_WHITE_KEYS[i];
-    for (const nb of [whiteMidi - 1, whiteMidi + 1]) {
-      if (isBlackKey(nb) && nb >= KB_LOW && nb <= KB_HIGH) blackNeedsRedraw.add(nb);
+    const g = ctx.createLinearGradient(kx, y, kx, y + blackH);
+    g.addColorStop(0, baseColor[0]);
+    g.addColorStop(1, baseColor[1]);
+    if (staff) {
+      ctx.save();
+      ctx.shadowColor = staff === 2 ? "rgba(63,191,174,0.9)" : "rgba(242,185,75,0.9)";
+      ctx.shadowBlur = 12;
     }
-  }
-  for (const m of blackNeedsRedraw) {
-    let leftWhite = m - 1;
-    while (isBlackKey(leftWhite)) leftWhite--;
-    const li = KB_WHITE_IDX[leftWhite];
-    if (li === undefined) continue;
-    drawBlackKeyAt(ctx, x + (li + 1) * whiteW - blackW / 2, y, blackW, blackH, activeMap.get(m) || null);
+    rr(kx, y, blackW, blackH, [2, 2, 4, 4]);
+    ctx.fillStyle = g;
+    ctx.fill();
+    if (staff) ctx.restore();
+    // 黑鍵頂端光澤
+    ctx.fillStyle = "rgba(255,255,255,0.18)";
+    ctx.fillRect(kx + blackW * 0.15, y + 2, blackW * 0.3, blackH * 0.35);
   }
 }
 
