@@ -664,6 +664,21 @@ input[type=file]{display:none}
   background:var(--opaque-cover);
 }
 #exportOverlay.show{display:flex}
+/* 上面 #exportOverlay 特地不用 backdrop-filter 是之前修過的坑(見上方註解),但那次只改了
+   這一層——頁面上其實還有好幾個別的浮層(設定面板、速度彈窗、搜尋定位彈窗、快捷鍵提示...)
+   也都用 backdrop-filter 做玻璃感。這些浮層平常「關閉」時只是 opacity:0/pointer-events:none/
+   位移出畫面,並不是 display:none——CSS 的 opacity:0 不會讓瀏覽器跳過渲染,backdrop-filter
+   這種昂貴的即時模糊還是會被持續計算,只是最後合成時整層變透明看不到。平常這點浪費感覺不出來,
+   但匯出時同時要即時編碼影片,這些「看不到但還在算」的模糊層一樣會排擠到音訊/畫面的
+   CPU餘裕。匯出期間直接整批關掉,不會有人在匯出過程中同時想開設定面板。 */
+body.exporting-active #tempoPopover,
+body.exporting-active #settingsBackdrop,
+body.exporting-active #settingsPanel,
+body.exporting-active #seekPopover,
+body.exporting-active #shortcutOverlay,
+body.exporting-active .empty-card{
+  backdrop-filter:none!important;-webkit-backdrop-filter:none!important;
+}
 #exportOverlay .box{
   text-align:center;padding:28px 32px;border:1px solid var(--gold);
   border-radius:var(--radius-md);background:var(--panel-2);max-width:320px;
@@ -5877,7 +5892,11 @@ $("exitrec").addEventListener("click", () => {
 
 /* ── 影片匯出 ─────────────────────────────── */
 let exporting = false, exportCancelled = false;
-const exportFps = 60; // 固定60fps,60沒有卡頓問題,不再提供選項
+/* 原本固定60,實測在 Safari 上匯出常常跟不上(跟60沒有直接因果關係,根源後來查出是 Safari
+   本身的 captureStream/MediaRecorder 實作問題,同一份程式碼在 Chrome 上60fps完全順暢)。
+   降到30當作留給 Safari 多一點緩衝空間,不是修正根本原因——真正的建議是在這台裝置上用
+   Chrome 匯出,而不是靠調低 fps 去將就 Safari。 */
+const exportFps = 30;
 
 /* 匯出常常要跑20~90秒以上,使用者中途切出分頁、鎖螢幕的機率不低——實測發現這種情況下
    requestAnimationFrame 會被瀏覽器直接節流到一個很低的固定頻率(實測影片幀率從~57fps
@@ -6184,6 +6203,7 @@ async function exportCombinedWithVideo(){
   const video = $("combineVideo");
   if (!video.src) { setStatus(T("statusUploadVideoFirst")); return; }
   exporting = true; exportCancelled = false;
+  document.body.classList.add("exporting-active");
   await acquireWakeLock();
   stopPlayback();
   ensureAudio();
@@ -6265,6 +6285,7 @@ async function exportCombinedWithVideo(){
   } finally {
     releaseWakeLock();
     exporting = false;
+    document.body.classList.remove("exporting-active");
   }
 }
 
@@ -6496,6 +6517,7 @@ function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
 async function exportVideo(cfg){
   if (!events.length || exporting) return;
   exporting = true; exportCancelled = false;
+  document.body.classList.add("exporting-active");
   await acquireWakeLock();
   stopPlayback();
   ensureAudio();
@@ -6627,6 +6649,7 @@ async function exportVideo(cfg){
   releaseWakeLock();
   $("exportOverlay").classList.remove("show");
   exporting = false;
+  document.body.classList.remove("exporting-active");
 }
 
 window.addEventListener("resize", () => { if (!playing) resetScroll(); });
