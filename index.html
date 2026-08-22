@@ -6016,6 +6016,29 @@ let pendingExportCfg = null;
    涵蓋該字的字族為止——瀏覽器只會在這個新字族裡找,不會被原本那兩百多條規則卡住。 */
 const EXPORT_FONT_FAMILY = "ScrollScore Export CJK";
 const loadedExportFontChars = new Set(); // 已經成功註冊過的字,同一批字不用重複抓
+async function registerExportFontFaces(uniqueChars){
+  const [css600, css700] = await Promise.all([600, 700].map(w =>
+    fetch("https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@" + w + "&text=" + encodeURIComponent(uniqueChars))
+      .then(r => r.text())
+  ));
+  const faces = [];
+  for (const [css, weight] of [[css600, "600"], [css700, "700"]]) {
+    // 字數多的時候 Google 可能把同一個字重拆成不只一個 @font-face 區塊(每個區塊各自的
+    // unicode-range 只涵蓋部分字),之前只抓第一個 url() 就是漏掉後面區塊的成因——
+    // 這裡改成逐一切開每個區塊分別解析,一個都不漏。同時把每個區塊自己的 unicode-range
+    // 原封不動設到 FontFace 上:不設的話預設是涵蓋全字集,一旦某個區塊裡缺了某個字的
+    // 字形,瀏覽器仍然會認定「這個字族有這個字」而不往下一個備援字族找,直接畫出缺字符號。
+    for (const block of css.split("@font-face").slice(1)) {
+      const urlMatch = /url\((https:[^)]+)\)/.exec(block);
+      const rangeMatch = /unicode-range:\s*([^;]+);/.exec(block);
+      if (!urlMatch) continue;
+      const opts = { weight };
+      if (rangeMatch) opts.unicodeRange = rangeMatch[1].trim();
+      faces.push(new FontFace(EXPORT_FONT_FAMILY, "url(" + urlMatch[1] + ")", opts));
+    }
+  }
+  await Promise.all(faces.map(async f => { document.fonts.add(await f.load()); }));
+}
 async function ensureTitleFontsLoaded(cfg){
   if (!window.FontFace || !document.fonts) return;
   const text = [cfg.title, cfg.subtitle, cfg.channel].filter(Boolean).join("");
@@ -6023,19 +6046,21 @@ async function ensureTitleFontsLoaded(cfg){
   const needChars = [...new Set(text)].filter(c => !loadedExportFontChars.has(c) && !/\s/.test(c));
   if (!needChars.length) return;
   const uniqueChars = needChars.join("");
-  try {
-    const [css600, css700] = await Promise.all([600, 700].map(w =>
-      fetch("https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@" + w + "&text=" + encodeURIComponent(uniqueChars))
-        .then(r => r.text())
-    ));
-    const faces = [];
-    for (const [css, weight] of [[css600, "600"], [css700, "700"]]) {
-      const url = /url\((https:[^)]+)\)/.exec(css)?.[1];
-      if (url) faces.push(new FontFace(EXPORT_FONT_FAMILY, "url(" + url + ")", { weight }));
-    }
-    await Promise.all(faces.map(async f => { document.fonts.add(await f.load()); }));
-    for (const c of needChars) loadedExportFontChars.add(c);
-  } catch (e) {} // 失敗就照舊落回下面 'Noto Serif TC', serif 這個備援字族清單
+  /* 之前只呼叫一次 registerExportFontFaces(),沒有失敗重試——實測第一次進預覽偶爾還是會
+     整批壞掉,按返回重新匯出(等於再呼叫一次同樣的流程)就正常了,這是冷連線第一次打
+     Google Fonts/gstatic 偶發的暫時性失敗,retry 一次通常就過了。這裡把「使用者手動返回
+     重試」這個動作內建進來,失敗或驗證沒過就自動重試,最多 3 次,不用使用者自己來回點。 */
+  const checkSpec = ["700 40px '" + EXPORT_FONT_FAMILY + "'", "600 40px '" + EXPORT_FONT_FAMILY + "'"];
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await registerExportFontFaces(uniqueChars);
+      if (checkSpec.every(f => document.fonts.check(f, uniqueChars))) {
+        for (const c of needChars) loadedExportFontChars.add(c);
+        return;
+      }
+    } catch (e) {} // 這次失敗就照下面的邏輯重試,重試次數用完就落回 'Noto Serif TC', serif 備援字族清單
+    if (attempt < 2) await new Promise(r => setTimeout(r, 400));
+  }
 }
 /* 匯出前先算一張跟實際匯出完全同一套邏輯畫出來的靜態預覽圖(用目前播放位置當代表畫面),
    讓使用者確認樂譜對齊、標題浮水印、背景圖片都對了,再決定要不要真的花時間匯出整支影片 */
