@@ -6000,41 +6000,42 @@ let pendingExportCfg = null;
    這裡在畫布真正下筆之前,先用 document.fonts.load() 明確要求瀏覽器把「標題/副標題/頻道
    名稱這幾個字串實際用到的字」都下載好、確定 ready 了才畫,預覽跟匯出都呼叫,兩邊都不會
    再靠運氣。 */
-const fontTextLinksInjected = new Set(); // 已經插入過 <link> 的字元組合,避免同一批字重複建立DOM節點
-/* Noto Serif TC 這個字族在 <head> 裡是用「整個字族」的方式匯入,Google Fonts 會把它切成
-   兩百多個只涵蓋一小段 unicode 範圍的小檔案——標題隨便打幾個字,常常會分散命中五六個以上
-   不同的分片檔案,等於一次要同時成功抓到五六個獨立的網路請求,只要其中一個檔案剛好卡住或
-   失敗,那個字就會沒字型可用。實測過先前用 Promise.allSettled + 重試,還是會有單一個字
-   (例如「鹿」)持續拿不到——重試同一批請求救不了「這個分片檔案本身這次連線就是不順」的情況。
+/* 前兩版都想繞過去但沒抓對根因:試過 document.fonts.load() 重試、也試過另外插入一個帶
+   text= 參數(只涵蓋需要的字)的 <link>,兩者都還是會有零星的字持續失敗。真正的原因是
+   CSS 字型比對的規則——同一個 family/weight 如果有多條 @font-face 規則,瀏覽器是照「規則
+   定義的先後順序」找「unicode-range 涵蓋這個字」的第一條來用,不是挑比較新或比較窄的那條。
+   <head> 裡「整個字族」的匯入本來就會把每一個中文字都涵蓋到某個分片檔案裡,不管我们再插入
+   幾條新規則、涵蓋範圍多精準,只要那些字本來就落在原本兩百多個分片檔案的某一個裡面,瀏覽器
+   永遠是先找到、也只認「原本那條」,新插入的規則對這些字根本排不上用場——如果原本那個分片
+   檔案這次連線剛好不順,不管怎麼重試同一條規則都沒用,這才是「鹿」「慧」「巒」這些字持續
+   失敗的真正原因,不是網路請求數的問題。
 
-   真正的解法是從根本上減少要成功的請求數:Google Fonts 支援 text= 參數,只回傳「剛好蓋住
-   這些字」的最小 woff2(通常整段標題文字每個字重只需要 1 個檔案,不管打幾個字),用動態插入
-   一個新的 <link> 指到這個窄範圍的樣式表,把原本「五六個分片各自成功」降到「兩個字重各一個
-   檔案成功」,失敗機率大幅下降。這條路徑跟 <head> 裡原本的全字族匯入並存,不衝突,只是多一條
-   更精準、更可能成功的路。 */
+   真正繞過去的方法是不要用「Noto Serif TC」這個名字,改用 FontFace API 直接把 text= 參數
+   拿到的窄範圍字型檔,註冊成一個全新、專屬、不會跟任何既有規則撞名的字族(這裡取名
+   "ScrollScore Export CJK")。畫布字型字串照 CSS font 家族清單的規則,會依序試到找到有
+   涵蓋該字的字族為止——瀏覽器只會在這個新字族裡找,不會被原本那兩百多條規則卡住。 */
+const EXPORT_FONT_FAMILY = "ScrollScore Export CJK";
+const loadedExportFontChars = new Set(); // 已經成功註冊過的字,同一批字不用重複抓
 async function ensureTitleFontsLoaded(cfg){
-  if (!document.fonts) return;
+  if (!window.FontFace || !document.fonts) return;
   const text = [cfg.title, cfg.subtitle, cfg.channel].filter(Boolean).join("");
   if (!text) return;
-  const uniqueChars = [...new Set(text)].join("");
-  if (!fontTextLinksInjected.has(uniqueChars)) {
-    fontTextLinksInjected.add(uniqueChars);
-    try {
-      const link = document.createElement("link");
-      link.rel = "stylesheet";
-      link.href = "https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@600;700&text=" + encodeURIComponent(uniqueChars) + "&display=swap";
-      document.head.appendChild(link);
-      await new Promise(res => { link.onload = res; link.onerror = res; });
-    } catch (e) {}
-  }
-  const specs = ["700 40px 'Noto Serif TC'", "600 40px 'Noto Serif TC'"];
-  // 就算窄範圍樣式表也失敗(離線/被擋),還是重試幾次原本的全字族路徑當備援,
-  // 兩次重試間隔一小段時間,不要連續打在同一個還沒恢復的暫時性錯誤上
-  for (let attempt = 0; attempt < 3; attempt++) {
-    await Promise.allSettled(specs.map(f => document.fonts.load(f, text)));
-    if (specs.every(f => document.fonts.check(f, text))) return;
-    if (attempt < 2) await new Promise(r => setTimeout(r, 300));
-  }
+  const needChars = [...new Set(text)].filter(c => !loadedExportFontChars.has(c) && !/\s/.test(c));
+  if (!needChars.length) return;
+  const uniqueChars = needChars.join("");
+  try {
+    const [css600, css700] = await Promise.all([600, 700].map(w =>
+      fetch("https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@" + w + "&text=" + encodeURIComponent(uniqueChars))
+        .then(r => r.text())
+    ));
+    const faces = [];
+    for (const [css, weight] of [[css600, "600"], [css700, "700"]]) {
+      const url = /url\((https:[^)]+)\)/.exec(css)?.[1];
+      if (url) faces.push(new FontFace(EXPORT_FONT_FAMILY, "url(" + url + ")", { weight }));
+    }
+    await Promise.all(faces.map(async f => { document.fonts.add(await f.load()); }));
+    for (const c of needChars) loadedExportFontChars.add(c);
+  } catch (e) {} // 失敗就照舊落回下面 'Noto Serif TC', serif 這個備援字族清單
 }
 /* 匯出前先算一張跟實際匯出完全同一套邏輯畫出來的靜態預覽圖(用目前播放位置當代表畫面),
    讓使用者確認樂譜對齊、標題浮水印、背景圖片都對了,再決定要不要真的花時間匯出整支影片 */
@@ -6418,7 +6419,7 @@ function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
     ctx.save();
     if (cfg.title) {
       ctx.textBaseline = "top";
-      ctx.font = "700 " + titleFontSize + "px 'Noto Serif TC', serif"; // Google Fonts 只匯入了600/700兩個粗細,不寫粗細會要求瀏覽器沒載入過的400,見下方 ensureTitleFontsLoaded 說明
+      ctx.font = "700 " + titleFontSize + "px '" + EXPORT_FONT_FAMILY + "', 'Noto Serif TC', serif"; // 優先用 ensureTitleFontsLoaded 註冊的專屬字族,避免撞到原本兩百多條分片規則
       // 主標題跟著游標顏色走(同一個色相、同一個深度),整張匯出畫面才是一套配色。
       // 濃度層級的設計(由重到輕):
       //   主標題       墨色 100%,而且刻意「不」乘上游標濃度——它是畫面的錨點,
@@ -6432,7 +6433,7 @@ function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
     }
     if (cfg.subtitle) {
       ctx.textBaseline = "top";
-      ctx.font = "600 " + subtitleFontSize + "px 'Noto Serif TC', serif"; // 同上,只用實際有匯入的粗細
+      ctx.font = "600 " + subtitleFontSize + "px '" + EXPORT_FONT_FAMILY + "', 'Noto Serif TC', serif"; // 同上
       ctx.fillStyle = "rgba(42,42,42,0.85)"; // 深炭灰,比標題低調,對比度依然夠高(8.7:1)
       ctx.textAlign = "center";
       const subtitleY = cfg.title ? wmPadY + Math.round(titleFontSize * 1.08) : wmPadY;
@@ -6440,7 +6441,7 @@ function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
     }
     if (cfg.channel) {
       ctx.textBaseline = "bottom";
-      ctx.font = "600 " + channelFontSize + "px 'Noto Serif TC', serif"; // 同上,只用實際有匯入的粗細
+      ctx.font = "600 " + channelFontSize + "px '" + EXPORT_FONT_FAMILY + "', 'Noto Serif TC', serif"; // 同上
       ctx.fillStyle = "rgba(42,42,42,0.85)";
       ctx.textAlign = "right";
       // 頻道名稱要貼在「樂譜本身下緣」的空白區,而不是直接貼鍵盤上緣——
