@@ -5047,7 +5047,23 @@ function playSampledInstrument(instKey, freq, when, dur, legato, pedal, chordAnc
     filterNode.type = "lowpass";
     filterNode.frequency.value = tech.harmonic ? Math.min(freq * 5, 4500) : Math.min(freq * 2.5, 1800);
   }
-  if (filterNode) { src.connect(filterNode); filterNode.connect(g); } else { src.connect(g); }
+  /* 鋼琴專用:力度→明暗度。目前這套取樣每個音高只錄了一個力度層,不管彈多輕多重都是同一份
+     錄音只是縮放音量,少了真實鋼琴「彈越重、槌子敲弦越用力、泛音越亮」的音色變化——同樣的
+     音符不管彈輕彈重,音色聽起來一模一樣,只是大小聲不同,這是跟真實演奏最容易聽出來的差異
+     之一。這裡用彈奏力度(peakGain)換算出的低通濾波器補回這個特性:力度大時濾波器開得高
+     (幾乎不濾,保留取樣原始的明亮度),力度小時收窄變暗,跟真實鋼琴弱奏偏暗、強奏偏亮的
+     聽感方向一致。範圍保守(最暗也還留著中高頻的基礎清晰度),避免弱音被濾得糊掉。 */
+  let brightFilter = null;
+  if (instKey === "piano") {
+    brightFilter = audioCtx.createBiquadFilter();
+    brightFilter.type = "lowpass";
+    const brightT = Math.max(0, Math.min(1, (peakGain - 0.35) / (1.1 - 0.35)));
+    brightFilter.frequency.value = 3200 + brightT * 14800; // 弱奏約3200Hz偏暗,強奏約18000Hz幾乎不濾
+  }
+  let srcChain = src;
+  if (filterNode) { srcChain.connect(filterNode); srcChain = filterNode; }
+  if (brightFilter) { srcChain.connect(brightFilter); srcChain = brightFilter; }
+  srcChain.connect(g);
   /* 聲像 + 殘響送出。鋼琴依音高擺左右(低音左、高音右),其他樂器維持置中——
      那個位置感是鋼琴弦排列的物理特性,套到小提琴或長笛上反而不對。
      踏板踩著時送多一點進殘響:真實鋼琴踏板一踩,所有沒被制音的弦會跟著共鳴,
@@ -5249,7 +5265,7 @@ function schedulePiano(freq, when, dur, legato, pedal, harmonyEndSec, artic, sta
   const lp = audioCtx.createBiquadFilter();
   osc.type = "triangle"; osc.frequency.value = freq;
   osc2.type = "sine";    osc2.frequency.value = freq * 2; // 一點泛音
-  lp.type = "lowpass";   lp.frequency.value = Math.min(freq * 6, 8000);
+  lp.type = "lowpass";
   const g2 = audioCtx.createGain(); g2.gain.value = 0.18;
   let peak = 0.32;
   let sustain, releaseTail;
@@ -5264,6 +5280,9 @@ function schedulePiano(freq, when, dur, legato, pedal, harmonyEndSec, artic, sta
   }
   ({ sustain, peakGain: peak } = applyArticulation(sustain, peak, dur, artic));
   peak *= handBalanceGain(staff);
+  // 同取樣路徑:力度越大濾波器開得越高、音色越亮,弱奏收窄變暗(見 playSampledInstrument 內同名說明)
+  const brightT = Math.max(0, Math.min(1, (peak - 0.2) / (0.6 - 0.2)));
+  lp.frequency.value = Math.min(freq * (4 + brightT * 4), 8000);
   g.gain.setValueAtTime(0, when);
   g.gain.linearRampToValueAtTime(peak, when + 0.012);
   // 同取樣路徑:鋼琴弦是持續自然衰減,而且衰減速度是每秒固定比例(短音長音都一樣),
