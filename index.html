@@ -4160,6 +4160,19 @@ function pianoPanFor(freq){
   const t = Math.max(0, Math.min(1, (freqToMidi(freq) - 21) / 87));
   return (t - 0.5) * 0.64;
 }
+/* 鋼琴延音的衰減時間常數,依音域拉長/縮短:真實鋼琴低音弦粗又長,自然衰減可以拖十幾秒,
+   高音弦短又細,一兩秒內就消失,兩者差距很大。取樣路徑原本不管音高一律套用固定 2.2 秒的
+   合成包絡(見下面 DECAYING 註解,目的是防止踏板段落幾十個音同時停在接近滿音量而糊掉/破音),
+   疊在真實錄音本來就有的自然衰減上,等於「再衰減一次」——固定值是抓中音域校準的,結果就是
+   低音被這層合成包絡衰減得比真實錄音快、提早悶掉,高音又比取樣本身衰減得慢、拖出取樣裡沒有
+   的延音。這裡改成隨音域內插:高音域接近取樣自身的衰減速度(合成包絡幾乎不介入),低音域
+   放慢但保守拉長(不追求真實低音十幾秒的物理準確,拉太長會讓防破音的效果形同虛設,踏板低音
+   堆疊還是會糊,限幅器又要更頻繁介入)。中音域(t≈0.55)刻意落在原本 2.2 秒附近,維持既有
+   校準不變。 */
+function pianoDecayTau(freq){
+  const t = Math.max(0, Math.min(1, (freqToMidi(freq) - 21) / 87)); // 0=最低音A0,1=最高音C8
+  return 1.0 + (1 - t) * 3.2; // 高音約1.0秒,低音約4.2秒
+}
 /* 聲像 + 殘響送出共用小工具:鋼琴取樣路徑跟合成備援路徑各自重複一份「建 panner、
    接 masterGain、建 send 接 reverbBus」的樣板,統一收斂到這裡。 */
 function connectWithPan(node, pan, reverbSend){
@@ -5016,7 +5029,8 @@ function playSampledInstrument(instKey, freq, when, dur, legato, pedal, chordAnc
      後者會讓短音衰減得快、長音衰減得慢,同一台鋼琴上不該有這種差異,聽起來會忽快忽慢很不一致。
      這裡用固定時間常數 DECAY_TAU:同樣音高不管寫多長,每秒衰減的比例都一樣。 */
   const DECAYING = instKey === "piano" || instKey === "guitar" || instKey === "guitarnylon";
-  const DECAY_TAU = 2.2; // 秒:約每 2.2 秒衰減到 37%,接近真實鋼琴中音域的衰減速度
+  // 鋼琴依音域用 pianoDecayTau() 內插(見該函式註解);吉他維持原本固定 2.2 秒,沒有改動吉他音色
+  const DECAY_TAU = instKey === "piano" ? pianoDecayTau(freq) : 2.2;
   const attackEnd = attackSec > 0.005 ? when + attackSec : when;
   const decayEnd = Math.max(when + Math.max(sustain, 0.02), attackEnd + 0.005);
   if (DECAYING) {
@@ -5255,7 +5269,7 @@ function schedulePiano(freq, when, dur, legato, pedal, harmonyEndSec, artic, sta
   // 同取樣路徑:鋼琴弦是持續自然衰減,而且衰減速度是每秒固定比例(短音長音都一樣),
   // 不是「不管多長都在結束時剛好掉到某個比例」(細節見 playSampledInstrument 內的說明)
   const synthDecayEnd = when + Math.max(sustain, 0.02);
-  const synthEndLevel = Math.max(0.06, Math.exp(-(synthDecayEnd - when) / 2.2));
+  const synthEndLevel = Math.max(0.06, Math.exp(-(synthDecayEnd - when) / pianoDecayTau(freq)));
   g.gain.exponentialRampToValueAtTime(Math.max(0.0002, peak * synthEndLevel), synthDecayEnd);
   g.gain.exponentialRampToValueAtTime(0.0001, synthDecayEnd + releaseTail);
   osc.connect(lp); osc2.connect(g2); g2.connect(lp);
