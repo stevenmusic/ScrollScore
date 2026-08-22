@@ -4016,13 +4016,7 @@ $("stage").addEventListener("pointerup", (e) => {
 
 function ensureAudio(){
   if (!audioCtx) {
-    /* 沒指定 latencyHint 時瀏覽器預設用 "interactive"(最小緩衝區),那是給即時樂器輸入
-       (彈一下馬上要聽到)用的,容錯空間很小——主執行緒只要被卡一下(樂譜捲動/游標重繪/
-       視窗變大讓 OSMD 重新排版一大片 SVG),音訊渲染執行緒的緩衝區就可能來不及補滿,
-       出現斷續的爆音/雜音。這裡是播放器,不是即時演奏樂器,不需要那麼低的延遲,換成
-       "playback" 讓瀏覽器用大很多的緩衝區,用多一點點延遲(通常還是在幾十毫秒內感覺不到)
-       換取容錯空間,大幅降低主執行緒偶爾卡頓時音訊跟著斷續的機率。 */
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: "playback" });
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     masterGain = audioCtx.createGain();
     /* 0.9 對這個合成器來說太燙了:每個聲部各自的峰值就有 0.32(合成)~0.66(取樣),
        Web Audio 又是直接把波形相加,實測連稀疏的琶音都會衝到 1.392、踏板段落到 2.451,
