@@ -4188,54 +4188,6 @@ function connectWithPan(node, pan, reverbSend){
   return panner;
 }
 
-/* ── 鋼琴專用:延音踏板的同情共鳴(sympathetic resonance) ──────────────────
-   真實鋼琴踩下延音踏板時,制音器全部離弦,彈下去的那個音會透過泛音關係帶動其他沒被彈到
-   但沒被制音的弦一起微振——尤其八度、十二度(八度+完全五度)、兩個八度、大十七度這類
-   泛音列裡對得上的音,共鳴最明顯,這是延音踏板段落聽起來飽滿、有空氣感、餘韻豐富的
-   主要原因,單純調大殘響量做不出這種「音準對得上」的共鳴質感。這裡疊加四層極低音量、
-   緩慢淡入、幾乎全送進殘響的泛音層,對應鋼琴泛音列前四個強泛音(2/3/4/5倍頻)。
-
-   上一版(330b9b7)對每個踏板音符都無條件觸發、完全沒有上限,踏板密集和絃/琶音段落會
-   瞬間疊加幾十組(每組3泛音*3節點=9節點)全部節點,手機上直接卡頓斷音,整個被移除
-   (fdf47a6)。這次維持完整的泛音品質(4個泛音,比上一版的3個更接近真實泛音列),但加
-   一個「同時進行中」的全域上限——不是為了省成本簡化音色,是超過這個密度之後,疊加的
-   共鳴彼此會蓋過去,人耳已經分辨不出額外差異,超過上限就不再新增不會有可感知的音色
-   損失,但保證不會再發生卡死。playing 停止時 activeResonanceVoices 會被歸零(見
-   stopAudioOnly),避免計數因為 onended 沒即時觸發而卡在非零值。 */
-const MAX_RESONANCE_VOICES = 32; // 同時可疊加的泛音組數上限,超過這個密度人耳已分辨不出額外差異
-let activeResonanceVoices = 0;
-function scheduleSympatheticResonance(freq, when, sustain, tail){
-  if (!reverbBus || !audioCtx.createStereoPanner) return;
-  if (activeResonanceVoices >= MAX_RESONANCE_VOICES) return;
-  activeResonanceVoices++;
-  const partials = [
-    { ratio: 2, gain: 0.055 }, // 高八度:泛音能量傳遞最強
-    { ratio: 3, gain: 0.030 }, // 十二度(八度+完全五度)
-    { ratio: 4, gain: 0.022 }, // 兩個八度
-    { ratio: 5, gain: 0.014 }  // 大十七度(兩個八度+大三度)
-  ];
-  const fadeIn = Math.min(0.12, Math.max(sustain * 0.35, 0.04)); // 共鳴需要一點時間才會被帶動,不是瞬間出現
-  const holdEnd = when + sustain;
-  const releaseEnd = holdEnd + tail * 1.6 + 0.3; // 共鳴消退得比直接音慢一點,踏板放開後才漸漸靜下來
-  let liveCount = partials.length;
-  for (const p of partials) {
-    const o = audioCtx.createOscillator();
-    o.type = "sine";
-    o.frequency.value = freq * p.ratio;
-    const pg = audioCtx.createGain();
-    pg.gain.setValueAtTime(0, when);
-    pg.gain.linearRampToValueAtTime(p.gain, when + fadeIn);
-    pg.gain.exponentialRampToValueAtTime(Math.max(0.0002, p.gain * 0.5), holdEnd);
-    pg.gain.exponentialRampToValueAtTime(0.0001, releaseEnd);
-    o.connect(pg);
-    connectWithPan(pg, pianoPanFor(freq * p.ratio), 0.92); // 幾乎全送殘響,直接音只留一點點定位感,不是憑空多出來的新音源
-    const stopAt = releaseEnd + 0.05;
-    o.start(when); o.stop(stopAt);
-    o.onended = () => { liveCount--; if (liveCount === 0) activeResonanceVoices = Math.max(0, activeResonanceVoices - 1); };
-    scheduled.push(o);
-  }
-}
-
 const PLAY_ICON_D = "M8 5v14l11-7z";
 const PAUSE_ICON_D = "M6 5h4v14H6zM14 5h4v14h-4z";
 let lastPlayBtnIsPlaying = false;
@@ -4358,7 +4310,6 @@ function scheduleImportedAudio(startTime, offsetSec){
 function startAudioFrom(fromSec){
   startCtxTime = audioCtx.currentTime - fromSec;
   scheduled = [];
-  activeResonanceVoices = 0; // 新一輪播放從頭排程,計數重新歸零
   if (importedAudioBuffer) {
     scheduleImportedAudio(audioCtx.currentTime, fromSec);
     return;
@@ -5103,7 +5054,6 @@ function playSampledInstrument(instKey, freq, when, dur, legato, pedal, chordAnc
      整體空間感明顯變大。這是用殘響量去逼近那個效果,不是真的在模擬弦間共振。 */
   connectWithPan(g, (instKey === "piano") ? pianoPanFor(freq) : 0, pedal ? 0.85 : 0.5);
   if (instKey === "piano" && pianoRoomBus) g.connect(pianoRoomBus); // 多接一條線到共用的遠麥克風匯流排,不必逐音符建節點
-  if (instKey === "piano" && pedal) scheduleSympatheticResonance(freq, when, sustain, tail); // 踏板音符才有同情共鳴
   // 滑音(glissando/slide):音高在演奏期間持續滑向下一個音,模擬手指在同一條弦上滑動把位
   if (tech && tech.glissTargetFreq) {
     const targetRate = rate * (tech.glissTargetFreq / freq);
@@ -5327,7 +5277,6 @@ function schedulePiano(freq, when, dur, legato, pedal, harmonyEndSec, artic, sta
   // 合成音備援路徑也要有同樣的聲像與殘響,否則取樣載入前後的空間感會突然改變
   connectWithPan(g, pianoPanFor(freq), pedal ? 0.85 : 0.5);
   if (pianoRoomBus) g.connect(pianoRoomBus); // 合成備援路徑也接遠麥克風匯流排,取樣載入前後空間感一致
-  if (pedal) scheduleSympatheticResonance(freq, when, sustain, releaseTail); // 合成備援路徑也要有同情共鳴,取樣載入前後音色一致
   osc.start(when); osc2.start(when);
   const stopAt = when + sustain + releaseTail + 0.05;
   osc.stop(stopAt); osc2.stop(stopAt);
@@ -5724,7 +5673,6 @@ function pausePlayback(){
 function stopAudioOnly(){
   for (const node of scheduled) { try { node.stop(); } catch(e){} }
   scheduled = [];
-  activeResonanceVoices = 0; // 直接歸零,不依賴 onended 是否即時觸發,避免計數卡在非零值擋住之後的共鳴
 }
 
 function stopPlayback(){
@@ -6499,7 +6447,6 @@ async function exportVideo(cfg){
     const t0 = audioCtx.currentTime + 0.1;
     startCtxTime = t0 + LEAD;
     scheduled = [];
-    activeResonanceVoices = 0; // 匯出從頭排程,計數重新歸零
     if (importedAudioBuffer) {
       scheduleImportedAudio(startCtxTime, rangeStart); // 有匯入音檔就整段用它,不逐音符排程合成/取樣音色
     } else {
