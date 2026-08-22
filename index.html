@@ -2546,7 +2546,15 @@ function parseXmlTimeline(xmlText){
               last.pcs.add(pc);
               last.durWhole = Math.max(last.durWhole, durWhole);
             } else if (!isGrace) {
-              list.push({ tWhole: cursor, durWhole, pcs: new Set([pc]) });
+              // restBefore:這個音符前面是不是隔了一段沒有記錄進 list 的時間——list 只收有音高的音符,
+              // 休止符會讓 cursor 前進但不會推進 list,兩者出現落差就代表中間有明確寫的休止符。
+              // 重複和弦音型偵測(detectRepeatingChordRanges)靠音高集合的連續性判斷要不要把兩個
+              // 音符併成同一段延續的和聲,原本完全不知道休止符的存在,會直接跨過休止符把後面的音
+              // 併進來,變成「這個音符前面有明確的休止符,聽起來卻像被踏板延續住」。標記這個旗標,
+              // 讓偵測邏輯遇到休止符就把這裡當成邊界,不再往前併。
+              const prevEntry = list.length ? list[list.length - 1] : null;
+              const restBefore = prevEntry ? (cursor - (prevEntry.tWhole + prevEntry.durWhole)) > 1e-6 : false;
+              list.push({ tWhole: cursor, durWhole, pcs: new Set([pc]), restBefore });
             }
           }
           if (!isChord && !isGrace) cursor += durWhole;
@@ -2661,6 +2669,7 @@ function detectRepeatingChordRanges(onsets, maxChordSize){
     let j = i + 1;
     let lastValidJ = isRecognizedChord(set) ? i : -1;
     while (j < n) {
+      if (onsets[j].restBefore) break; // 前面隔著明確寫的休止符,不能跨過去併成同一段延續的和聲
       const union = new Set(set);
       for (const pc of onsets[j].pcs) union.add(pc);
       if (union.size > maxChordSize) break; // 音種類數超過十三和絃範圍,不可能是同一個和絃
