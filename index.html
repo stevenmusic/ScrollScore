@@ -4114,6 +4114,38 @@ function buildReverbChain(){
   reverbPreDelay.connect(reverbConvolver);
   reverbConvolver.connect(reverbWet);
   reverbWet.connect(masterGain); // 接在 masterGain 之前,殘響一樣受總限幅器保護,不會破音
+  buildPianoRoomBus();
+}
+
+/* ── 鋼琴專用:雙麥克風空間深度(輕量版) ──────────────────────────────
+   上一版(330b9b7)幫每一個音符各自建一整組 delay+lowpass+gain+panner+send(5個節點),
+   踏板段落幾十個音同時響時等於同時多跑幾十組即時運算,在手機上直接卡頓斷音,後來整個
+   revert 掉(fdf47a6)。問題根源是「把遠麥克風也做成逐音符獨立處理」——但實際錄音時,
+   遠麥克風收到的是整台鋼琴的合奏聲,不是每個琴弦分開收音,本來就不需要逐音符分開算延遲
+   跟濾波。這裡改成整個播放期間只建一次的共用匯流排:所有鋼琴音符(取樣/合成備援都算)
+   多接一條線過來就好,不必再各自生成節點,即時運算成本幾乎是零,音色卻是"同一台鋼琴、
+   兩個麥克風位置"疊出來的,而不是逐音符去為單一個音染色。 */
+let pianoRoomBus = null;
+function buildPianoRoomBus(){
+  if (!audioCtx.createStereoPanner) { pianoRoomBus = null; return; } // 不支援聲像的環境就不加,退回單點鋼琴音色
+  pianoRoomBus = audioCtx.createGain();
+  pianoRoomBus.gain.value = 0.24; // 遠小於主音源,只補空間感,不是第二台鋼琴
+  const roomDelay = audioCtx.createDelay(0.05);
+  roomDelay.delayTime.value = 0.015; // 比主麥克風晚一點點到,模擬多繞的路程
+  const roomLP = audioCtx.createBiquadFilter();
+  roomLP.type = "lowpass";
+  roomLP.frequency.value = 2400; // 遠一點的麥克風,細節/高頻自然會少一些(整台鋼琴共用一個距離,不必逐音符算)
+  const roomPan = audioCtx.createStereoPanner();
+  roomPan.pan.value = -0.18; // 跟主音源的鋼琴聲像重心方向相反,撐開音場但不做誇張的兩極對調
+  pianoRoomBus.connect(roomDelay);
+  roomDelay.connect(roomLP);
+  roomLP.connect(roomPan);
+  roomPan.connect(masterGain);
+  if (reverbBus) {
+    const send = audioCtx.createGain();
+    send.gain.value = 0.6; // 遠麥克風本來就收到更多反射音,送混響的比例比主音源高
+    roomPan.connect(send); send.connect(reverbBus);
+  }
 }
 function reverbAmount(){ const el = $("reverbAmount"); return el ? +el.value / 100 : 0.3; }
 function reverbWetTarget(){ return reverbAmount() * 0.55; }
@@ -5007,6 +5039,7 @@ function playSampledInstrument(instKey, freq, when, dur, legato, pedal, chordAnc
      踏板踩著時送多一點進殘響:真實鋼琴踏板一踩,所有沒被制音的弦會跟著共鳴,
      整體空間感明顯變大。這是用殘響量去逼近那個效果,不是真的在模擬弦間共振。 */
   connectWithPan(g, (instKey === "piano") ? pianoPanFor(freq) : 0, pedal ? 0.85 : 0.5);
+  if (instKey === "piano" && pianoRoomBus) g.connect(pianoRoomBus); // 多接一條線到共用的遠麥克風匯流排,不必逐音符建節點
   // 滑音(glissando/slide):音高在演奏期間持續滑向下一個音,模擬手指在同一條弦上滑動把位
   if (tech && tech.glissTargetFreq) {
     const targetRate = rate * (tech.glissTargetFreq / freq);
@@ -5229,6 +5262,7 @@ function schedulePiano(freq, when, dur, legato, pedal, harmonyEndSec, artic, sta
   lp.connect(g);
   // 合成音備援路徑也要有同樣的聲像與殘響,否則取樣載入前後的空間感會突然改變
   connectWithPan(g, pianoPanFor(freq), pedal ? 0.85 : 0.5);
+  if (pianoRoomBus) g.connect(pianoRoomBus); // 合成備援路徑也接遠麥克風匯流排,取樣載入前後空間感一致
   osc.start(when); osc2.start(when);
   const stopAt = when + sustain + releaseTail + 0.05;
   osc.stop(stopAt); osc2.stop(stopAt);
