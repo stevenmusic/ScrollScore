@@ -5103,8 +5103,11 @@ function playSampledInstrument(instKey, freq, when, dur, legato, pedal, chordAnc
      之一。這裡用彈奏力度(peakGain)換算出的低通濾波器補回這個特性:力度大時濾波器開得高
      (幾乎不濾,保留取樣原始的明亮度),力度小時收窄變暗,跟真實鋼琴弱奏偏暗、強奏偏亮的
      聽感方向一致。範圍保守(最暗也還留著中高頻的基礎清晰度),避免弱音被濾得糊掉。 */
+  // 匯出影片時,CPU 要同時應付音訊即時排程+畫面繪製+H.264編碼,這裡額外的濾波器對一般
+  // 播放感覺不出來,但在資源比較緊的裝置上疊加起來可能是壓垮匯出畫面幀率的最後一根稻草——
+  // 匯出時跳過這個明暗度濾波,把運算餘裕讓給畫面/編碼,一般播放不受影響
   let brightFilter = null;
-  if (instKey === "piano") {
+  if (instKey === "piano" && !exporting) {
     brightFilter = audioCtx.createBiquadFilter();
     brightFilter.type = "lowpass";
     const brightT = Math.max(0, Math.min(1, (peakGain - 0.35) / (1.1 - 0.35)));
@@ -5119,7 +5122,8 @@ function playSampledInstrument(instKey, freq, when, dur, legato, pedal, chordAnc
      踏板踩著時送多一點進殘響:真實鋼琴踏板一踩,所有沒被制音的弦會跟著共鳴,
      整體空間感明顯變大。這是用殘響量去逼近那個效果,不是真的在模擬弦間共振。 */
   connectWithPan(g, (instKey === "piano") ? pianoPanFor(freq) : 0, pedal ? 0.85 : 0.5);
-  if (instKey === "piano" && pianoRoomBus) g.connect(pianoRoomBus); // 多接一條線到共用的遠麥克風匯流排,不必逐音符建節點
+  // 同上,遠麥克風匯流排匯出時也跳過
+  if (instKey === "piano" && pianoRoomBus && !exporting) g.connect(pianoRoomBus);
   // 滑音(glissando/slide):音高在演奏期間持續滑向下一個音,模擬手指在同一條弦上滑動把位
   if (tech && tech.glissTargetFreq) {
     const targetRate = rate * (tech.glissTargetFreq / freq);
@@ -5345,7 +5349,7 @@ function schedulePiano(freq, when, dur, legato, pedal, harmonyEndSec, artic, sta
   lp.connect(g);
   // 合成音備援路徑也要有同樣的聲像與殘響,否則取樣載入前後的空間感會突然改變
   connectWithPan(g, pianoPanFor(freq), pedal ? 0.85 : 0.5);
-  if (pianoRoomBus) g.connect(pianoRoomBus); // 合成備援路徑也接遠麥克風匯流排,取樣載入前後空間感一致
+  if (pianoRoomBus && !exporting) g.connect(pianoRoomBus); // 合成備援路徑也接遠麥克風匯流排,取樣載入前後空間感一致;匯出時跳過(見 playSampledInstrument 內的說明)
   osc.start(when); osc2.start(when);
   const stopAt = when + sustain + releaseTail + 0.05;
   osc.stop(stopAt); osc2.stop(stopAt);
