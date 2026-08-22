@@ -6004,12 +6004,20 @@ async function ensureTitleFontsLoaded(cfg){
   if (!document.fonts) return;
   const text = [cfg.title, cfg.subtitle, cfg.channel].filter(Boolean).join("");
   if (!text) return;
-  try {
-    await Promise.all([
-      document.fonts.load("700 40px 'Noto Serif TC'", text),
-      document.fonts.load("600 40px 'Noto Serif TC'", text)
-    ]);
-  } catch (e) {} // 載入失敗就照舊用備援字型畫,不擋住預覽/匯出流程
+  const specs = ["700 40px 'Noto Serif TC'", "600 40px 'Noto Serif TC'"];
+  /* 實測發現一個問題:兩個字重同時用 Promise.all 送出時,只要其中一個 document.fonts.load()
+     偶發 reject(冷連線第一次打 Google Fonts,某個分片檔案的請求有機率短暫失敗),Promise.all
+     會立刻整個 reject,連另一個原本會成功的字重也被跟著放棄等待,外層 catch 直接吞掉、
+     什麼都沒等到就下筆畫了——這就是「第一次進預覽全部的字都是壞掉的,返回重新匯出才對」的
+     成因:第二次呼叫時瀏覽器已經把第一次(被中途放棄但其實還在背景繼續跑的)請求快取起來,
+     不用重新下載,才會秒成功。
+     改用 allSettled,一個字重失敗不會連累另一個;畫之前再用 document.fonts.check() 實際
+     確認需要的字重都真的可用,不夠的話重試一次(沖淡冷連線偶發失敗的機率),最多重試 1 次
+     就直接畫(不無限重試卡住使用者)。 */
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await Promise.allSettled(specs.map(f => document.fonts.load(f, text)));
+    if (specs.every(f => document.fonts.check(f, text))) return;
+  }
 }
 /* 匯出前先算一張跟實際匯出完全同一套邏輯畫出來的靜態預覽圖(用目前播放位置當代表畫面),
    讓使用者確認樂譜對齊、標題浮水印、背景圖片都對了,再決定要不要真的花時間匯出整支影片 */
