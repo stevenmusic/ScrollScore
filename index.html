@@ -4714,43 +4714,22 @@ function fitDrumLayout(w, h){
   _drumFitCache = { w, h, R, C };
   return _drumFitCache;
 }
-/* 靜止(沒有任何鼓件被打)狀態的鼓組畫面快取——原因跟 kbBaseCache/drawKeyboard 完全一樣:
-   每片鈸光是槌紋質感就要畫幾十個小橢圓+漸層+可能的shadowBlur,逐一鼓件每幀重畫在匯出時
-   (畫布繪製要跟H.264編碼搶CPU)容易讓幀率跟不上目標值。靜止狀態在同一個尺寸下永遠長一樣,
-   快取起來,每幀只需要疊畫真正被打到的少數幾個鼓件。鼓件彼此之間排版本來就有間距,不像鍵盤
-   黑白鍵刻意重疊,不需要額外處理鄰居重畫的問題。 */
-let drumBaseCache = null;
-function buildDrumBase(w, h){
-  const off = document.createElement("canvas");
-  off.width = w; off.height = h;
-  const octx = off.getContext("2d");
-  const baseGrad = octx.createLinearGradient(0, 0, 0, h);
+function drawDrumKit(ctx, x, y, w, h, activeMap){
+  const baseGrad = ctx.createLinearGradient(0, y, 0, y + h);
   baseGrad.addColorStop(0, "#050403");
   baseGrad.addColorStop(1, "#0C0A07");
-  octx.fillStyle = baseGrad;
-  octx.fillRect(0, 0, w, h);
-  const fit = fitDrumLayout(w, h);
-  const centerY = fit.C;
-  const baseR = fit.R;
-  for (const pad of DRUM_PAD_LAYOUT) {
-    drawDrumPad(octx, w * pad.x, centerY + pad.cyOff * h, baseR * pad.r, pad, 0);
-  }
-  return off;
-}
-function drawDrumKit(ctx, x, y, w, h, activeMap){
-  if (!drumBaseCache || drumBaseCache.w !== w || drumBaseCache.h !== h) {
-    drumBaseCache = { w, h, canvas: buildDrumBase(w, h) };
-  }
-  ctx.drawImage(drumBaseCache.canvas, x, y);
+  ctx.fillStyle = baseGrad;
+  ctx.fillRect(x, y, w, h);
+
   const fit = fitDrumLayout(w, h);
   const centerY = y + fit.C;
   const baseR = fit.R;
+
   for (const pad of DRUM_PAD_LAYOUT) {
-    const intensity = activeMap.get(pad.id) || 0;
-    if (intensity <= 0) continue; // 靜止的鼓件快取圖裡已經有了,不用重畫
     const cx = x + w * pad.x;
     const cy = centerY + pad.cyOff * h;
     const r = baseR * pad.r;
+    const intensity = activeMap.get(pad.id) || 0;
     drawDrumPad(ctx, cx, cy, r, pad, intensity);
   }
 }
