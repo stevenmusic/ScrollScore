@@ -5989,11 +5989,34 @@ function watermarkCfg(){
   };
 }
 let pendingExportCfg = null;
+/* Google Fonts 的中文字型是切成一堆只涵蓋特定字的小檔案(unicode-range),瀏覽器只會下載
+   「目前頁面上真的有出現的那些字」對應的檔案。使用者在標題/浮水印欄位自己打的字(例如
+   「測試」的「測」)如果剛好不在頁面其他地方出現過,對應的字型檔案這時候都還沒下載。
+   Canvas 的 fillText 不像一般 DOM 文字有 font-display:swap 那種「字型載完自動換字重畫」
+   的機制——沒載到字型就直接拿瀏覽器預設字型畫下去,而且畫完就定型,不會再補畫。這就是
+   使用者反映「預覽某個字不是原本字型,但匯出影片又是對的」的成因:預覽是馬上同步畫出來,
+   那些字的字型檔案根本來不及下載;真正匯出通常是使用者看完預覽、按下確認之後才開始,
+   這段等待時間剛好夠字型檔案在背景下載完成,所以匯出時就矇對了。
+   這裡在畫布真正下筆之前,先用 document.fonts.load() 明確要求瀏覽器把「標題/副標題/頻道
+   名稱這幾個字串實際用到的字」都下載好、確定 ready 了才畫,預覽跟匯出都呼叫,兩邊都不會
+   再靠運氣。 */
+async function ensureTitleFontsLoaded(cfg){
+  if (!document.fonts) return;
+  const text = [cfg.title, cfg.subtitle, cfg.channel].filter(Boolean).join("");
+  if (!text) return;
+  try {
+    await Promise.all([
+      document.fonts.load("700 40px 'Noto Serif TC'", text),
+      document.fonts.load("600 40px 'Noto Serif TC'", text)
+    ]);
+  } catch (e) {} // 載入失敗就照舊用備援字型畫,不擋住預覽/匯出流程
+}
 /* 匯出前先算一張跟實際匯出完全同一套邏輯畫出來的靜態預覽圖(用目前播放位置當代表畫面),
    讓使用者確認樂譜對齊、標題浮水印、背景圖片都對了,再決定要不要真的花時間匯出整支影片 */
 async function showExportPreview(cfg){
   pendingExportCfg = cfg;
   $("formatOverlay").classList.remove("show");
+  await ensureTitleFontsLoaded(cfg);
   const layout = computeExportLayout(cfg);
   const { tiles, scale } = await rasterizeScore(cfg.scoreH);
   const cv = document.createElement("canvas");
@@ -6370,7 +6393,7 @@ function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
     ctx.save();
     if (cfg.title) {
       ctx.textBaseline = "top";
-      ctx.font = titleFontSize + "px 'Noto Serif TC', serif";
+      ctx.font = "700 " + titleFontSize + "px 'Noto Serif TC', serif"; // Google Fonts 只匯入了600/700兩個粗細,不寫粗細會要求瀏覽器沒載入過的400,見下方 ensureTitleFontsLoaded 說明
       // 主標題跟著游標顏色走(同一個色相、同一個深度),整張匯出畫面才是一套配色。
       // 濃度層級的設計(由重到輕):
       //   主標題       墨色 100%,而且刻意「不」乘上游標濃度——它是畫面的錨點,
@@ -6384,7 +6407,7 @@ function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
     }
     if (cfg.subtitle) {
       ctx.textBaseline = "top";
-      ctx.font = subtitleFontSize + "px 'Noto Serif TC', serif";
+      ctx.font = "600 " + subtitleFontSize + "px 'Noto Serif TC', serif"; // 同上,只用實際有匯入的粗細
       ctx.fillStyle = "rgba(42,42,42,0.85)"; // 深炭灰,比標題低調,對比度依然夠高(8.7:1)
       ctx.textAlign = "center";
       const subtitleY = cfg.title ? wmPadY + Math.round(titleFontSize * 1.08) : wmPadY;
@@ -6392,7 +6415,7 @@ function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
     }
     if (cfg.channel) {
       ctx.textBaseline = "bottom";
-      ctx.font = channelFontSize + "px 'Noto Serif TC', serif";
+      ctx.font = "600 " + channelFontSize + "px 'Noto Serif TC', serif"; // 同上,只用實際有匯入的粗細
       ctx.fillStyle = "rgba(42,42,42,0.85)";
       ctx.textAlign = "right";
       // 頻道名稱要貼在「樂譜本身下緣」的空白區,而不是直接貼鍵盤上緣——
@@ -6417,6 +6440,7 @@ async function exportVideo(cfg){
   stopPlayback();
   ensureAudio();
   if (kitLoading) await kitLoading;
+  await ensureTitleFontsLoaded(cfg); // 保險:萬一使用者看到預覽秒按確認,字型下載可能還沒跑完
   $("exportOverlayTitle").textContent = T("exportRenderingPct", { pct: 0 });
   $("exportOverlay").classList.add("show");
   let aDest = null;
