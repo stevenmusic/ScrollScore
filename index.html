@@ -5892,11 +5892,9 @@ $("exitrec").addEventListener("click", () => {
 
 /* ── 影片匯出 ─────────────────────────────── */
 let exporting = false, exportCancelled = false;
-/* 原本固定60,實測在 Safari 上匯出常常跟不上(跟60沒有直接因果關係,根源後來查出是 Safari
-   本身的 captureStream/MediaRecorder 實作問題,同一份程式碼在 Chrome 上60fps完全順暢)。
-   降到30當作留給 Safari 多一點緩衝空間,不是修正根本原因——真正的建議是在這台裝置上用
-   Chrome 匯出,而不是靠調低 fps 去將就 Safari。 */
-const exportFps = 30;
+// 60fps 本身不是問題根源(同一份程式碼在 Chrome 上60fps完全順暢,問題是 Safari 自己的
+// captureStream/MediaRecorder 實作),用 Safari 卡頓時請改用 Chrome 匯出。
+const exportFps = 60;
 
 /* 匯出常常要跑20~90秒以上,使用者中途切出分頁、鎖螢幕的機率不低——實測發現這種情況下
    requestAnimationFrame 會被瀏覽器直接節流到一個很低的固定頻率(實測影片幀率從~57fps
