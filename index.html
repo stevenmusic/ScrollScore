@@ -539,6 +539,10 @@ body.score-loaded #playline{display:block}
   padding:6px 4px;border-radius:var(--radius-sm);transition:color .15s;
 }
 .home-link:hover,.home-link:focus-visible{color:var(--gold-bright)}
+/* 問題回報:跟回首頁連結同一套安靜樣式,放在設定面板最底下 */
+.contact-link{color:var(--muted);font-size:var(--fs-xs);padding:2px 4px}
+.contact-link a{color:var(--muted-bright);text-decoration:none;border-bottom:1px solid var(--line)}
+.contact-link a:hover,.contact-link a:focus-visible{color:var(--gold-bright)}
 /* fitHeaderRow() 放不下單排時的收窄手段:只藏文字,不動按鈕本身的 padding/height——
    按鈕邊框(圓角/高度)維持跟平常一樣,只是裡面的字不見了、寬度跟著內容自然變窄,
    不會因為收合層級不同而讓同一顆按鈕忽大忽小、形狀跑掉。 */
@@ -924,6 +928,7 @@ body.exporting-active .empty-card{
     </div>
   </details>
 
+  <p class="contact-link"><span data-i18n="contactLabel">問題回報：</span><a href="mailto:steventsaimusic@gmail.com">steventsaimusic@gmail.com</a></p>
   <div class="export-row panel-actions">
     <button class="btn" id="recBtn" disabled title="請先載入樂譜" data-i18n="recBtnLabel">錄影模式</button>
     <button class="btn primary" id="exportBtn" disabled title="請先載入樂譜"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m-5-5l5 5 5-5M4 21h16"/></svg><span data-i18n="exportBtnLabel">匯出影片</span></button>
@@ -1127,6 +1132,7 @@ const I18N = {
   zh: {
     pageTitle: "ScrollScore — 橫向捲動樂譜播放器",
     homeLinkLabel: "首頁",
+    contactLabel: "問題回報：",
     loadBtnLabel: "載入樂譜",
     playLabelPlay: "播放",
     playLabelPause: "暫停",
@@ -1335,6 +1341,7 @@ const I18N = {
   en: {
     pageTitle: "ScrollScore — Scrolling Sheet Music Player",
     homeLinkLabel: "Home",
+    contactLabel: "Feedback: ",
     loadBtnLabel: "Load Score",
     playLabelPlay: "Play",
     playLabelPause: "Pause",
