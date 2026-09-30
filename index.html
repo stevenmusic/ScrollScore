@@ -6050,8 +6050,8 @@ async function ensureTitleFontsLoaded(cfg){
    讓使用者確認樂譜對齊、標題浮水印、背景圖片都對了,再決定要不要真的花時間匯出整支影片 */
 /* 鼓譜只有一行譜表,鋼琴是上下兩行大譜表。匯出時整張樂譜是等比縮放塞進固定的 scoreH,
    同樣高度下鼓譜的譜表看起來偏小、上下留白多,所以鼓譜匯出時樂譜帶再放大這個倍率。
-   放大後扣掉鼓組面板的空間仍然足夠(橫式 1080 高:樂譜 660、面板上限約 250) */
-const DRUM_EXPORT_SCORE_SCALE = 1.5;
+   放大後扣掉鼓組面板的空間仍然足夠(橫式 1080 高:樂譜 616、面板上限約 285) */
+const DRUM_EXPORT_SCORE_SCALE = 1.4;
 async function showExportPreview(cfg){
   if (isDrumScore) cfg.scoreH = Math.round(cfg.scoreH * DRUM_EXPORT_SCORE_SCALE);
   pendingExportCfg = cfg;
