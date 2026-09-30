@@ -2,7 +2,8 @@
 
 ## 技術棧
 - 單檔 HTML，OpenSheetMusicDisplay (OSMD) 2.0.0 渲染 MusicXML
-- Web Audio API 音訊合成；鼓組用 Virtuosity Drums 爵士鼓取樣（CC0，raw.githubusercontent FLAC），失敗退回 Tone.js 鼓組再退回合成音
+- Web Audio API 音訊合成；鼓組：大鼓/小鼓/中鼓/落地鼓用自有音色 stevenmusic/drum-samples 的 web/（roomy 收音、v3/v4/v5 力度層 × 4 round-robin），銅鈸與邊擊用 Virtuosity Drums（CC0）；失敗退回 Tone.js 鼓組再退回合成音
+- 鼓的力度：鬼音（括號符頭）→ v3、一般 → v4、重音記號 → v5
 - 樂器只保留鋼琴、吉他（民謠、古典兩把）、鼓組
 - 匯出影片用 canvas.captureStream + MediaRecorder
 
