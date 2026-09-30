@@ -5468,35 +5468,34 @@ function scheduleGuitar(freq, when, dur, harmonyEndSec, tech){
   if (vibLfo) scheduled.push(vibLfo);
 }
 
-/* ── 鼓音色引擎:自有鼓組取樣 + 爵士鼓銅鈸取樣 + 合成備援 ───────── */
-/* 鼓皮類(大鼓/小鼓/中鼓/落地鼓)用自有音色 stevenmusic/drum-samples(DW 鼓組 + Keplinger 小鼓):
-   roomy 收音(含房間聲,比 close 乾聲自然、比 slam 壓縮版乾淨)× 三個力度層 v3/v4/v5 × 四個 round-robin。
-   repo 裡的 web/ 是由原始 48kHz/24-bit WAV 轉出的裁尾 16-bit FLAC,整套 roomy 約 2.8MB。
-   這套取樣各鼓件、各力度層的音量在製作時就已經對齊(峰值 v3≈0.18、v4≈0.32、v5≈0.50),
-   所以不做峰值正規化,只乘一個整體增益,原本的力度差異與鼓件平衡才會保留下來。
+/* ── 鼓音色引擎:自有鼓組取樣(stevenmusic/drum-samples)+ 合成備援 ───────── */
+/* 全部鼓件都從 stevenmusic/drum-samples 的 web/ 載入,每個鼓件都有 v3/v4/v5 三個力度層 × 數個 round-robin:
+   - 大鼓/小鼓/中鼓/落地鼓:indiedrums「DW Collectors Kit + Keplinger Snare」,roomy 收音(含房間聲,
+     比 close 乾聲自然、比 slam 壓縮版乾淨),每層 4 個 round-robin
+   - Hi-Hat/Ride/Crash/邊擊:THE OPEN SOURCE DRUM KIT(Real Music Media,公有領域),同樣是錄音室單擊取樣,
+     依實測峰值分出三個力度層,比例對齊 DW 鼓組(v3:v4:v5 ≈ 0.36:0.64:1)
+   兩套在 repo 裡都已經轉成裁尾 16-bit / 48kHz FLAC,並把 v5 峰值統一調到約 0.5,
+   所以這裡不做峰值正規化,只乘一個整體增益,力度差異與鼓件平衡才會保留下來。
    優先從 GitHub Pages 載入(跟 ScrollScore 同網域),Pages 沒開或失敗就改用 raw.githubusercontent.com */
 const OWN_KIT_BASES = [
   "https://stevenmusic.github.io/drum-samples/web/",
   "https://raw.githubusercontent.com/stevenmusic/drum-samples/main/web/"
 ];
-const OWN_KIT_MIC = "roomy";
-const OWN_KIT = { kick: "dw-kick", snare: "keplinger-snare", tomRack: "dw-rack", tomFloor: "dw-floor" };
-const OWN_KIT_VELOCITIES = [3, 4, 5];
-const OWN_KIT_ROUND_ROBINS = 4;
-const OWN_KIT_GAIN = 1.8; // v5 峰值 0.5 → 0.9,跟正規化過的銅鈸取樣同一個基準
-/* 銅鈸類與邊擊沿用 Virtuosity Drums(Versilian Studios,CC0 授權、可商用免標註):
-   波士頓 Virtuosity Musical Instruments 實錄的爵士鼓,取「mid」麥克風位置。自有音色沒有銅鈸與 cross stick,
-   這兩類由這套補上。原始檔是 48kHz 立體聲 FLAC,下列檔名都逐一 fetch 驗證過存在(HTTP 200、fLaC 檔頭) */
-const JAZZ_KIT_URL = "https://raw.githubusercontent.com/studiorack/virtuosity-drums/main/Samples/mid/";
-const JAZZ_KIT = {
-  xstick:   ["snare/mid_snare_crossstick_vl12.flac"],
-  hhClosed: ["hh/mid_hh_closed_vl3_rr1.flac", "hh/mid_hh_closed_vl3_rr2.flac"],
-  hhPedal:  ["hh/mid_hh_pedal_vl2_rr1.flac"],
-  hhOpen:   ["hh/mid_hh_open_vl3_rr1.flac"],
-  ride:     ["ride/mid_ride_ride_vl2_rr1.flac", "ride/mid_ride_ride_vl2_rr2.flac"],
-  rideBell: ["ride/mid_ride_bell_vl2_rr1.flac"],
-  crash:    ["crash/mid_crash_crash_vl2_rr1.flac"]
+const OWN_KIT = {           // name → [檔名前綴, 每個力度層的 round-robin 數]
+  kick:     ["dw-kick-roomy", 4],
+  snare:    ["keplinger-snare-roomy", 4],
+  tomRack:  ["dw-rack-roomy", 4],
+  tomFloor: ["dw-floor-roomy", 4],
+  hhClosed: ["osdk-hhclosed", 4],
+  hhPedal:  ["osdk-hhpedal", 3],
+  hhOpen:   ["osdk-hhopen", 3],
+  ride:     ["osdk-ride", 3],
+  rideBell: ["osdk-ridebell", 2],
+  crash:    ["osdk-crash", 2],
+  xstick:   ["osdk-sidestick", 4]
 };
+const OWN_KIT_VELOCITIES = [3, 4, 5];
+const OWN_KIT_GAIN = 1.8; // v5 峰值 0.5 → 0.9
 /* 取樣整個鼓件都抓不到時,退回 Tone.js 原聲鼓組(有對應檔案的鼓件才有),再不行才用合成音 */
 const KIT_URL = "https://tonejs.github.io/audio/drum-samples/acoustic-kit/";
 const KIT_FALLBACK = { kick: "kick", snare: "snare", hhClosed: "hihat", hhPedal: "hihat", tomRack: "tom1", tomFloor: "tom3" };
@@ -5504,8 +5503,7 @@ const kitBuffers = {};   // name 或 "name:力度層" → [{buffer, norm}]
 const kitRoundRobin = {};
 let kitLoading = null;
 
-/* fixedNorm 沒給時,量峰值正規化(Virtuosity 的 mid 麥克風保留真實相對音量,大鼓峰值只有 0.09、
-   hi-hat 0.03,直接播放的話混音比例完全由麥克風擺位決定);有給就照給的倍率,保留原本的力度差異 */
+/* fixedNorm 沒給時(只有 Tone.js 備援鼓組會走到),量峰值正規化;有給就照給的倍率,保留原本的力度差異 */
 async function fetchDrumBuffer(url, fixedNorm){
   const res = await fetch(url);
   if (!res.ok) throw new Error("HTTP " + res.status);
@@ -5521,17 +5519,17 @@ async function fetchDrumBuffer(url, fixedNorm){
 
 /* 先用一個檔案探路決定要用哪個網址,不然 Pages 沒開的時候,48 個檔案每個都要先失敗一次才改走備援 */
 async function resolveOwnKitBase(){
-  const probe = OWN_KIT.kick + "-" + OWN_KIT_MIC + "-v4.01.flac";
+  const probe = OWN_KIT.kick[0] + "-v4.01.flac";
   for (const base of OWN_KIT_BASES) {
     try { const r = await fetch(base + probe, { method: "HEAD" }); if (r.ok) return base; } catch (e) {}
   }
   return OWN_KIT_BASES[OWN_KIT_BASES.length - 1];
 }
-async function loadOwnKitPiece(base, name, prefix){
+async function loadOwnKitPiece(base, name, prefix, roundRobins){
   let loaded = 0;
   await Promise.all(OWN_KIT_VELOCITIES.map(async v => {
     const files = [];
-    for (let rr = 1; rr <= OWN_KIT_ROUND_ROBINS; rr++) files.push(prefix + "-" + OWN_KIT_MIC + "-v" + v + ".0" + rr + ".flac");
+    for (let rr = 1; rr <= roundRobins; rr++) files.push(prefix + "-v" + v + ".0" + rr + ".flac");
     const got = (await Promise.all(files.map(f => fetchDrumBuffer(base + f, OWN_KIT_GAIN).catch(() => null)))).filter(Boolean);
     if (got.length) { kitBuffers[name + ":" + v] = got; loaded++; }
   }));
@@ -5542,18 +5540,11 @@ function loadDrumKit(){
   if (kitLoading) return kitLoading;
   ensureAudio();
   setStatus(T("statusLoadingDrumKit"));
-  const ownJobs = resolveOwnKitBase().then(base => Promise.all(Object.entries(OWN_KIT).map(async ([name, prefix]) => {
-    if (await loadOwnKitPiece(base, name, prefix)) return;
+  kitLoading = resolveOwnKitBase().then(base => Promise.all(Object.entries(OWN_KIT).map(async ([name, [prefix, rr]]) => {
+    if (await loadOwnKitPiece(base, name, prefix, rr)) return;
+    if (!KIT_FALLBACK[name]) return; // 銅鈸類沒有 Tone.js 備援,直接退回合成音
     try { kitBuffers[name] = [await fetchDrumBuffer(KIT_URL + KIT_FALLBACK[name] + ".mp3")]; } catch (e) { /* 再退回合成音 */ }
-  })));
-  const jazzJobs = Promise.all(Object.entries(JAZZ_KIT).map(async ([name, files]) => {
-    const got = (await Promise.all(files.map(f => fetchDrumBuffer(JAZZ_KIT_URL + f).catch(() => null)))).filter(Boolean);
-    if (!got.length && KIT_FALLBACK[name]) {
-      try { got.push(await fetchDrumBuffer(KIT_URL + KIT_FALLBACK[name] + ".mp3")); } catch (e) { /* 再退回合成音 */ }
-    }
-    if (got.length) kitBuffers[name] = got;
-  }));
-  kitLoading = Promise.all([ownJobs, jazzJobs]).then(() => setStatus(T("statusDrumKitReady")));
+  }))).then(() => setStatus(T("statusDrumKitReady")));
   return kitLoading;
 }
 
@@ -5638,16 +5629,16 @@ function scheduleDrum(key, when, vel){
       if (!playSample("kick", when, 1.0, 0, 0, vel)) synthKick(when); break;
     case 38: case 40: // Snare
       if (!playSample("snare", when, 1.0, 0, 0, vel)) synthSnare(when, 0.95 * V); break;
-    case 37:          // Side stick / rim click:用 Virtuosity 真實的 cross stick 錄音
-      if (!playSample("xstick", when, 0.6, 0, 0, vel)) synthRimClick(when, 0.7 * V); break;
+    case 37:          // Side stick / rim click
+      if (!playSample("xstick", when, 0.8, 0, 0, vel)) synthRimClick(when, 0.7 * V); break;
     case 39:          // Clap → snare 替代
       playSample("snare", when, 0.8, 0, 0, vel) || synthSnare(when, 0.8 * V); break;
     case 42:          // Closed hi-hat
-      if (!playSample("hhClosed", when, 0.42, 0, 0, vel)) synthCymbal(when, 0.06, 8000, 0.25 * V, 0.25); break;
+      if (!playSample("hhClosed", when, 0.55, 0, 0, vel)) synthCymbal(when, 0.06, 8000, 0.25 * V, 0.25); break;
     case 44:          // Pedal hi-hat
-      if (!playSample("hhPedal", when, 0.35, 0, 0, vel)) synthCymbal(when, 0.05, 8000, 0.16 * V, 0.2); break;
+      if (!playSample("hhPedal", when, 0.45, 0, 0, vel)) synthCymbal(when, 0.05, 8000, 0.16 * V, 0.2); break;
     case 46:          // Open hi-hat
-      if (!playSample("hhOpen", when, 0.45, 0, 0.5, vel)) synthCymbal(when, 0.45, 7000, 0.28 * V, 0.4); break;
+      if (!playSample("hhOpen", when, 0.65, 0, 0.6, vel)) synthCymbal(when, 0.45, 7000, 0.28 * V, 0.4); break;
     /* 自有鼓組只有一顆中鼓、一顆落地鼓,六種 GM 中鼓/落地鼓音高用變調區分(每級約差一到兩個半音),
        記譜上最常用的高音鼓(48)、中音鼓(47)、落地鼓(41/43)都維持在原音高附近,音色失真最少 */
     case 50:          // High tom
@@ -5663,11 +5654,11 @@ function scheduleDrum(key, when, vel){
     case 41:          // Low floor tom
       if (!playSample("tomFloor", when, 1.0, 0.89, 0, vel)) synthTom(when, 85); break;
     case 49: case 57: case 55: case 52: // Crash / splash / china
-      if (!playSample("crash", when, 0.6, 0, 2.0, vel)) synthCymbal(when, 1.6, 5500, 0.4 * V, 0.45); break;
+      if (!playSample("crash", when, 0.9, 0, 2.2, vel)) synthCymbal(when, 1.6, 5500, 0.4 * V, 0.45); break;
     case 51: case 59: // Ride:爵士鼓的主要律動聲部
-      if (!playSample("ride", when, 0.45, 0, 1.6, vel)) synthCymbal(when, 1.3, 8500, 0.22 * V, 0.55); break;
+      if (!playSample("ride", when, 0.6, 0, 1.8, vel)) synthCymbal(when, 1.3, 8500, 0.22 * V, 0.55); break;
     case 53:          // Ride bell
-      if (!playSample("rideBell", when, 0.5, 0, 0.9, vel)) synthCymbal(when, 0.6, 11000, 0.32 * V, 0.12); break;
+      if (!playSample("rideBell", when, 0.7, 0, 1.2, vel)) synthCymbal(when, 0.6, 11000, 0.32 * V, 0.12); break;
     default:
       playSample("snare", when, 0.7, 0, 0, vel) || synthSnare(when, 0.7 * V);
   }
