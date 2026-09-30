@@ -2246,19 +2246,6 @@ async function renderScore(xmlText){
   await osmd.load(finalXml);
   osmd.zoom = 0.9;
   osmd.render();
-  /* 鼓譜只有一行譜表(鋼琴是上下兩行大譜表),同樣 0.9 倍時整個樂譜只剩一半高度、上下留一大片空白。
-     改放大到 DRUM_ZOOM,但不能超出樂譜視窗(#stage 是 overflow:hidden,手機橫向時很矮),
-     用 0.9 倍實際渲染出來的高度等比例推算上限,至少維持 0.9 倍 */
-  if (isDrumScore) {
-    const DRUM_ZOOM = 2.0;
-    resizeKeyboardCanvas(); // 樂器剛被切成鼓組,面板高度要先更新,量到的 #stage 高度才是最終值
-    const svg = scoreDiv.querySelector("svg");
-    const svgH = svg ? parseFloat(svg.getAttribute("height")) || svg.getBoundingClientRect().height : 0;
-    const stageH = $("stage").clientHeight;
-    const fitZoom = svgH && stageH ? 0.9 * (stageH * 0.9) / svgH : DRUM_ZOOM;
-    const zoom = Math.max(0.9, Math.min(DRUM_ZOOM, fitZoom));
-    if (zoom > 0.9 + 0.01) { osmd.zoom = zoom; osmd.render(); }
-  }
   extendLedgerLineStems(); // OSMD符桿長度是固定值,不會因為加線音符離譜表遠就自動加長,這裡渲染完手動補上
 
   buildTimeline();
@@ -5980,7 +5967,12 @@ async function ensureTitleFontsLoaded(cfg){
 }
 /* 匯出前先算一張跟實際匯出完全同一套邏輯畫出來的靜態預覽圖(用目前播放位置當代表畫面),
    讓使用者確認樂譜對齊、標題浮水印、背景圖片都對了,再決定要不要真的花時間匯出整支影片 */
+/* 鼓譜只有一行譜表,鋼琴是上下兩行大譜表。匯出時整張樂譜是等比縮放塞進固定的 scoreH,
+   同樣高度下鼓譜的譜表看起來偏小、上下留白多,所以鼓譜匯出時樂譜帶再放大這個倍率。
+   放大後扣掉鼓組面板的空間仍然足夠(橫式 1080 高:樂譜 616、面板上限約 285) */
+const DRUM_EXPORT_SCORE_SCALE = 1.4;
 async function showExportPreview(cfg){
+  if (isDrumScore) cfg.scoreH = Math.round(cfg.scoreH * DRUM_EXPORT_SCORE_SCALE);
   pendingExportCfg = cfg;
   $("formatOverlay").classList.remove("show");
   await ensureTitleFontsLoaded(cfg);
