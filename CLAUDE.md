@@ -2,7 +2,8 @@
 
 ## 技術棧
 - 單檔 HTML，OpenSheetMusicDisplay (OSMD) 2.0.0 渲染 MusicXML
-- Web Audio API 音訊合成，Tone.js 鼓組取樣
+- Web Audio API 音訊合成；鼓組用 Virtuosity Drums 爵士鼓取樣（CC0，raw.githubusercontent FLAC），失敗退回 Tone.js 鼓組再退回合成音
+- 樂器只保留鋼琴、吉他（民謠/古典）、鼓組
 - 匯出影片用 canvas.captureStream + MediaRecorder
 
 ## 絕不能做的事

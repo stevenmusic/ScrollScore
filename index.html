@@ -850,12 +850,8 @@ body.exporting-active .empty-card{
     <div class="tempo-box combo-row">
       <select id="instrument" data-i18n-attr="aria-label:instrumentAria">
         <option value="piano" data-i18n="instPiano">鋼琴</option>
-        <option value="strings" data-i18n="instStrings">小提琴</option>
-        <option value="cello" data-i18n="instCello">大提琴</option>
-        <option value="flute" data-i18n="instFlute">長笛</option>
         <option value="guitar" data-i18n="instGuitar">木吉他(民謠)</option>
         <option value="guitarnylon" data-i18n="instGuitarNylon">古典吉他(尼龍弦)</option>
-        <option value="clarinet" data-i18n="instClarinet">單簧管</option>
         <option value="drum" data-i18n="instDrum">鼓組</option>
       </select>
       <span class="trans-group" role="group" data-i18n-attr="aria-label:transposeAria">
@@ -1148,12 +1144,8 @@ const I18N = {
     settingsGroupTone: "音色與調性",
     instrumentAria: "樂器",
     instPiano: "鋼琴",
-    instStrings: "小提琴",
-    instCello: "大提琴",
-    instFlute: "長笛",
     instGuitar: "木吉他(民謠)",
     instGuitarNylon: "古典吉他(尼龍弦)",
-    instClarinet: "單簧管",
     instDrum: "鼓組",
     transposeAria: "移調",
     transDownAria: "降半音",
@@ -1357,12 +1349,8 @@ const I18N = {
     settingsGroupTone: "Sound & Pitch",
     instrumentAria: "Instrument",
     instPiano: "Piano",
-    instStrings: "Violin",
-    instCello: "Cello",
-    instFlute: "Flute",
     instGuitar: "Acoustic Guitar",
     instGuitarNylon: "Classical Guitar",
-    instClarinet: "Clarinet",
     instDrum: "Drum Kit",
     transposeAria: "Transpose",
     transDownAria: "Semitone down",
@@ -1930,7 +1918,7 @@ async function loadScoreFile(file){
       crossNoteheadEntries[mk] = buildSortedEntries(parsed.crossNoteheadMap[mk]);
     }
     // 依樂譜類型自動切換樂器選單:鼓譜自動選到「鼓組」,離開鼓譜時如果還停在「鼓組」就退回鋼琴,
-    // 其餘一般樂器(小提琴、大提琴...)選擇維持使用者原本的選擇,不強制改動
+    // 鋼琴/吉他之間的選擇維持使用者原本的選擇,不強制改動
     if (isDrumScore) {
       $("instrument").value = "drum";
     } else if (currentInstrument() === "drum") {
@@ -2258,6 +2246,19 @@ async function renderScore(xmlText){
   await osmd.load(finalXml);
   osmd.zoom = 0.9;
   osmd.render();
+  /* 鼓譜只有一行譜表(鋼琴是上下兩行大譜表),同樣 0.9 倍時整個樂譜只剩一半高度、上下留一大片空白。
+     改放大到 DRUM_ZOOM,但不能超出樂譜視窗(#stage 是 overflow:hidden,手機橫向時很矮),
+     用 0.9 倍實際渲染出來的高度等比例推算上限,至少維持 0.9 倍 */
+  if (isDrumScore) {
+    const DRUM_ZOOM = 2.0;
+    resizeKeyboardCanvas(); // 樂器剛被切成鼓組,面板高度要先更新,量到的 #stage 高度才是最終值
+    const svg = scoreDiv.querySelector("svg");
+    const svgH = svg ? parseFloat(svg.getAttribute("height")) || svg.getBoundingClientRect().height : 0;
+    const stageH = $("stage").clientHeight;
+    const fitZoom = svgH && stageH ? 0.9 * (stageH * 0.9) / svgH : DRUM_ZOOM;
+    const zoom = Math.max(0.9, Math.min(DRUM_ZOOM, fitZoom));
+    if (zoom > 0.9 + 0.01) { osmd.zoom = zoom; osmd.render(); }
+  }
   extendLedgerLineStems(); // OSMD符桿長度是固定值,不會因為加線音符離譜表遠就自動加長,這裡渲染完手動補上
 
   buildTimeline();
@@ -2265,7 +2266,7 @@ async function renderScore(xmlText){
   resizeKeyboardCanvas(); // 可見白鍵數量隨這首曲子的音域改變,鍵盤高度要跟著重新算才會維持真實比例
   drawKeyboardLive(0); // resize會清空canvas畫面,不補畫的話鍵盤要等到按下播放才會出現,載入完成後應該馬上看到鍵盤
   updatePlaylineExtent(); // 樂譜換了之後高度可能不同,播放軸要跟著重新貼齊
-  if (events.some(ev => ev.notes.some(n => n.drum))) { loadDrumKit(); loadCymbalKit(); }
+  if (events.some(ev => ev.notes.some(n => n.drum))) { loadDrumKit(); }
   resetScroll();
   $("playBtn").disabled = false;
   $("stopBtn").disabled = false;
@@ -3908,6 +3909,8 @@ function restorePrefs(){
     const el = $(f.id);
     if (el && data[f.id] !== undefined && data[f.id] !== null) el[f.prop] = data[f.id];
   }
+  // 舊版存過已下架的樂器(小提琴、長笛等)時,select 會變成空值,退回鋼琴
+  if (!$("instrument").value) $("instrument").value = "piano";
   // 還原後要補做的畫面同步(這些平常是由各自的 change/input 事件負責的)
   $("scoreBgOpacityVal").textContent = $("scoreBgOpacity").value;
   $("scoreBg").style.opacity = $("scoreBgOpacity").value / 100;
@@ -4416,19 +4419,6 @@ const REAL_INSTRUMENTS = {
     ["C",7],["Ds",7],["Fs",7],["A",7],
     ["C",8]
   ]},
-  strings: { folder: "violin", exactList: [
-    ["A",3],["C",4],["E",4],["G",4],["A",4],["C",5],["E",5],["G",5],
-    ["A",5],["C",6],["E",6],["G",6],["A",6],["C",7]
-  ]},
-  cello: { folder: "cello", exactList: [
-    ["C",2],["D",2],["Ds",2],["E",2],["F",2],["G",2],["Gs",2],["A",2],["As",2],["B",2],
-    ["C",3],["Cs",3],["D",3],["Ds",3],["E",3],["F",3],["Fs",3],["G",3],["Gs",3],["A",3],["As",3],["B",3],
-    ["C",4],["Cs",4],["D",4],["Ds",4],["E",4],["F",4],["Fs",4],["G",4],["Gs",4],["A",4],["B",4],
-    ["C",5]
-  ]},
-  flute: { folder: "flute", exactList: [
-    ["C",4],["E",4],["A",4],["C",5],["E",5],["A",5],["C",6],["E",6],["A",6],["C",7]
-  ]},
   guitar: { folder: "guitar-acoustic", exactList: [
     ["D",2],["Ds",2],["E",2],["F",2],["Fs",2],["G",2],["Gs",2],["A",2],["As",2],["B",2],
     ["C",3],["Cs",3],["D",3],["Ds",3],["E",3],["F",3],["Fs",3],["G",3],["Gs",3],["A",3],["As",3],["B",3],
@@ -4443,15 +4433,12 @@ const REAL_INSTRUMENTS = {
     // 這個取樣庫裡檔名叫 D5.mp3 的檔案,實際錄音音高經比對驗證其實是 D#5(比檔名標示高一個半音),
     // 不是真的 D5——用第三個欄位覆蓋成正確的半音(Ds=3),而不是照檔名誤判成 D 導致播放時整體升半音
     ["Cs",5],["D",5,NOTE_SEMITONE.Ds],["E",5],["Fs",5],["Gs",5],["A",5],["As",5]
-  ]},
-  clarinet: { folder: "clarinet", exactList: [
-    ["D",3],["F",3],["As",3],["D",4],["F",4],["As",4],["D",5],["F",5],["As",5],["D",6],["Fs",6]
   ]}
 };
 const instrumentBuffers = {};   // instKey -> [{midi, buffer}]
 const instrumentLoading = {};   // instKey -> Promise
 
-const INSTRUMENT_I18N_KEY = { piano: "instPiano", strings: "instStrings", cello: "instCello", flute: "instFlute", guitar: "instGuitar", guitarnylon: "instGuitarNylon", clarinet: "instClarinet", drum: "instDrum" };
+const INSTRUMENT_I18N_KEY = { piano: "instPiano", guitar: "instGuitar", guitarnylon: "instGuitarNylon", drum: "instDrum" };
 function loadInstrumentSamples(instKey){
   const cfg = REAL_INSTRUMENTS[instKey];
   if (!cfg) return Promise.resolve();
@@ -5090,7 +5077,7 @@ function playSampledInstrument(instKey, freq, when, dur, legato, pedal, chordAnc
   if (brightFilter) { srcChain.connect(brightFilter); srcChain = brightFilter; }
   srcChain.connect(g);
   /* 聲像 + 殘響送出。鋼琴依音高擺左右(低音左、高音右),其他樂器維持置中——
-     那個位置感是鋼琴弦排列的物理特性,套到小提琴或長笛上反而不對。
+     那個位置感是鋼琴弦排列的物理特性,套到吉他上反而不對。
      踏板踩著時送多一點進殘響:真實鋼琴踏板一踩,所有沒被制音的弦會跟著共鳴,
      整體空間感明顯變大。這是用殘響量去逼近那個效果,不是真的在模擬弦間共振。 */
   connectWithPan(g, (instKey === "piano") ? pianoPanFor(freq) : 0, pedal ? 0.85 : 0.5);
@@ -5155,19 +5142,15 @@ function scheduleNote(freq, when, dur, legato, pedal, chordAnchors, harmonyEndSe
   if (REAL_INSTRUMENTS[inst] && playSampledInstrument(inst, freq, when, dur, legato, pedal, chordAnchors, harmonyEndSec, artic, isGuitarInst ? tech : null, staff)) return;
   // 真實取樣尚未載入完成或缺失時,退回合成音色,絕不會沒有聲音
   switch (inst) {
-    case "strings":  scheduleStrings(freq, when, dur); break;
-    case "cello":    scheduleStrings(freq, when, dur); break;
-    case "flute":    scheduleFlute(freq, when, dur); break;
     case "guitar":   scheduleGuitar(freq, when, dur, harmonyEndSec, tech); break;
     case "guitarnylon": scheduleGuitar(freq, when, dur, harmonyEndSec, tech); break;
-    case "clarinet": scheduleClarinet(freq, when, dur); break;
     default:         schedulePiano(freq, when, dur, legato, pedal, harmonyEndSec, artic, staff);
   }
 }
 
 $("instrument").addEventListener("change", () => {
   ensureAudio();
-  if (currentInstrument() === "drum") { loadDrumKit(); loadCymbalKit(); }
+  if (currentInstrument() === "drum") { loadDrumKit(); }
   else loadInstrumentSamples(currentInstrument());
   resizeKeyboardCanvas(); // 鋼琴鍵盤跟鼓組面板高度邏輯不同,切換樂器時要重新算
   drawKeyboardLive(playing ? currentSec() : pausedAtSec);
@@ -5327,61 +5310,6 @@ function schedulePiano(freq, when, dur, legato, pedal, harmonyEndSec, artic, sta
   scheduled.push(osc, osc2);
 }
 
-/* 弦樂:兩個微調頻鋸齒波製造厚度,慢起音,低通柔化高頻鋸齒噪聲 */
-function scheduleStrings(freq, when, dur){
-  const g = audioCtx.createGain();
-  const lp = audioCtx.createBiquadFilter();
-  lp.type = "lowpass"; lp.frequency.value = Math.min(freq * 5, 6000); lp.Q.value = 0.7;
-  const sustain = Math.max(dur, 0.15);
-  const attack = Math.min(0.09, sustain * 0.35);
-  g.gain.setValueAtTime(0, when);
-  g.gain.linearRampToValueAtTime(0.28, when + attack);
-  g.gain.setValueAtTime(0.28, when + Math.max(sustain - 0.12, attack));
-  g.gain.exponentialRampToValueAtTime(0.0001, when + sustain + 0.35);
-  const detunes = [-6, 0, 6];
-  const oscs = [];
-  for (const d of detunes) {
-    const o = audioCtx.createOscillator();
-    o.type = "sawtooth"; o.frequency.value = freq; o.detune.value = d;
-    o.connect(lp); o.start(when); o.stop(when + sustain + 0.4);
-    oscs.push(o);
-  }
-  lp.connect(g); g.connect(masterGain);
-  scheduled.push(...oscs);
-}
-
-/* 長笛:正弦波為主 + 微量高頻噪聲模擬氣音,柔軟包絡 */
-function scheduleFlute(freq, when, dur){
-  const g = audioCtx.createGain();
-  const sustain = Math.max(dur, 0.12);
-  const attack = Math.min(0.06, sustain * 0.4);
-  g.gain.setValueAtTime(0, when);
-  g.gain.linearRampToValueAtTime(0.34, when + attack);
-  g.gain.setValueAtTime(0.34, when + Math.max(sustain, attack + 0.01));
-  g.gain.exponentialRampToValueAtTime(0.0001, when + sustain + 0.2);
-  const o = audioCtx.createOscillator();
-  o.type = "sine"; o.frequency.value = freq;
-  o.connect(g);
-  const o2 = audioCtx.createOscillator();
-  o2.type = "sine"; o2.frequency.value = freq * 2; 
-  const g2 = audioCtx.createGain(); g2.gain.value = 0.06;
-  o2.connect(g2); g2.connect(g);
-  // 氣音噪聲層
-  const len = Math.floor(audioCtx.sampleRate * (sustain + 0.1));
-  const buf = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
-  const d = buf.getChannelData(0);
-  for (let i = 0; i < len; i++) d[i] = (Math.random()*2-1);
-  const noise = audioCtx.createBufferSource(); noise.buffer = buf;
-  const hp = audioCtx.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = 3500;
-  const ng = audioCtx.createGain(); ng.gain.value = 0.02;
-  noise.connect(hp); hp.connect(ng); ng.connect(masterGain);
-  g.connect(masterGain);
-  o.start(when); o2.start(when); noise.start(when);
-  const stopAt = when + sustain + 0.3;
-  o.stop(stopAt); o2.stop(stopAt); noise.stop(stopAt);
-  scheduled.push(o, o2, noise);
-}
-
 /* 木吉他/撥奏:快速起音、快速衰減,方波+三角波堆疊高次泛音 */
 function scheduleGuitar(freq, when, dur, harmonyEndSec, tech){
   const g = audioCtx.createGain();
@@ -5445,122 +5373,83 @@ function scheduleGuitar(freq, when, dur, harmonyEndSec, tech){
   if (vibLfo) scheduled.push(vibLfo);
 }
 
-/* 單簧管:方波為主(奇次泛音特性),中等延音,柔和起音 */
-function scheduleClarinet(freq, when, dur){
-  const g = audioCtx.createGain();
-  const lp = audioCtx.createBiquadFilter();
-  lp.type = "lowpass"; lp.frequency.value = Math.min(freq * 5.5, 6500);
-  const sustain = Math.max(dur, 0.14);
-  const attack = Math.min(0.05, sustain * 0.3);
-  g.gain.setValueAtTime(0, when);
-  g.gain.linearRampToValueAtTime(0.3, when + attack);
-  g.gain.setValueAtTime(0.3, when + Math.max(sustain - 0.1, attack));
-  g.gain.exponentialRampToValueAtTime(0.0001, when + sustain + 0.22);
-  const o = audioCtx.createOscillator();
-  o.type = "square"; o.frequency.value = freq;
-  o.connect(lp); lp.connect(g); g.connect(masterGain);
-  o.start(when);
-  const stopAt = when + sustain + 0.3;
-  o.stop(stopAt);
-  scheduled.push(o);
-}
-
-/* ── 鼓音色引擎:原聲取樣 + 銅鈸合成 ───────── */
+/* ── 鼓音色引擎:真實爵士鼓取樣 + 合成備援 ───────── */
+/* 主音色改用 Virtuosity Drums(Versilian Studios,CC0 授權、可商用免標註,跟先前用的 VCSL 銅鈸同一個作者):
+   在波士頓 Virtuosity Musical Instruments 用鼓棒實錄的一整套當代爵士鼓。取「mid」麥克風位置
+   (整套鼓一起收音的中距離立體聲),每個鼓件都是同一套鼓、同一個房間,聽起來才是一組真的鼓,
+   不像之前 Tone.js 鼓組 + VCSL 音樂廳銅鈸是兩套不同錄音拼起來的。
+   原始檔是 48kHz 立體聲 FLAC,各瀏覽器(含 iOS Safari 11+)的 decodeAudioData 都能解。
+   每個鼓件只挑一個中強力度層;大鼓/小鼓/hi-hat/ride 這種會連續快速敲的放兩個 round-robin,
+   避免機關槍般完全相同的重複聲。下列檔名都逐一 fetch 驗證過存在(HTTP 200、fLaC 檔頭) */
+const JAZZ_KIT_URL = "https://raw.githubusercontent.com/studiorack/virtuosity-drums/main/Samples/mid/";
+const JAZZ_KIT = {
+  kick:     ["kick/mid_kick_snoff_vl3_rr1.flac", "kick/mid_kick_snoff_vl3_rr2.flac"],
+  snare:    ["snare/mid_snare_center_vl28.flac", "snare/mid_snare_center_vl31.flac"],
+  xstick:   ["snare/mid_snare_crossstick_vl12.flac"],
+  hhClosed: ["hh/mid_hh_closed_vl3_rr1.flac", "hh/mid_hh_closed_vl3_rr2.flac"],
+  hhPedal:  ["hh/mid_hh_pedal_vl2_rr1.flac"],
+  hhOpen:   ["hh/mid_hh_open_vl3_rr1.flac"],
+  ride:     ["ride/mid_ride_ride_vl2_rr1.flac", "ride/mid_ride_ride_vl2_rr2.flac"],
+  rideBell: ["ride/mid_ride_bell_vl2_rr1.flac"],
+  crash:    ["crash/mid_crash_crash_vl2_rr1.flac"],
+  tomHigh:  ["htom/mid_htom_center_vl12.flac"],
+  tomLow:   ["ltom/mid_ltom_center_vl12.flac"]
+};
+/* 爵士鼓取樣整個鼓件都抓不到時,退回原本的 Tone.js 原聲鼓組(有對應檔案的鼓件才有),再不行才用合成音 */
 const KIT_URL = "https://tonejs.github.io/audio/drum-samples/acoustic-kit/";
-const kitBuffers = {};   // name → AudioBuffer
+const KIT_FALLBACK = { kick: "kick", snare: "snare", hhClosed: "hihat", hhPedal: "hihat", tomHigh: "tom1", tomLow: "tom3" };
+const kitBuffers = {};   // name → [{buffer, norm}]
+const kitRoundRobin = {};
 let kitLoading = null;
+
+/* mid 麥克風保留的是真實的相對音量(大鼓峰值只有 0.09、hi-hat 0.03、小鼓 0.39),
+   直接播放的話混音比例完全由麥克風擺位決定。先量峰值正規化,混音比例統一交給 scheduleDrum 裡的 gain */
+async function fetchDrumBuffer(url){
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("HTTP " + res.status);
+  const buffer = await audioCtx.decodeAudioData(await res.arrayBuffer());
+  let peak = 0;
+  for (let c = 0; c < buffer.numberOfChannels; c++) {
+    const d = buffer.getChannelData(c);
+    for (let i = 0; i < d.length; i++) { const a = Math.abs(d[i]); if (a > peak) peak = a; }
+  }
+  return { buffer, norm: peak > 0.001 ? 0.9 / peak : 1 };
+}
 
 function loadDrumKit(){
   if (kitLoading) return kitLoading;
   ensureAudio();
-  const files = ["kick","snare","hihat","tom1","tom2","tom3"];
   setStatus(T("statusLoadingDrumKit"));
-  kitLoading = Promise.all(files.map(async name => {
-    try {
-      const res = await fetch(KIT_URL + name + ".mp3");
-      const arr = await res.arrayBuffer();
-      kitBuffers[name] = await audioCtx.decodeAudioData(arr);
-    } catch(e){ /* 載入失敗時該鼓件退回合成音 */ }
+  kitLoading = Promise.all(Object.entries(JAZZ_KIT).map(async ([name, files]) => {
+    const got = (await Promise.all(files.map(f => fetchDrumBuffer(JAZZ_KIT_URL + f).catch(() => null)))).filter(Boolean);
+    if (!got.length && KIT_FALLBACK[name]) {
+      try { got.push(await fetchDrumBuffer(KIT_URL + KIT_FALLBACK[name] + ".mp3")); } catch (e) { /* 再退回合成音 */ }
+    }
+    if (got.length) kitBuffers[name] = got;
   })).then(() => setStatus(T("statusDrumKitReady")));
   return kitLoading;
 }
 
-/* 銅鈸類原本完全是合成音,改用 VCSL(Versilian Community Sample Library,CC0 授權、可商用免標註)
-   的真實演奏錄音取代,kick/snare/tom 已經是同一套鼓的真實取樣不用動,銅鈸是目前唯一還在用合成音的部分 */
-const VCSL_URL = "https://raw.githubusercontent.com/sgossner/VCSL/master/";
-const CYMBAL_SAMPLES = {
-  crash:     "Idiophones/Struck%20Idiophones/Clash%20Cymbals%201/cymbal_crash1_ff2.wav",
-  ride:      "Idiophones/Struck%20Idiophones/Suspended%20Cymbal%201/susCymb1_hit_stick_f1.wav",
-  rideBell:  "Idiophones/Struck%20Idiophones/Suspended%20Cymbal%201/susCymb1_hit_bell_mf1.wav",
-  hihatOpen: "Idiophones/Struck%20Idiophones/Hi-Hat%20Cymbal/HiHat_HitO_rr1_Mid.wav"
-};
-const cymbalBuffers = {};   // name → AudioBuffer
-let cymbalLoading = null;
-
-function loadCymbalKit(){
-  if (cymbalLoading) return cymbalLoading;
-  ensureAudio();
-  cymbalLoading = Promise.all(Object.entries(CYMBAL_SAMPLES).map(async ([name, path]) => {
-    try {
-      const res = await fetch(VCSL_URL + path);
-      const arr = await res.arrayBuffer();
-      cymbalBuffers[name] = await audioCtx.decodeAudioData(arr);
-    } catch(e){ /* 載入失敗時該銅鈸退回合成音 */ }
-  }));
-  return cymbalLoading;
-}
-
-/* 銅鈸取樣是音樂廳實錄,自然延音拖得比一般鼓組取樣長很多(原始檔案殘響甚至長達十幾秒),
-   直接整段播放在快速的段落裡會糊成一片,所以要主動包一個振幅包絡收尾,而不是照樣放給它自然結束 */
-function playCymbalSample(name, when, gain, sustainSec, rate){
-  const buf = cymbalBuffers[name];
-  if (!buf) return false;
+/* sustainSec:銅鈸/開放 hi-hat 的真實錄音自然延音長達 5~8 秒,快速段落直接整段播會糊成一片,
+   要主動包一個振幅包絡收尾;鼓皮類不傳,讓它自然結束 */
+function playSample(name, when, gain, rate, sustainSec){
+  const list = kitBuffers[name];
+  if (!list || !list.length) return false;
+  const idx = kitRoundRobin[name] = ((kitRoundRobin[name] || 0) + 1) % list.length;
+  const { buffer, norm } = list[idx];
   const src = audioCtx.createBufferSource();
-  src.buffer = buf;
+  src.buffer = buffer;
   if (rate) src.playbackRate.value = rate;
   const g = audioCtx.createGain();
-  g.gain.setValueAtTime(gain, when);
-  g.gain.setValueAtTime(gain, when + sustainSec * 0.5);
-  g.gain.exponentialRampToValueAtTime(0.0001, when + sustainSec);
+  const level = gain * norm;
+  g.gain.setValueAtTime(level, when);
+  if (sustainSec) {
+    g.gain.setValueAtTime(level, when + sustainSec * 0.5);
+    g.gain.exponentialRampToValueAtTime(0.0001, when + sustainSec);
+  }
   src.connect(g); g.connect(masterGain);
   src.start(when);
-  src.stop(when + sustainSec + 0.1);
-  scheduled.push(src);
-  return true;
-}
-
-function playSample(name, when, gain, rate){
-  const buf = kitBuffers[name];
-  if (!buf) return false;
-  const src = audioCtx.createBufferSource();
-  src.buffer = buf;
-  if (rate) src.playbackRate.value = rate;
-  const g = audioCtx.createGain();
-  g.gain.value = gain;
-  src.connect(g); g.connect(masterGain);
-  src.start(when);
-  scheduled.push(src);
-  return true;
-}
-
-/* Rim click 直接借用同一套小鼓取樣本身(跟 kick/snare/tom 是同一次錄音、同一個空間),
-   不是憑空合成一個不相干的音色 —— 只是把它裁得很短(切掉鼓皮鼓弦共鳴的延音尾巴,只留下打擊瞬間)、
-   加高通濾掉低頻的「蓬」聲、拉高一點點音高(模擬打在鼓框而不是鼓皮上),這樣音色才會跟其他鼓件
-   聽起來像同一套鼓,而不是另外拼上去的東西 */
-function playRimClickFromSample(when, gain){
-  const buf = kitBuffers["snare"];
-  if (!buf) return false;
-  const src = audioCtx.createBufferSource();
-  src.buffer = buf;
-  src.playbackRate.value = 1.3;
-  const hp = audioCtx.createBiquadFilter();
-  hp.type = "highpass"; hp.frequency.value = 1100;
-  const g = audioCtx.createGain();
-  g.gain.setValueAtTime(gain, when);
-  g.gain.exponentialRampToValueAtTime(0.0001, when + 0.045);
-  src.connect(hp); hp.connect(g); g.connect(masterGain);
-  src.start(when);
-  src.stop(when + 0.07);
+  if (sustainSec) src.stop(when + sustainSec + 0.1);
   scheduled.push(src);
   return true;
 }
@@ -5607,31 +5496,31 @@ function scheduleDrum(key, when){
     case 35: case 36: // Kick
       if (!playSample("kick", when, 1.0)) synthKick(when); break;
     case 38: case 40: // Snare
-      if (!playSample("snare", when, 0.95)) synthSnare(when, 0.95); break;
-    case 37:          // Side stick / rim click:優先裁短同一套小鼓取樣(音色才會跟整組鼓一致),
-      if (!playRimClickFromSample(when, 0.85)) synthRimClick(when, 0.7); break; // 取樣載入失敗才退回合成音
+      if (!playSample("snare", when, 0.9)) synthSnare(when, 0.95); break;
+    case 37:          // Side stick / rim click:爵士鼓取樣裡有真實的 cross stick 錄音,不必再拿小鼓取樣裁短模擬
+      if (!playSample("xstick", when, 0.75)) synthRimClick(when, 0.7); break;
     case 39:          // Clap → snare 替代
-      playSample("snare", when, 0.8) || synthSnare(when, 0.8); break;
+      playSample("snare", when, 0.75) || synthSnare(when, 0.8); break;
     case 42:          // Closed hi-hat
-      if (!playSample("hihat", when, 0.75)) synthCymbal(when, 0.06, 8000, 0.25, 0.25); break;
+      if (!playSample("hhClosed", when, 0.5)) synthCymbal(when, 0.06, 8000, 0.25, 0.25); break;
     case 44:          // Pedal hi-hat
-      if (!playSample("hihat", when, 0.45, 1.1)) synthCymbal(when, 0.05, 8000, 0.16, 0.2); break;
-    case 46:          // Open hi-hat:優先用 VCSL 真實開鈸錄音
-      if (!playCymbalSample("hihatOpen", when, 0.8, 0.45)) synthCymbal(when, 0.45, 7000, 0.28, 0.4); break;
+      if (!playSample("hhPedal", when, 0.4)) synthCymbal(when, 0.05, 8000, 0.16, 0.2); break;
+    case 46:          // Open hi-hat
+      if (!playSample("hhOpen", when, 0.55, 0, 0.5)) synthCymbal(when, 0.45, 7000, 0.28, 0.4); break;
     case 41: case 43: // Floor toms
-      if (!playSample("tom3", when, 0.95)) synthTom(when, 90); break;
-    case 45: case 47: // Mid toms
-      if (!playSample("tom2", when, 0.95)) synthTom(when, 130); break;
+      if (!playSample("tomLow", when, 0.85)) synthTom(when, 90); break;
+    case 45: case 47: // Mid toms:這套爵士鼓只有高、低兩顆中鼓,中音用高音鼓稍微降調
+      if (!playSample("tomHigh", when, 0.85, 0.87)) synthTom(when, 130); break;
     case 48: case 50: // High toms
-      if (!playSample("tom1", when, 0.95)) synthTom(when, 175); break;
-    case 49: case 57: case 55: case 52: // Crash / splash / china:優先用 VCSL 真實鈸片錄音
-      if (!playCymbalSample("crash", when, 0.85, 1.8)) synthCymbal(when, 1.6, 5500, 0.4, 0.45); break;
-    case 51: case 59: // Ride:爵士鼓的主要律動聲部,優先用真實 suspended cymbal 錄音才會有那種會「唱歌」的質感
-      if (!playCymbalSample("ride", when, 0.8, 1.4)) synthCymbal(when, 1.3, 8500, 0.22, 0.55); break;
-    case 53:          // Ride bell:鈴心敲擊,優先用真實錄音的鈴心版本,音色乾淨集中
-      if (!playCymbalSample("rideBell", when, 0.85, 0.7)) synthCymbal(when, 0.6, 11000, 0.32, 0.12); break;
+      if (!playSample("tomHigh", when, 0.85)) synthTom(when, 175); break;
+    case 49: case 57: case 55: case 52: // Crash / splash / china
+      if (!playSample("crash", when, 0.7, 0, 2.0)) synthCymbal(when, 1.6, 5500, 0.4, 0.45); break;
+    case 51: case 59: // Ride:爵士鼓的主要律動聲部
+      if (!playSample("ride", when, 0.55, 0, 1.6)) synthCymbal(when, 1.3, 8500, 0.22, 0.55); break;
+    case 53:          // Ride bell
+      if (!playSample("rideBell", when, 0.6, 0, 0.9)) synthCymbal(when, 0.6, 11000, 0.32, 0.12); break;
     default:
-      playSample("snare", when, 0.7) || synthSnare(when, 0.7);
+      playSample("snare", when, 0.65) || synthSnare(when, 0.7);
   }
 }
 
