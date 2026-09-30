@@ -5622,6 +5622,9 @@ function synthCymbal(when, decay, hpFreq, gain, noiseMix){
   scheduled.push(noiseSrc);
 }
 
+/* 各鼓件的 gain 是用響度計(BS.1770 LUFS,取 400ms 瞬時響度)量過之後定的,不是看峰值:
+   以小鼓 v4 為基準,大鼓 ≈ 0(大鼓取樣本身已做過小喇叭補強)、中鼓/落地鼓 ≈ 0、
+   開放 hi-hat/ride bell/crash/邊擊 −3~−5、閉合 hi-hat/ride −6~−7、踩 hi-hat −10 */
 function scheduleDrum(key, when, vel){
   vel = vel || 4;
   const V = DRUM_VEL_GAIN[vel]; // 合成備援音色沒有力度層,直接用倍率
@@ -5637,27 +5640,27 @@ function scheduleDrum(key, when, vel){
     case 42:          // Closed hi-hat
       if (!playSample("hhClosed", when, 0.55, 0, 0, vel)) synthCymbal(when, 0.06, 8000, 0.25 * V, 0.25); break;
     case 44:          // Pedal hi-hat
-      if (!playSample("hhPedal", when, 0.45, 0, 0, vel)) synthCymbal(when, 0.05, 8000, 0.16 * V, 0.2); break;
+      if (!playSample("hhPedal", when, 0.63, 0, 0, vel)) synthCymbal(when, 0.05, 8000, 0.16 * V, 0.2); break;
     case 46:          // Open hi-hat
       if (!playSample("hhOpen", when, 0.65, 0, 0.6, vel)) synthCymbal(when, 0.45, 7000, 0.28 * V, 0.4); break;
     /* 自有鼓組只有一顆中鼓、一顆落地鼓,六種 GM 中鼓/落地鼓音高用變調區分(每級約差一到兩個半音),
        記譜上最常用的高音鼓(48)、中音鼓(47)、落地鼓(41/43)都維持在原音高附近,音色失真最少 */
     case 50:          // High tom
-      if (!playSample("tomRack", when, 1.0, 1.06, 0, vel)) synthTom(when, 190); break;
+      if (!playSample("tomRack", when, 0.8, 1.06, 0, vel)) synthTom(when, 190); break;
     case 48:          // Hi-mid tom
-      if (!playSample("tomRack", when, 1.0, 1.0, 0, vel)) synthTom(when, 175); break;
+      if (!playSample("tomRack", when, 0.8, 1.0, 0, vel)) synthTom(when, 175); break;
     case 47:          // Low-mid tom
-      if (!playSample("tomRack", when, 1.0, 0.89, 0, vel)) synthTom(when, 150); break;
+      if (!playSample("tomRack", when, 0.8, 0.89, 0, vel)) synthTom(when, 150); break;
     case 45:          // Low tom
-      if (!playSample("tomRack", when, 1.0, 0.84, 0, vel)) synthTom(when, 130); break;
+      if (!playSample("tomRack", when, 0.8, 0.84, 0, vel)) synthTom(when, 130); break;
     case 43:          // High floor tom
-      if (!playSample("tomFloor", when, 1.0, 1.0, 0, vel)) synthTom(when, 100); break;
+      if (!playSample("tomFloor", when, 0.82, 1.0, 0, vel)) synthTom(when, 100); break;
     case 41:          // Low floor tom
-      if (!playSample("tomFloor", when, 1.0, 0.89, 0, vel)) synthTom(when, 85); break;
+      if (!playSample("tomFloor", when, 0.82, 0.89, 0, vel)) synthTom(when, 85); break;
     case 49: case 57: case 55: case 52: // Crash / splash / china
       if (!playSample("crash", when, 0.9, 0, 2.2, vel)) synthCymbal(when, 1.6, 5500, 0.4 * V, 0.45); break;
     case 51: case 59: // Ride:爵士鼓的主要律動聲部
-      if (!playSample("ride", when, 0.6, 0, 1.8, vel)) synthCymbal(when, 1.3, 8500, 0.22 * V, 0.55); break;
+      if (!playSample("ride", when, 0.68, 0, 1.8, vel)) synthCymbal(when, 1.3, 8500, 0.22 * V, 0.55); break;
     case 53:          // Ride bell
       if (!playSample("rideBell", when, 0.7, 0, 1.2, vel)) synthCymbal(when, 0.6, 11000, 0.32 * V, 0.12); break;
     default:
