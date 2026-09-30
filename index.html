@@ -5476,9 +5476,10 @@ function scheduleGuitar(freq, when, dur, harmonyEndSec, tech){
      依實測峰值分出三個力度層,比例對齊 DW 鼓組(v3:v4:v5 ≈ 0.36:0.64:1)
    兩套在 repo 裡都已經轉成裁尾 16-bit / 48kHz FLAC,並把 v5 峰值統一調到約 0.5,
    所以這裡不做峰值正規化,只乘一個整體增益,力度差異與鼓件平衡才會保留下來。
-   優先從 GitHub Pages 載入(跟 ScrollScore 同網域),Pages 沒開或失敗就改用 raw.githubusercontent.com */
+   用到的檔案直接放在 ScrollScore 自己的 drums/ 資料夾(跟網頁同一個網域,不依賴其他 repo);
+   從本機檔案開啟等 drums/ 讀不到的情況,才改從 drum-samples repo 的 raw.githubusercontent.com 載入 */
 const OWN_KIT_BASES = [
-  "https://stevenmusic.github.io/drum-samples/web/",
+  "drums/",
   "https://raw.githubusercontent.com/stevenmusic/drum-samples/main/web/"
 ];
 const OWN_KIT = {           // name → [檔名前綴, 每個力度層的 round-robin 數]
