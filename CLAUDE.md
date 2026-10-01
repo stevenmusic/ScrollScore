@@ -38,6 +38,7 @@
 - 試過吉他繞過 loudnessComp、改用自己的母帶段（慢起音壓縮 + 補增益，像鼓那樣）：mf→ff 還是只有約 3dB（瓶頸是最後的限幅器上限，不是壓縮器），整體要小聲 2.5dB 才換到 pp→ff 多 2dB，不划算，維持走 masterGain → loudnessComp。也不要把門檻設在音量之下（−26dB、2:1 會把所有大小聲差砍半）
 - 測試：headless Chromium 錄 masterOut（ScriptProcessor），jsdelivr 在雲端環境被擋，要從 npm 拿 OSMD/JSZip 再用 page.route 攔截
 - 樂器只保留鋼琴、吉他（民謠、古典兩把）、鼓組
+- 民謠吉他、古典吉他目前標「開發中」並停用（使用者要求）：樂器選單的 <option disabled>，文字加「・開發中」；舊設定存了吉他時退回鋼琴。程式與取樣都保留，拿掉 disabled 即可恢復
 - 匯出影片用 canvas.captureStream + MediaRecorder
 
 ## Git 流程

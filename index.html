@@ -850,8 +850,9 @@ body.exporting-active .empty-card{
     <div class="tempo-box combo-row">
       <select id="instrument" data-i18n-attr="aria-label:instrumentAria">
         <option value="piano" data-i18n="instPiano">鋼琴</option>
-        <option value="guitar" data-i18n="instGuitar">木吉他(民謠)</option>
-        <option value="guitarnylon" data-i18n="instGuitarNylon">古典吉他(尼龍弦)</option>
+        <!-- 兩把吉他的音色還在開發中(使用者要求先停用),程式與取樣都保留,拿掉 disabled 就能恢復 -->
+        <option value="guitar" data-i18n="instGuitar" disabled>木吉他(民謠)</option>
+        <option value="guitarnylon" data-i18n="instGuitarNylon" disabled>古典吉他(尼龍弦)</option>
         <option value="drum" data-i18n="instDrum">鼓組</option>
       </select>
       <span class="trans-group" role="group" data-i18n-attr="aria-label:transposeAria">
@@ -1140,8 +1141,8 @@ const I18N = {
     settingsGroupTone: "音色與調性",
     instrumentAria: "樂器",
     instPiano: "鋼琴",
-    instGuitar: "木吉他(民謠)",
-    instGuitarNylon: "古典吉他(尼龍弦)",
+    instGuitar: "木吉他(民謠)・開發中",
+    instGuitarNylon: "古典吉他(尼龍弦)・開發中",
     instDrum: "鼓組",
     transposeAria: "移調",
     transDownAria: "降半音",
@@ -1345,8 +1346,8 @@ const I18N = {
     settingsGroupTone: "Sound & Pitch",
     instrumentAria: "Instrument",
     instPiano: "Piano",
-    instGuitar: "Acoustic Guitar",
-    instGuitarNylon: "Classical Guitar",
+    instGuitar: "Acoustic Guitar (in development)",
+    instGuitarNylon: "Classical Guitar (in development)",
     instDrum: "Drum Kit",
     transposeAria: "Transpose",
     transDownAria: "Semitone down",
@@ -4414,7 +4415,7 @@ function restorePrefs(){
     if (el && data[f.id] !== undefined && data[f.id] !== null) el[f.prop] = data[f.id];
   }
   // 舊版存過已下架的樂器(小提琴、長笛等)時,select 會變成空值,退回鋼琴
-  if (!$("instrument").value) $("instrument").value = "piano";
+  if (!$("instrument").value || $("instrument").selectedOptions[0]?.disabled) $("instrument").value = "piano";   // 開發中(停用)的樂器也退回鋼琴
   // 還原後要補做的畫面同步(這些平常是由各自的 change/input 事件負責的)
   $("scoreBgOpacityVal").textContent = $("scoreBgOpacity").value;
   $("scoreBg").style.opacity = $("scoreBgOpacity").value / 100;
