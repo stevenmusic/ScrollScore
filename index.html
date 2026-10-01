@@ -2108,8 +2108,8 @@ function transposeMusicXML(xmlText, semitones){
   return new XMLSerializer().serializeToString(doc);
 }
 
-/* 鼓譜:同一拍同時有大鼓 + hi-hat(手打的閉合/開放 hi-hat)時,符桿一律朝上,
-   開放 hi-hat 的「o」這類演奏記號(articulations / technical)放在音符與符桿上方。
+/* 鼓譜:同一拍同時有大鼓 + hi-hat(手打的閉合/開放 hi-hat)時,符桿一律朝上;
+   所有音符的演奏記號(articulations / technical,例如開放 hi-hat 的「o」)一律放在上方。
    OSMD 預設把演奏記號放在符頭那一側,符桿朝上時「o」會跑到大鼓下面(使用者要求改)。
    鼓件辨識:midi-unpitched(1 起算,減 1 才是 GM)優先,沒有就看顯示位置(大鼓 E4/F4、hi-hat G5) */
 function drumStemFixMusicXML(xmlText){
@@ -2155,10 +2155,113 @@ function drumStemFixCore(xmlText){
           n.insertBefore(stem, before || null);
         }
         if (stem.textContent !== "up") { stem.textContent = "up"; changed = true; }
-        const nt = kid(n, "notations");
-        if (nt) for (const box of elems(nt)) {
-          if (box.nodeName !== "articulations" && box.nodeName !== "technical") continue;
-          for (const a of elems(box)) if (a.getAttribute("placement") !== "above") { a.setAttribute("placement", "above"); changed = true; }
+      }
+    }
+    // 沒寫符桿方向的鼓譜音符:一律朝上(單聲部鼓譜的慣例;OSMD 自己決定的話會照音高,小鼓以上變成朝下)。
+    // 有寫的照原檔,作者刻意把腳(大鼓)分成朝下的第二聲部時不動
+    for (const g of groups) {
+      if (g.some(n => kid(n, "stem"))) continue;
+      for (const n of g) {
+        const stem = doc.createElement("stem"); stem.textContent = "up";
+        n.insertBefore(stem, AFTER_STEM.map(t => kid(n, t)).find(Boolean) || null); changed = true;
+      }
+    }
+    // 鼓譜的演奏記號(開放 hi-hat 的「o」、重音…)一律在上方,不管這拍有哪些鼓件(使用者要求:畫面與匯出影片都一樣)
+    for (const g of groups) for (const n of g) {
+      const nt = kid(n, "notations");
+      if (nt) for (const box of elems(nt)) {
+        if (box.nodeName !== "articulations" && box.nodeName !== "technical") continue;
+        for (const a of elems(box)) if (a.getAttribute("placement") !== "above") { a.setAttribute("placement", "above"); changed = true; }
+      }
+    }
+  }
+  return changed ? new XMLSerializer().serializeToString(doc) : xmlText;
+}
+
+/* 有音高樂器(鋼琴、吉他)的符桿方向:原檔沒寫 <stem> 時 OSMD 一律朝上,不符合記譜慣例。只補沒寫的,有寫的照原檔:
+   - 同一譜表、同一小節有兩個以上聲部:最小的聲部(上聲部)朝上,其他朝下
+   - 只有一個聲部:看離中線最遠的音(和弦取最高、最低兩音比較;同一組符尾的音一起看),在中線以上朝下、以下朝上,一樣遠朝下
+   中線依譜號:高音譜號 B4、低音譜號 D3、中音譜號 C4,含 clef-octave-change(吉他的高音譜號下方 8 是 B3)。
+   鼓譜(percussion)由 drumStemFixMusicXML 處理,TAB 譜不動;倚音不動 */
+function stemConventionMusicXML(xmlText){
+  try { return stemConventionCore(xmlText); }
+  catch (e) { console.warn("stemConventionMusicXML 失敗,照原檔顯示:", e); return xmlText; }
+}
+function stemConventionCore(xmlText){
+  if (!/<note[\s>]/.test(xmlText)) return xmlText;
+  const doc = new DOMParser().parseFromString(xmlText, "text/xml");
+  const elems = el => { const out = []; if (!el || !el.childNodes) return out; for (const c of Array.from(el.childNodes)) if (c.nodeType === 1) out.push(c); return out; };
+  const kid = (el, name) => { for (const c of elems(el)) if (c.nodeName === name) return c; return null; };
+  const txt = (el, name) => { const c = kid(el, name); return c ? c.textContent.trim() : null; };
+  const STEP = { C: 0, D: 1, E: 2, F: 3, G: 4, A: 5, B: 6 };
+  const NO_STEM = new Set(["whole", "breve", "long", "maxima"]);
+  const AFTER_STEM = ["notehead", "notehead-text", "staff", "beam", "notations", "lyric", "play", "listen"];
+  const middleOf = clef => {   // 中線的音位(C0 = 0,每個音名 +1、每個八度 +7);null = 打擊/TAB 不處理
+    const sign = txt(clef, "sign"), line = parseInt(txt(clef, "line") || "0", 10), oct = parseInt(txt(clef, "clef-octave-change") || "0", 10);
+    const base = sign === "G" ? 32 : sign === "F" ? 24 : sign === "C" ? 28 : null;   // G4 / F3 / C4 所在的線
+    if (base == null) return null;
+    const L = line || (sign === "G" ? 2 : sign === "F" ? 4 : 3);
+    return base + (3 - L) * 2 + oct * 7;
+  };
+  let changed = false;
+  for (const part of Array.from(doc.getElementsByTagName("part"))) {
+    const middle = { 1: 34 };   // 譜表 → 中線音位(預設高音譜號)
+    for (const m of Array.from(part.getElementsByTagName("measure"))) {
+      // 依序走一遍:更新譜號、把音符分成「和弦組」並記下譜表/聲部/符尾組
+      const groups = [];
+      const beamOpen = {};   // 聲部 → 目前的符尾組 id
+      let beamId = 0;
+      for (const el of elems(m)) {
+        if (el.nodeName === "attributes") {
+          for (const c of elems(el)) if (c.nodeName === "clef") middle[parseInt(c.getAttribute("number") || "1", 10)] = middleOf(c);
+          continue;
+        }
+        if (el.nodeName !== "note") continue;
+        if (kid(el, "chord") && groups.length) { groups[groups.length - 1].notes.push(el); continue; }
+        const staff = parseInt(txt(el, "staff") || "1", 10), voice = txt(el, "voice") || "1";
+        const g = { notes: [el], staff, voice, mid: middle[staff] !== undefined ? middle[staff] : 34, beam: null };
+        const b1 = elems(el).find(c => c.nodeName === "beam" && (c.getAttribute("number") || "1") === "1");
+        const key = staff + "/" + voice;
+        if (b1) {
+          const v = b1.textContent.trim();
+          if (v === "begin" || beamOpen[key] == null) beamOpen[key] = ++beamId;
+          g.beam = beamOpen[key];
+          if (v === "end") beamOpen[key] = null;
+        }
+        groups.push(g);
+      }
+      // 這小節每個譜表有幾個聲部(休止符也算)
+      const voicesOn = {};
+      for (const g of groups) (voicesOn[g.staff] = voicesOn[g.staff] || new Set()).add(g.voice);
+      const usable = g => g.mid != null && !g.notes.some(n => kid(n, "rest") || kid(n, "grace") || kid(n, "unpitched")) && !NO_STEM.has(txt(g.notes[0], "type") || "");
+      const pos = n => { const p = kid(n, "pitch"); return p ? STEP[txt(p, "step")] + 7 * parseInt(txt(p, "octave"), 10) : null; };
+      // 決定方向:符尾組一起決定
+      const decided = new Map();
+      const decide = list => {
+        const vs = voicesOn[list[0].staff];
+        if (vs && vs.size > 1) {
+          const top = [...vs].sort((a, b) => (parseInt(a, 10) || 0) - (parseInt(b, 10) || 0))[0];
+          return list[0].voice === top ? "up" : "down";
+        }
+        let hi = -1e9, lo = 1e9;
+        for (const g of list) for (const n of g.notes) { const p = pos(n); if (p == null) continue; hi = Math.max(hi, p - g.mid); lo = Math.min(lo, p - g.mid); }
+        if (hi === -1e9) return null;
+        return Math.abs(hi) >= Math.abs(lo) ? (hi >= 0 ? "down" : "up") : (lo >= 0 ? "down" : "up");
+      };
+      const byBeam = new Map();
+      for (const g of groups) if (g.beam != null) (byBeam.get(g.beam) || byBeam.set(g.beam, []).get(g.beam)).push(g);
+      for (const g of groups) {
+        if (!usable(g) || g.notes.some(n => kid(n, "stem"))) continue;
+        const list = g.beam != null ? byBeam.get(g.beam).filter(usable) : [g];
+        // 同一組符尾裡只要有一個音原檔寫了方向,就整組照那個方向
+        const given = list.flatMap(x => x.notes).map(n => kid(n, "stem")).find(Boolean);
+        let dir = given ? given.textContent.trim() : (decided.get(g.beam) || decide(list));
+        if (!dir) continue;
+        if (g.beam != null) decided.set(g.beam, dir);
+        for (const n of g.notes) {
+          const stem = doc.createElement("stem"); stem.textContent = dir;
+          n.insertBefore(stem, AFTER_STEM.map(t => kid(n, t)).find(Boolean) || null);
+          changed = true;
         }
       }
     }
@@ -2397,7 +2500,7 @@ async function renderScore(xmlText){
   osmd.EngravingRules.AutoGenerateMultipleRestMeasuresFromRestMeasures = mergeRests;
 
   const transposedXml = transposeSemitones ? transposeMusicXML(xmlText, transposeSemitones) : xmlText;
-  const beamedXml = autoBeamMusicXML(drumStemFixMusicXML(transposedXml));
+  const beamedXml = stemConventionMusicXML(autoBeamMusicXML(drumStemFixMusicXML(transposedXml)));   // 符桿方向要在補完符尾之後算(同一組符尾要一起決定)
   const finalXml = mergeRests ? mergeRestMeasures(beamedXml) : splitRestMeasures(beamedXml);
   await osmd.load(finalXml);
   osmd.zoom = 0.9;
