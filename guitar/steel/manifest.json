@@ -238,5 +238,129 @@
    "tuneFix": 1.7,
    "peak": -3.8
   }
+ },
+ "mute": {
+  "st-6E-muteL": {
+   "root": 40,
+   "string": "6E",
+   "kind": "L",
+   "frames": 115200
+  },
+  "st-6E-muteH": {
+   "root": 40,
+   "string": "6E",
+   "kind": "H",
+   "frames": 116016
+  },
+  "st-5A-muteL": {
+   "root": 45,
+   "string": "5A",
+   "kind": "L",
+   "frames": 118400
+  },
+  "st-5A-muteH": {
+   "root": 45,
+   "string": "5A",
+   "kind": "H",
+   "frames": 118017
+  },
+  "st-4D-muteL": {
+   "root": 50,
+   "string": "4D",
+   "kind": "L",
+   "frames": 101760
+  },
+  "st-4D-muteH": {
+   "root": 50,
+   "string": "4D",
+   "kind": "H",
+   "frames": 113267
+  },
+  "st-3G-muteL": {
+   "root": 55,
+   "string": "3G",
+   "kind": "L",
+   "frames": 59520
+  },
+  "st-3G-muteH": {
+   "root": 55,
+   "string": "3G",
+   "kind": "H",
+   "frames": 82560
+  },
+  "st-2B-muteL": {
+   "root": 59,
+   "string": "2B",
+   "kind": "L",
+   "frames": 60800
+  },
+  "st-2B-muteH": {
+   "root": 59,
+   "string": "2B",
+   "kind": "H",
+   "frames": 68500
+  }
+ },
+ "harm": {
+  "st-6E-harm2": {
+   "root": 52,
+   "string": "6E",
+   "frames": 572160
+  },
+  "st-6E-harm4": {
+   "root": 64,
+   "string": "6E",
+   "frames": 332800
+  },
+  "st-5A-harm2": {
+   "root": 57,
+   "string": "5A",
+   "frames": 410880
+  },
+  "st-5A-harm4": {
+   "root": 69,
+   "string": "5A",
+   "frames": 317440
+  },
+  "st-4D-harm2": {
+   "root": 62,
+   "string": "4D",
+   "frames": 376320
+  },
+  "st-4D-harm4": {
+   "root": 74,
+   "string": "4D",
+   "frames": 260480
+  },
+  "st-3G-harm2": {
+   "root": 67,
+   "string": "3G",
+   "frames": 388480
+  },
+  "st-3G-harm4": {
+   "root": 79,
+   "string": "3G",
+   "frames": 266240
+  },
+  "st-2B-harm2": {
+   "root": 71,
+   "string": "2B",
+   "frames": 318080
+  },
+  "st-2B-harm4": {
+   "root": 83,
+   "string": "2B",
+   "frames": 195200
+  },
+  "st-1E-harm2": {
+   "root": 76,
+   "string": "1E",
+   "frames": 271360
+  },
+  "st-1E-harm4": {
+   "root": 88,
+   "string": "1E",
+   "frames": 149760
+  }
  }
 }

@@ -800,5 +800,34 @@
    "root": 64,
    "frames": 8558
   }
+ },
+ "fret": {
+  "ny-fret1": {
+   "frames": 45938
+  },
+  "ny-fret2": {
+   "frames": 34487
+  },
+  "ny-fret3": {
+   "frames": 45826
+  },
+  "ny-fret4": {
+   "frames": 35913
+  },
+  "ny-fret5": {
+   "frames": 51551
+  },
+  "ny-fret6": {
+   "frames": 41831
+  },
+  "ny-fret7": {
+   "frames": 47809
+  },
+  "ny-fret8": {
+   "frames": 35757
+  },
+  "ny-fret9": {
+   "frames": 27018
+  }
  }
 }

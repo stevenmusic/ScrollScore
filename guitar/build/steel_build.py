@@ -29,7 +29,7 @@ os.makedirs(OUT, exist_ok=True)
 STRINGS = {'6E': 40, '5A': 45, '4D': 50, '2B': 59}
 LAYERS = ['mp', 'mf', 'f', 'ff']
 
-from gtr_common import f0_cents, kweight, loud, denoise
+from gtr_common import f0_cents, f0_peak, kweight, loud, denoise
 import gtr_common
 gtr_common.STRONG = STRONG
 excite = gtr_common.excite
@@ -45,10 +45,10 @@ for s, root in STRINGS.items():
 for i, L in enumerate(LAYERS):
     jobs.append((f'2B-{L}(z) 15va.ogg', f'st-B5-L{i + 1}', 83, 'B5', i + 1, 1))
 
-for src, name, root, s, L, rr in jobs:
+def process(src, root, lufs=-18, peak_pitch=False):
     x, sr = sf.read(os.path.join(SRC, src)); x = x if x.ndim == 1 else x.mean(1)
     assert sr == SR_IN
-    c = f0_cents(x, sr, root)
+    c = f0_peak(x, sr, root) if peak_pitch else f0_cents(x, sr, root)
     if SR_OUT != sr: x = signal.resample_poly(x, SR_OUT // sr, 1)
     # 音準校正:偏高 c 音分 → 拉長 2^(c/1200) 倍
     n2 = int(round(len(x) * 2 ** (c / 1200)))
@@ -59,17 +59,44 @@ for src, name, root, s, L, rr in jobs:
     ex_db = None
     if EXCITE: x, ex_db = excite(x, SR_OUT)
     lu = loud(x[:int(0.5 * SR_OUT)], SR_OUT)
-    x = x * 10 ** ((-18 - lu) / 20)
+    x = x * 10 ** ((lufs - lu) / 20)
     w = int(0.02 * SR_OUT); nb = len(x) // w
     env = 20 * np.log10(np.sqrt((x[:nb * w].reshape(nb, w) ** 2).mean(1)) + 1e-12)
     pk = env.max(); above = np.where(env > pk - 66)[0]
     end = min(len(x), (above[-1] + 1) * w + int(0.4 * SR_OUT))
-    x = x[:end]; fd = int(0.4 * SR_OUT)
+    x = x[:end]; fd = min(int(0.4 * SR_OUT), len(x) // 3)
     x[-fd:] *= np.cos(np.linspace(0, np.pi / 2, fd)) ** 2
     peak = float(np.abs(x).max())
     if peak > 0.99: x *= 0.99 / peak; peak = 0.99
+    return x, c, peak, ex_db
+
+def write(name, x):
     sf.write(os.path.join(OUT, name + '.flac'), x.astype(np.float32), SR_OUT, subtype='PCM_16')
+
+for src, name, root, s, L, rr in jobs:
+    x, c, peak, ex_db = process(src, root)
+    write(name, x)
     man['samples'][name] = {'root': root, 'string': s, 'L': L, 'rr': rr, 'frames': len(x),
                             'tuneFix': round(-c, 1), 'peak': round(20 * np.log10(peak), 1)}
     print(f'{name:14s} {src:22s} tune {c:+5.1f}c  len {len(x) / SR_OUT:5.1f}s  peak {20 * np.log10(peak):5.1f}dB' + (f'  excite {ex_db:+.1f}dB' if EXCITE else ''))
+
+# 悶音(手掌側面壓住琴橋附近的弦):每條弦一個輕悶(L)、一個重悶(H),音高是空弦;第 1 弦借第 2 弦(原廠也是)
+# 泛音:每條弦 12 格(harm2,空弦 +12)與 5 格(harm4,空弦 +24)的自然泛音,第 3、1 弦有自己的錄音
+OPEN6 = {'6E': 40, '5A': 45, '4D': 50, '3G': 55, '2B': 59, '1E': 64}
+man['mute'] = {}; man['harm'] = {}
+for st, op in OPEN6.items():
+    for kind in ('L', 'H'):
+        src = f'{st}-mute{kind}.ogg'
+        if not os.path.exists(os.path.join(SRC, src)): continue
+        x, c, peak, _ = process(src, op, peak_pitch=True)
+        name = f'st-{st}-mute{kind}'; write(name, x)
+        man['mute'][name] = {'root': op, 'string': st, 'kind': kind, 'frames': len(x)}
+        print(f'{name:14s} {src:22s} tune {c:+5.1f}c  len {len(x) / SR_OUT:5.1f}s')
+    for h, add in (('2', 12), ('4', 24)):
+        src = f'{st}-harm{h}.ogg'
+        if not os.path.exists(os.path.join(SRC, src)): continue
+        x, c, peak, _ = process(src, op + add, peak_pitch=True)
+        name = f'st-{st}-harm{h}'; write(name, x)
+        man['harm'][name] = {'root': op + add, 'string': st, 'frames': len(x)}
+        print(f'{name:14s} {src:22s} tune {c:+5.1f}c  len {len(x) / SR_OUT:5.1f}s')
 json.dump(man, open(os.path.join(OUT, 'manifest.json'), 'w'), indent=1)

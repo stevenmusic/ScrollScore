@@ -11,7 +11,7 @@ bits>0 為差分(第一個值是 base,之後累加),bits<0 為絕對值,0 為原
 取樣其實是單聲道(左右完全一樣)、每檔峰值正規化、標示 44000Hz。
 
 8 個音高(E2 A2 D3 G3 B3 E4 A4 D5)× pp/p/f/ff × 2~4 次輪替(有 5 組完全重複的檔案,去掉),
-另有 6 個放音聲(off)。每個檔:
+另有 6 個放音聲(off)與 9 個換把位擦弦聲(fretnoise)。每個檔:
 1. 量音準,FFT 重取樣校正到 0 音分(同時從 44000 轉成 48000Hz)
 2. 起音前留 5ms;頻譜降噪(pp 層被正規化放大,底噪只有 -44dB)
 3. 前 0.5 秒 K 加權響度對齊 -18 LKFS(放音聲 -44 LKFS,約比音符小 26dB),大小聲交給播放時的力度曲線
@@ -65,7 +65,7 @@ assert len(names) == len(pos) == 114, (len(names), len(pos))
 
 man = {'source': 'MF Concert Guitar by Markus Fiedler (Kontakt version by bigcat instruments), CC-BY-NC-SA 3.0',
        'mode': 'nearest', 'sr': SR_OUT, 'velRanges': [[1, 40], [41, 74], [75, 104], [105, 127]],
-       'ampVeltrack': 96, 'samples': {}, 'off': {}}
+       'ampVeltrack': 96, 'samples': {}, 'off': {}, 'fret': {}}
 seen = {}
 groups = {}
 for nm, p in zip(names, pos):
@@ -76,7 +76,19 @@ for nm, p in zip(names, pos):
     seen[h] = nm
     m = re.match(r'mf-nylon-guitar-([a-g])(\d)-(pp|p|ff|f)(\d)$', nm)
     off = re.match(r'mf-nylon-guitar-([a-g])(\d)-off$', nm)
-    if not (m or off): continue                                    # 換把位的擦弦聲沒用到
+    fret = re.match(r'mf-nylon-guitar-fretnoise(\d)$', nm)
+    if fret:
+        # 換把位時手指在纏弦上滑動的擦弦聲:整段響度對齊 -40 LKFS(比音符小約 22dB)
+        y = signal.resample_poly(x, 12, 11)                         # 44000 → 48000
+        on = int(np.argmax(np.abs(y) > 0.02 * np.abs(y).max())); y = y[max(0, on - int(0.003 * SR_OUT)):]
+        y = y * 10 ** ((-40 - loud(y, SR_OUT)) / 20)
+        fd = min(int(0.1 * SR_OUT), len(y) // 3); y[-fd:] *= np.cos(np.linspace(0, np.pi / 2, fd)) ** 2
+        name = f'ny-fret{fret.group(1)}'
+        sf.write(os.path.join(OUT, name + '.flac'), y.astype(np.float32), SR_OUT, subtype='PCM_16')
+        man['fret'][name] = {'frames': len(y)}
+        print(f'{name:14s} {nm[16:]:12s} len {len(y) / SR_OUT:5.2f}s')
+        continue
+    if not (m or off): continue
     g = m or off
     root = 12 * (int(g.group(2)) + 1) + NOTE[g.group(1)]
     c = f0_cents(x, sr, root) if m else 0.0

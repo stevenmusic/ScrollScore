@@ -67,3 +67,14 @@ def excite(x, sr):
     cur = dens(Ph, 8500, 12000)
     return x + h * 10 ** ((target - cur) / 20), round(target - cur, 1)
 
+
+def f0_peak(x, sr, midi):
+    """只看目標音 ±60 音分內最大的峰(泛音/悶音的錄音裡還殘留空弦的其他諧波,諧波擬合會被帶偏)"""
+    ft = 440 * 2 ** ((midi - 69) / 12)
+    seg = x[int(.15 * sr):int(1.15 * sr)]; seg = seg - seg.mean()
+    n = 1 << 20
+    S = np.abs(np.fft.rfft(seg * np.hanning(len(seg)), n))
+    lo, hi = int(ft * 2 ** (-60 / 1200) * n / sr), int(ft * 2 ** (60 / 1200) * n / sr)
+    k = lo + int(np.argmax(S[lo:hi]))
+    y0, y1, y2 = np.log(S[k - 1:k + 2]); d = 0.5 * (y0 - y2) / (y0 - 2 * y1 + y2)
+    return float(1200 * np.log2((k + d) * sr / n / ft))
