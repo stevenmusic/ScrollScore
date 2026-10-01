@@ -1591,6 +1591,7 @@ function setStatus(msg){ statusEl.textContent = msg; }
 let osmd = null;
 let events = [];        // {tWhole, x, notes:[{freq,durWhole}], legato, pedalOn}
 let slurRanges = [], pedalRanges = [], repeatChordRanges = [], measureRanges = [], vibratoRanges = [];
+let perfMeasures = [];   // 展開反覆記號後依演奏順序的小節:[{start, end(演奏位置), mIdx, srcStart(記譜位置), qpm}]
 /* 小節高亮要對齊真正的小節線,不能靠音符位置內插:音符的 x 是「音符中心」,而小節線在
    第一個音符之前(還要容納譜號、調號、升降記號),兩者不成比例。實測內插出來的右邊界
    固定比真正的小節線右移 21px,遇到窄小節甚至差到 42px。
@@ -1643,7 +1644,113 @@ let arpMap = {};
 let calibrating = false, calibStartPerf = 0, calibTapIndex = 0;
 let calibrationMap = []; // [{tWhole, realSec}] 已排序,由 tap-along 或自動偵測建立
 let endX = 0, totalWhole = 0;
-let audioCtx = null, masterGain = null, masterLimiter = null, masterOut = null;
+let audioCtx = null, masterGain = null, masterLimiter = null, masterOut = null, masterBus = null, masterLimiterNode = null, masterReady = Promise.resolve(false);
+/* ── 母帶(總輸出)設定 ─────────────────────────────────
+   masterGain(鋼琴/吉他)→ loudnessComp(響度壓縮)→ makeup → masterBus ← 鼓組匯流排
+   masterBus → 母帶限幅器(AudioWorklet)→ masterOut → 喇叭/匯出影片 */
+const MASTER = {
+  compThreshold: -18, compKnee: 8, compRatio: 3, compAttack: 0.008, compRelease: 0.18, makeup: 1.6,
+  ceilingDb: -1.3,      // 限幅器上限(dBFS,4 倍超取樣量):實測 16 倍超取樣的真峰值最壞(寬頻雜訊突波)−1.0dBTP,一般 ≤ −1.1
+  lookahead: 0.005,     // 預讀 5ms:峰值到之前就先把音量降好
+  release: 0.09,        // 放開:單一尖峰很快回復(60ms 會在 40Hz 低音的一個週期內起伏,低音失真)
+  releaseSlow: 0.7      // 持續壓著(大聲段落)時改用慢的放開,不會一下一下抽動
+};
+/* 母帶限幅器(AudioWorklet 處理器,用 Blob 載入,維持單檔)
+   1) 峰值偵測用 4 倍超取樣:16 點 Kaiser(β=8)加窗 sinc 內插取樣點之間 1/4、1/2、3/4 的值,抓到真峰值
+      (8 點 Hann 在 18kHz 會少算 0.6dB,高頻的銅鈸會穿過上限,所以用 16 點;到 18kHz 誤差 < 0.1dB)
+   2) 需要的增益 = min(1, 上限/峰值);在 W = L+16 內取最小值,再做長度 L 的移動平均 → 增益在峰值到達前
+      平滑地降到位(不會像硬削波一樣產生失真),而且峰值那個取樣與它前後的內插區間增益都不超過需要的值
+   3) 放開分兩段:單一尖峰用快的放開,持續在壓(最近 0.3 秒大多在壓 0.25dB 以上)時放開慢慢變長(段落不抽動)
+   4) 左右聲道共用同一個增益(立體聲連動,聲像不會飄)
+   推導:第 n 步算的是取樣 m = n−(T−H−1) = n−8 與區間 [m, m+1];輸出延遲 D 要讓取樣 j 的兩個相關步驟
+   (j+7、j+8)都落在移動平均保證涵蓋的 [n−W+1, n−L+1] 內 → L+7 ≤ D ≤ W−6,取 D = L+8 */
+const MASTER_LIMITER_SRC = `
+class SSMasterLimiter extends AudioWorkletProcessor {
+  constructor(o) {
+    super();
+    const p = (o && o.processorOptions) || {};
+    this.ceil = Math.pow(10, (p.ceilingDb != null ? p.ceilingDb : -1.2) / 20);
+    this.L = Math.max(8, Math.round(sampleRate * (p.lookahead || 0.005)));
+    this.relFast = Math.exp(-1 / (sampleRate * (p.release || 0.09)));
+    this.relSlow = Math.exp(-1 / (sampleRate * (p.releaseSlow || 0.7)));
+    this.hold = Math.exp(-1 / (sampleRate * 0.4)); this.pressUp = 1 - Math.exp(-1 / (sampleRate * 0.3));
+    const T = 16, H = 7, beta = 8;
+    const i0 = x => { let s = 1, t = 1; for (let k = 1; k < 30; k++) { t *= (x / 2) * (x / 2) / (k * k); s += t; } return s; };
+    this.k = [0.25, 0.5, 0.75].map(f => {
+      const c = new Float64Array(T); let sum = 0;
+      for (let j = 0; j < T; j++) { const t = j - H - f, r = t / (T / 2), w = Math.abs(r) < 1 ? i0(beta * Math.sqrt(1 - r * r)) / i0(beta) : 0;
+        c[j] = (t === 0 ? 1 : Math.sin(Math.PI * t) / (Math.PI * t)) * w; sum += c[j]; }
+      for (let j = 0; j < T; j++) c[j] /= sum;
+      return c;
+    });
+    this.T = T; this.H = H;
+    this.hist = [new Float64Array(2 * T), new Float64Array(2 * T)]; this.hp = 0;   // 兩倍長:寫在 hp 與 hp+T,讀取時連續
+    this.W = this.L + T;
+    this.D = this.L + 8;
+    let sz = 1; while (sz < this.D + 1) sz <<= 1; this.dmask = sz - 1;
+    this.dl = [new Float32Array(sz), new Float32Array(sz)]; this.di = 0;
+    let qs = 1; while (qs < this.W + 2) qs <<= 1; this.qmask = qs - 1;
+    this.qv = new Float64Array(qs); this.qt = new Float64Array(qs); this.qh = 0; this.qn = 0;
+    this.ma = new Float64Array(this.L).fill(1); this.maSum = this.L; this.mi = 0;
+    this.env = 1; this.press = 0; this.n = 0;
+    this.grMax = 0; this.grSamples = 0; this.total = 0;
+    this.port.onmessage = e => { if (e.data === "stats") this.port.postMessage({ grMaxDb: -20 * Math.log10(Math.max(1e-9, 1 - this.grMax)), grPct: 100 * this.grSamples / Math.max(1, this.total) }); };
+  }
+  process(inputs, outputs) {
+    const inp = inputs[0] || [], out = outputs[0], N = out[0].length;
+    const iL = inp[0], iR = inp[1] || inp[0];
+    const T = this.T, H = this.H, k0 = this.k[0], k1 = this.k[1], k2 = this.k[2], ceil = this.ceil, L = this.L, W = this.W;
+    const hl = this.hist[0], hr = this.hist[1], qv = this.qv, qt = this.qt, qmask = this.qmask, ma = this.ma;
+    const d0 = this.dl[0], d1 = this.dl[1], dmask = this.dmask, D = this.D;
+    const relFast = this.relFast, relSlow = this.relSlow, hold = this.hold, pressUp = this.pressUp;
+    const skip = ceil / 1.5;   // 取樣值都低於上限 −3.5dB 時,取樣之間的峰值不可能超過上限,省掉內插
+    let hp = this.hp, qh = this.qh, qn = this.qn, maSum = this.maSum, mi = this.mi, env = this.env, press = this.press, n = this.n, di = this.di;
+    let minEnv = 1, grS = 0;
+    const oL = out[0], oR = out[1];
+    for (let i = 0; i < N; i++) {
+      let xl = iL ? iL[i] : 0, xr = iR ? iR[i] : 0;
+      if (xl !== xl) xl = 0; if (xr !== xr) xr = 0;
+      hl[hp] = xl; hl[hp + T] = xl; hr[hp] = xr; hr[hp + T] = xr;
+      hp = (hp + 1) & (T - 1);
+      // 最舊的在 hp,連續讀 hl[hp .. hp+T-1];中心 m = hp+H
+      let raw = 0;
+      for (let j = 0; j < T; j++) { const a = Math.abs(hl[hp + j]), b = Math.abs(hr[hp + j]); if (a > raw) raw = a; if (b > raw) raw = b; }
+      let pk = Math.max(Math.abs(hl[hp + H]), Math.abs(hr[hp + H]));
+      if (raw > skip) {
+        let a0 = 0, a1 = 0, a2 = 0, b0 = 0, b1 = 0, b2 = 0;
+        for (let j = 0; j < T; j++) { const vl = hl[hp + j], vr = hr[hp + j]; a0 += k0[j] * vl; a1 += k1[j] * vl; a2 += k2[j] * vl; b0 += k0[j] * vr; b1 += k1[j] * vr; b2 += k2[j] * vr; }
+        pk = Math.max(pk, Math.abs(a0), Math.abs(a1), Math.abs(a2), Math.abs(b0), Math.abs(b1), Math.abs(b2));
+      }
+      const g = pk > ceil ? ceil / pk : 1;
+      // 滑動最小值(單調佇列),視窗 W
+      while (qn > 0 && qv[(qh + qn - 1) & qmask] >= g) qn--;
+      const tail = (qh + qn) & qmask; qv[tail] = g; qt[tail] = n; qn++;
+      while (qt[qh] <= n - W) { qh = (qh + 1) & qmask; qn--; }
+      n++;
+      // 移動平均(長度 L)
+      const gmin = qv[qh];
+      maSum += gmin - ma[mi]; ma[mi] = gmin; mi = mi + 1 === L ? 0 : mi + 1;
+      const gs = Math.min(1, maSum / L);
+      // press:最近 0.3 秒有多少時間「需要」壓 0.25dB 以上(看目標增益,不看放開中的尾巴)
+      if (gs < 0.97) press += (1 - press) * pressUp; else { press *= hold; if (press < 1e-6) press = 0; }
+      if (gs < env) env = gs;
+      else { const r = relFast + (relSlow - relFast) * press; env = gs + (env - gs) * r; if (1 - env < 1e-7) env = 1; }
+      // 延遲 D 後的音訊乘上增益
+      d0[di] = xl; d1[di] = xr;
+      const ro = (di - D) & dmask;
+      oL[i] = d0[ro] * env; if (oR) oR[i] = d1[ro] * env;
+      di = (di + 1) & dmask;
+      if (env < minEnv) minEnv = env;
+      if (env < 0.999) grS++;
+    }
+    this.hp = hp; this.qh = qh; this.qn = qn; this.maSum = maSum; this.mi = mi; this.env = env; this.press = press; this.n = n; this.di = di;
+    if (1 - minEnv > this.grMax) this.grMax = 1 - minEnv;
+    this.grSamples += grS; this.total += N;
+    return true;
+  }
+}
+registerProcessor("ss-master-limiter", SSMasterLimiter);
+`;
 const MASTER_CEIL_RANGE = 2, MASTER_CEIL_KNEE = 0.708, MASTER_CEIL = 0.85;   // 曲線涵蓋 ±2、−3dBFS 起彎、上限 −1.4dBFS
 function buildCeilingCurve(){
   const n = 8193, c = new Float32Array(n), T = MASTER_CEIL_KNEE, C = MASTER_CEIL;
@@ -1950,6 +2057,8 @@ async function loadScoreFile(file){
     tempoDisplayUnitLabel = "";
     tempoDisplayBeatUnit = null;
     tempoDisplayDotCount = 0;
+    scoreSoundTempo = parsed.soundTempo > 0 ? parsed.soundTempo : 0;
+    scoreTempoMeasures = explicitTempoMeasures(xmlText);
     if (parsed.soundTempo && parsed.soundTempo > 0) {
       const md = parsed.metronomeDisplay;
       // 樂譜的速度記號是用附點音符(或非四分音符)當單位時,滑桿直接顯示「印在譜上的數字」
@@ -2113,6 +2222,34 @@ function transposeMusicXML(xmlText, semitones){
    所有音符的演奏記號(articulations / technical,例如開放 hi-hat 的「o」)一律放在上方。
    OSMD 預設把演奏記號放在符頭那一側,符桿朝上時「o」會跑到大鼓下面(使用者要求改)。
    鼓件辨識:midi-unpitched(1 起算,減 1 才是 GM)優先,沒有就看顯示位置(大鼓 E4/F4、hi-hat G5) */
+/* 記號的極端垂直位置:Finale 匯出常把踏板記號掛在上面的譜表(staff 1),再用 default-y="-305"(往下 30 格)
+   推到下面譜表的下方。單行橫向排版時 OSMD 會照這個位置替整首曲子預留空間,一個小節就讓兩個譜表之間
+   拉開將近 900px(蕭邦第一號敘事曲),畫面只看得到其中一個譜表。只改送去畫譜的那份 XML(播放用的原檔不動):
+   - 多譜表的聲部,掛在非最後一個譜表、放在下方的踏板記號 → 改掛最後一個譜表(踏板本來就記在左手譜表下面)
+   - 所有 direction 底下 |default-y| 超過 120(12 格)的,拿掉 default-y 讓 OSMD 自己排 */
+function tameFarDirectionsMusicXML(xmlText){
+  try {
+    if (!/default-y="-?\d{3}/.test(xmlText)) return xmlText;
+    const doc = new DOMParser().parseFromString(xmlText, "text/xml");
+    let changed = false;
+    for (const part of Array.from(doc.getElementsByTagName("part"))) {
+      const stavesEl = part.getElementsByTagName("staves")[0];
+      const nStaves = stavesEl ? parseInt(stavesEl.textContent, 10) || 1 : 1;
+      for (const dir of Array.from(part.getElementsByTagName("direction"))) {
+        const pedal = dir.getElementsByTagName("pedal")[0];
+        const staffEl = Array.from(dir.children).find(c => c.nodeName === "staff");
+        if (pedal && nStaves > 1 && staffEl && parseInt(staffEl.textContent, 10) < nStaves && dir.getAttribute("placement") !== "above") {
+          staffEl.textContent = String(nStaves); changed = true;
+        }
+        for (const el of Array.from(dir.getElementsByTagName("*"))) {
+          const y = parseFloat(el.getAttribute("default-y"));
+          if (Number.isFinite(y) && Math.abs(y) > 120) { el.removeAttribute("default-y"); changed = true; }
+        }
+      }
+    }
+    return changed ? new XMLSerializer().serializeToString(doc) : xmlText;
+  } catch (e) { console.warn("tameFarDirectionsMusicXML 失敗,照原檔顯示:", e); return xmlText; }
+}
 function drumStemFixMusicXML(xmlText){
   if (!/sign>\s*percussion/.test(xmlText)) return xmlText;
   try { return drumStemFixCore(xmlText); }
@@ -2144,6 +2281,10 @@ function drumStemFixCore(xmlText){
     for (const el of elems(m)) {
       if (el.nodeName !== "note" || kid(el, "rest")) continue;
       if (kid(el, "chord") && groups.length) groups[groups.length - 1].push(el); else groups.push([el]);
+      // 邊擊(cross stick):MuseScore 匯出成 slashed 符頭,OSMD 不會畫,會變成一般小鼓符頭(看起來像正常擊打)。
+      // 鼓譜(有 <unpitched> 的音)改成 x 符頭(小鼓位置上的 x,常見的邊擊寫法)
+      const nh = kid(el, "notehead");
+      if (nh && kid(el, "unpitched") && /^(back )?slashed$/.test(nh.textContent.trim())) { nh.textContent = "x"; changed = true; }
     }
     for (const g of groups) {
       const kinds = g.map(kind);
@@ -2172,6 +2313,13 @@ function drumStemFixCore(xmlText){
       const nt = kid(n, "notations");
       if (nt) for (const box of elems(nt)) {
         if (box.nodeName !== "articulations" && box.nodeName !== "technical") continue;
+        // MuseScore 4 把開放 hi-hat 的「o」匯出成 <technical><open/>(MusicXML 4.0),OSMD 只認得 <open-string/>,
+        // 不換的話「o」整個不見;換成 open-string 畫出來是同一個「o」
+        if (box.nodeName === "technical") for (const a of elems(box)) if (a.nodeName === "open") {
+          const o = doc.createElement("open-string");
+          for (const at of Array.from(a.attributes)) o.setAttribute(at.name, at.value);
+          box.replaceChild(o, a); changed = true;
+        }
         for (const a of elems(box)) if (a.getAttribute("placement") !== "above") { a.setAttribute("placement", "above"); changed = true; }
       }
     }
@@ -2475,6 +2623,13 @@ function extendLedgerLineStems(){
 }
 
 /* ── 渲染 + 建立時間軸 ─────────────────────── */
+function scoreLayoutTooTall(){
+  try {
+    const sys = osmd.GraphicSheet.MusicPages[0].MusicSystems[0], sl = sys.StaffLines;
+    for (let i = 1; i < sl.length; i++) if (sl[i].PositionAndShape.RelativePosition.y - sl[i - 1].PositionAndShape.RelativePosition.y > 45) return true;
+    return Math.max(...sl[sl.length - 1].BottomLine) > 40;   // 單位:譜線間距(一般 10~25)
+  } catch (e) { return false; }
+}
 async function renderScore(xmlText){
   $("empty").style.display = "none";
   document.body.classList.add("score-loaded");
@@ -2492,6 +2647,12 @@ async function renderScore(xmlText){
     followCursor: false
   });
   osmd.EngravingRules.RenderSingleHorizontalStaffline = true;
+  // OSMD 預設把整行寬度上限設在 32767(canvas 的限制),長曲子(例如蕭邦敘事曲 264 小節)超過就會被折成第二行,
+  // 橫向捲動整個錯掉。這裡用 SVG,沒有這個限制;匯出影片點陣化本來就切成 4000px 的 tile
+  osmd.EngravingRules.SheetMaximumWidth = 1e7;
+  // 圓滑線用 OSMD 較新的「依上下輪廓線擺放」:單行排版時很長的圓滑線(例如跨 7 小節、記在下方)
+  // 用舊算法會往下彎很深,把兩個譜表的間距撐開好幾倍(蕭邦第一號敘事曲 95 → 39)
+  osmd.EngravingRules.SlurPlacementUseSkyBottomLine = true;
   osmd.EngravingRules.PageTopMargin = 1;
   osmd.EngravingRules.PageBottomMargin = 1;
   // 是否合併連續整小節休止符由使用者的開關決定(預設拆開):合併時連OSMD自己「檔案沒標記
@@ -2501,14 +2662,19 @@ async function renderScore(xmlText){
   osmd.EngravingRules.AutoGenerateMultipleRestMeasuresFromRestMeasures = mergeRests;
 
   const transposedXml = transposeSemitones ? transposeMusicXML(xmlText, transposeSemitones) : xmlText;
-  const beamedXml = stemConventionMusicXML(autoBeamMusicXML(drumStemFixMusicXML(transposedXml)));   // 符桿方向要在補完符尾之後算(同一組符尾要一起決定)
+  const beamedXml = stemConventionMusicXML(autoBeamMusicXML(drumStemFixMusicXML(tameFarDirectionsMusicXML(transposedXml))));   // 符桿方向要在補完符尾之後算(同一組符尾要一起決定)
   const finalXml = mergeRests ? mergeRestMeasures(beamedXml) : splitRestMeasures(beamedXml);
   await osmd.load(finalXml);
   osmd.zoom = 0.9;
   // 鼓譜的符尾一律水平:符尾的斜度應該看最靠近符尾的音(手打的 hi-hat/銅鈸,通常都在同一個位置),
   // VexFlow 卻照符桿頂端算,會被下面大鼓/小鼓的高低帶歪(三個同高的 hi-hat 符尾斜將近一格)。鼓譜教材多用水平符尾
   if (osmd.EngravingRules) osmd.EngravingRules.FlatBeams = /sign>\s*percussion/.test(finalXml);
+  osmd.EngravingRules.RenderPedals = true;
   osmd.render();
+  // 單行橫向排版時,一個地方的記號太遠,整首曲子的譜表間距都會被撐開。OSMD 的踏板記號在某些檔案會一層層往下疊
+  // (蕭邦第一號敘事曲 465 個踏板記號,疊到譜表下方 140 格,畫面上看不到譜表)。排出來太誇張時改成不畫踏板記號
+  // (踏板的播放照樣依原檔),一般曲子不受影響
+  if (scoreLayoutTooTall()) { osmd.EngravingRules.RenderPedals = false; osmd.render(); }
   extendLedgerLineStems(); // OSMD符桿長度是固定值,不會因為加線音符離譜表遠就自動加長,這裡渲染完手動補上
 
   buildTimeline();
@@ -2989,8 +3155,25 @@ function buildTimeline(){
   cursor.reset();
   const it = cursor.Iterator;
   let lastX = 0;
+  /* 反覆記號:OSMD 2.0 的 cursor 會照反覆記號(含第一、二結尾)跳回去重播,但 currentTimeStamp 是「記譜位置」,
+     跳回去就變回較早的時間——原本重播段會跟第一次排在同一個時間點、兩遍疊在一起播(音量加倍、反覆根本沒播到)。
+     這裡改用 OSMD 自己展開好的「演奏位置」CurrentEnrolledTimestamp(每過一個小節加上小節長度,跳回去也繼續往後算)。
+     ev.tWhole = 演奏位置(播放、捲動、計時都用這個);ev.srcT = 記譜位置(查力度記號、踏板、圓滑線、演奏記號等原始 XML 資料用);
+     ev.mIdx = 第幾個「演奏小節」(反覆重播的小節算新的一小節)。沒有反覆記號的曲子 tWhole 與 srcT 完全一樣 */
+  let lastPerfStart = null;
+  perfMeasures = [];
   while (!it.EndReached) {
-    const tWhole = it.currentTimeStamp.RealValue;   // 以全音符為單位
+    const srcT0 = it.currentTimeStamp.RealValue;   // 記譜位置,以全音符為單位
+    let curM = null, curMIdx = null, tWhole = srcT0;
+    try { curM = it.CurrentMeasure; curMIdx = it.CurrentMeasureIndex; tWhole = it.CurrentEnrolledTimestamp.RealValue; } catch (e) {}
+    const inBar = curM ? srcT0 - curM.AbsoluteTimestamp.RealValue : 0;
+    const perfStart = tWhole - inBar;
+    if (lastPerfStart === null || Math.abs(perfStart - lastPerfStart) > 1e-9) {
+      const len = curM && curM.Duration ? curM.Duration.RealValue : 1;
+      perfMeasures.push({ start: perfStart, end: perfStart + len, mIdx: curMIdx, srcStart: curM ? curM.AbsoluteTimestamp.RealValue : srcT0,
+                          num: curM && curM.MeasureNumber != null ? curM.MeasureNumber : null, qpm: curM && curM.TempoInBPM > 0 ? curM.TempoInBPM : null });
+      lastPerfStart = perfStart;
+    }
     const el = cursor.cursorElement;
     const x = el ? (el.offsetLeft + el.offsetWidth / 2) : lastX;
     lastX = x;
@@ -3004,9 +3187,9 @@ function buildTimeline(){
         if (n.NoteTie && n.NoteTie.StartNote === n) {
           durWhole = n.NoteTie.Notes.reduce((s,t)=>s+t.Length.RealValue,0);
         }
-        const drumKey = isDrumScore ? getDrumKey(n, tWhole) : null;
+        const drumKey = isDrumScore ? getDrumKey(n, srcT0) : null;
         if (drumKey !== null) {
-          const ghost = isGhostDrumNote(n, tWhole);
+          const ghost = isGhostDrumNote(n, srcT0);
           if (ghost) drawGhostParens(n);
           notes.push({ drum: true, key: drumKey, durWhole, ghost });
         } else {
@@ -3018,7 +3201,7 @@ function buildTimeline(){
         }
       }
     }
-    const arpInfo = findNearestEntry(arpEntries, tWhole, MARK_MATCH_EPSILON);
+    const arpInfo = findNearestEntry(arpEntries, srcT0, MARK_MATCH_EPSILON);
     let arpCount = 0, arpGapBeforeWhole = null, arpPrevDurWhole = null;
     if (arpInfo && notes.length > 1) {
       // 依編號分組:同編號=同一條線(可能跨手,一起滾奏);不同編號=各自獨立的線(例如左右手分開,但要同時起始)
@@ -3073,7 +3256,7 @@ function buildTimeline(){
           // 保持音(tenuto)的音符會被彈滿幾乎全部時值(見 applyArticulation 裡 tenuto 蓋過 staccato
           // 的邏輯),不像一般音符可能提早放掉——如果只響過「一半」就讓琶音搶拍,會覺得琶音疊到
           // 一顆明明還在響、甚至是重點強調的音符上面,所以保持音要響過更多比例(0.85)才放行
-          const prevArtic = articMap[prevOnsetWhole.toFixed(6)];
+          const prevArtic = articMap[(prevEv.srcT != null ? prevEv.srcT : prevOnsetWhole).toFixed(6)];
           const holdFraction = (prevArtic && prevArtic.tenuto) ? 0.85 : 0.5;
           arpGapBeforeWhole = tWhole - (prevOnsetWhole + prevDurWhole * holdFraction);
           arpPrevDurWhole = prevDurWhole; // 前一個音符的音長,琶音音符間隔要跟著這個調整(見 computeArpEffectiveGap)
@@ -3087,8 +3270,8 @@ function buildTimeline(){
     let barPos = null, beatLen = 0.25, barLen = 1, srcT = null, mIdx = null;
     try {
       const m = it.CurrentMeasure;
-      srcT = it.CurrentSourceTimestamp.RealValue;
-      mIdx = it.CurrentMeasureIndex;
+      srcT = srcT0;
+      mIdx = perfMeasures.length - 1;   // 演奏小節編號(反覆重播的小節是新的一小節;小節分組用)
       barPos = srcT - m.AbsoluteTimestamp.RealValue;
       const ts = m.ActiveTimeSignature;
       if (ts && ts.Denominator) {
@@ -3112,22 +3295,23 @@ function buildTimeline(){
   // 折衷:保留這個延長效果,但限制任何一個音符最多只能比自己的起點多響 RING_CAP_WHOLE。
   const RING_CAP_WHOLE = 1.0;
   for (const ev of events) {
-    ev.pedalOn = inRanges(ev.tWhole, pedalRanges);
-    ev.legato = !ev.pedalOn && inRanges(ev.tWhole, slurRanges);
+    const sT = ev.srcT != null ? ev.srcT : ev.tWhole, toPerf = w => ev.tWhole + (w - sT);   // 記譜位置的範圍 → 這一遍的演奏位置
+    ev.pedalOn = inRanges(sT, pedalRanges);
+    ev.legato = !ev.pedalOn && inRanges(sT, slurRanges);
     // 記錄這個音符所屬和聲/圓滑線範圍的結束時間點,讓同一組和聲裡的音符都能撐滿整個和聲的長度
     const activeRanges = ev.pedalOn ? pedalRanges : (ev.legato ? slurRanges : null);
     let rangeEnd = null;
     if (activeRanges) {
       for (const r of activeRanges) {
-        if (ev.tWhole >= r.start && ev.tWhole < r.end) { rangeEnd = r.end; break; }
+        if (sT >= r.start && sT < r.end) { rangeEnd = toPerf(r.end); break; }
       }
     }
     // 左手(或任一手)重複分解和弦音型偵測到的範圍,也當作和聲延伸的依據。這個延長本身就是
     // 讓聲音變豐滿的來源,所以有標踏板時照樣套用,只是不能無限延長——夾在 RING_CAP_WHOLE 以內,
     // 避免像先前那樣一路響過好幾個小節、把不同和聲全疊在一起
     for (const r of repeatChordRanges) {
-      if (ev.tWhole >= r.start && ev.tWhole < r.end) {
-        const capped = Math.min(r.end, ev.tWhole + RING_CAP_WHOLE);
+      if (sT >= r.start && sT < r.end) {
+        const capped = Math.min(toPerf(r.end), ev.tWhole + RING_CAP_WHOLE);
         rangeEnd = rangeEnd != null ? Math.max(rangeEnd, capped) : capped;
         break;
       }
@@ -3137,9 +3321,9 @@ function buildTimeline(){
     const maxDurWhole = ev.notes.length ? Math.max(...ev.notes.map(n => n.durWhole)) : 0;
     const coChordEnd = ev.tWhole + maxDurWhole;
     ev.harmonyEndWhole = rangeEnd != null ? Math.max(rangeEnd, coChordEnd) : coChordEnd;
-    ev.artic = findNearestEntry(articEntries, ev.tWhole, MARK_MATCH_EPSILON) || null;
-    ev.guitarTech = findNearestEntry(guitarTechEntries, ev.tWhole, MARK_MATCH_EPSILON) || null;
-    ev.vibrato = inRanges(ev.tWhole, vibratoRanges);
+    ev.artic = findNearestEntry(articEntries, sT, MARK_MATCH_EPSILON) || null;
+    ev.guitarTech = findNearestEntry(guitarTechEntries, sT, MARK_MATCH_EPSILON) || null;
+    ev.vibrato = inRanges(sT, vibratoRanges);
   }
   // 滑音(glissando/slide)的目標音高要等所有事件都建好才能查「下一個音」,這裡統一補上;
   // 古典吉他滑音幾乎都是單音旋律線的動作,只在前後都恰好是單音符時才套用,避免和絃裡誤判
@@ -3161,6 +3345,7 @@ function buildTimeline(){
   cursor.hide();
   computeGuitarStringRinging();
   buildMeasurePixels();
+  buildTempoMap();
   buildRubatoMap();
 }
 
@@ -3207,14 +3392,23 @@ function computeGuitarStringRinging(){
   if (!measureRanges.length) return;
   for (const m of measureRanges) {
     // 收集這個小節內所有音符(依時間排序;同一時刻多個音由低到高,模擬先按低音再按高音的指法習慣)
-    const items = [];
+    // 反覆記號重播的同一小節(記譜位置相同、演奏位置不同)分開算,每一遍各自從空弦開始
+    const passes = new Map();
     for (const ev of events) {
-      if (ev.tWhole < m.start || ev.tWhole >= m.end) continue;
+      const sT = ev.srcT != null ? ev.srcT : ev.tWhole;
+      if (sT < m.start || sT >= m.end) continue;
+      const off = (ev.tWhole - sT).toFixed(6);
+      if (!passes.has(off)) passes.set(off, []);
       for (const n of ev.notes) {
         if (n.drum || !n.freq) continue;
-        items.push({ n, tWhole: ev.tWhole, midi: Math.round(freqToMidi(n.freq)) });
+        passes.get(off).push({ n, tWhole: ev.tWhole, midi: Math.round(freqToMidi(n.freq)) });
       }
     }
+    for (const [off, items] of passes) ringOneMeasure(items, m.end + parseFloat(off));
+  }
+}
+function ringOneMeasure(items, mEnd){
+  {
     items.sort((a, b) => a.tWhole - b.tWhole || a.midi - b.midi);
     const stringOccupant = new Array(6).fill(null); // 目前佔用該弦、還在響的音符 item
     for (const item of items) {
@@ -3239,7 +3433,7 @@ function computeGuitarStringRinging(){
     // 小節結束時,還在響(沒被同弦後續音符止音)的音符,可以延音到小節結尾
     for (let s = 0; s < 6; s++) {
       const occ = stringOccupant[s];
-      if (occ && occ.n.guitarRingEndWhole == null) occ.n.guitarRingEndWhole = m.end;
+      if (occ && occ.n.guitarRingEndWhole == null) occ.n.guitarRingEndWhole = mEnd;
     }
   }
 }
@@ -3497,7 +3691,66 @@ function normalizeDrumKey(k){
 /* ── 時間換算 ─────────────────────────────── */
 function rawTempo(){ return parseInt($("tempo").value, 10); } // 滑桿/數字框上直接顯示的數字(跟樂譜印的一致)
 function bpm(){ return rawTempo() * tempoDisplayMultiplier; } // 播放引擎實際使用的四分音符BPM
-function wholeToSec(w){ return w * 240 / bpm(); }   // 1 全音符 = 4 拍
+/* 速度變化(tempo map):樂譜中途換速度(<sound tempo>,例如蕭邦敘事曲 Largo → Moderato → Presto)時,
+   每個小節照自己的速度播。速度滑桿 = 曲子開頭的速度,後面的速度跟著等比例縮放(開頭 48、後面 119,
+   滑桿調到 96 時後面變 238)。tempoMap:[{w(演奏位置), r(相對開頭速度的倍數), c(到這一點為止、r=1 時的累計全音符)}];
+   只有一個速度時是空的,完全照舊 */
+let tempoMap = [], scoreSoundTempo = 0, scoreTempoMeasures = null;
+/* 原檔裡真的有寫速度(<sound tempo> 或 <metronome>)的小節(第幾個 <measure>,所有聲部合併)。
+   OSMD 會把「Allegro」「a tempo」這類文字自己換成預設速度,只信原檔明確寫的,避免憑空變速 */
+function explicitTempoMeasures(xmlText){
+  const set = new Set();
+  try {
+    const doc = new DOMParser().parseFromString(xmlText, "text/xml");
+    for (const part of Array.from(doc.getElementsByTagName("part"))) {
+      Array.from(part.getElementsByTagName("measure")).forEach((m, i) => {
+        if (Array.from(m.getElementsByTagName("sound")).some(el => el.getAttribute("tempo")) || m.getElementsByTagName("metronome").length) set.add(i);
+      });
+    }
+  } catch (e) { return null; }
+  return set;
+}
+function buildTempoMap(){
+  tempoMap = [];
+  const pts = [];
+  for (const m of perfMeasures) {
+    if (!(m.qpm > 0) || (pts.length && Math.abs(pts[pts.length - 1].qpm - m.qpm) <= 1e-6)) continue;
+    if (pts.length && scoreTempoMeasures && !scoreTempoMeasures.has(m.mIdx)) continue;   // 原檔這一小節沒寫速度 → 不換
+    pts.push({ w: m.start, qpm: m.qpm });
+  }
+  // OSMD 在第一個速度記號出現之前的小節填預設 120:從滑桿用的那個速度(樂譜第一個 <sound tempo>)第一次出現的地方開始算,
+  // 前面的小節當成同一個速度
+  if (scoreSoundTempo > 0) {
+    const k = pts.findIndex(p => Math.abs(p.qpm - scoreSoundTempo) <= 1);
+    if (k > 0) pts.splice(0, k);
+    if (k < 0) return;   // 對不起來就不要猜,維持單一速度
+  }
+  if (pts.length < 2) return;
+  const q0 = pts[0].qpm;
+  let c = 0;
+  pts.forEach((p, i) => {
+    if (i) c += (p.w - pts[i - 1].w) / tempoMap[i - 1].r;
+    tempoMap.push({ w: i ? p.w : Math.min(0, p.w), r: Math.max(0.1, Math.min(10, p.qpm / q0)), c });
+  });
+}
+function tempoSegAt(key, v){   // 二分搜尋:key = "w"(演奏位置)或 "c"(等效全音符)
+  let lo = 0, hi = tempoMap.length - 1;
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (tempoMap[mid][key] <= v) lo = mid; else hi = mid - 1; }
+  return tempoMap[lo];
+}
+function wholeToSec(w){   // 演奏位置(全音符)→ 秒;1 全音符 = 4 拍
+  if (!tempoMap.length) return w * 240 / bpm();
+  const p = tempoSegAt("w", w);
+  return (p.c + (w - p.w) / p.r) * 240 / bpm();
+}
+function secToWholeTempo(sec){
+  const c = sec * bpm() / 240;
+  if (!tempoMap.length) return c;
+  const p = tempoSegAt("c", c);
+  return p.w + (c - p.c) * p.r;
+}
+function localTempoRatio(w){ return tempoMap.length ? tempoSegAt("w", w).r : 1; }
+function spanSec(w, d){ return wholeToSec(w + d) - wholeToSec(w); }   // 從 w 開始、長 d 全音符的音實際幾秒(會跨過速度變化)
 function totalSec(){
   if ($("useCalibration").checked && calibrationMap.length >= 2) return calibrationMap[calibrationMap.length-1].realSec;
   if (rubatoEnabled()) return rubatoToSec(totalWhole);
@@ -3524,7 +3777,7 @@ function calibToSec(w){
 }
 function calibSecToWhole(sec){
   const m = calibrationMap;
-  if (m.length < 2) return sec * bpm() / 240;
+  if (m.length < 2) return secToWholeTempo(sec);
   if (sec <= m[0].realSec) {
     const slope = (m[1].tWhole - m[0].tWhole) / Math.max(m[1].realSec - m[0].realSec, 1e-6);
     return m[0].tWhole + (sec - m[0].realSec) * slope;
@@ -3630,7 +3883,8 @@ function detectPhraseBoundaries(){
 
   const slurEndAt = new Set(); // 樂譜上明確的圓滑線結尾:直接證據,不用猜
   for (let i = 0; i < n - 1; i++) {
-    if (inRanges(events[i].tWhole, slurRanges) && !inRanges(events[i + 1].tWhole, slurRanges)) slurEndAt.add(i + 1);
+    const sA = events[i].srcT != null ? events[i].srcT : events[i].tWhole, sB = events[i + 1].srcT != null ? events[i + 1].srcT : events[i + 1].tWhole;
+    if (inRanges(sA, slurRanges) && !inRanges(sB, slurRanges)) slurEndAt.add(i + 1);
   }
   const strengths = S.slice(1, n - 1).filter(v => v > 0).sort((a, b) => a - b);
   const threshold = strengths.length ? strengths[Math.floor(strengths.length * 0.75)] : Infinity;
@@ -3800,15 +4054,17 @@ function buildRubatoMap(){
     return Math.max(0.4, Math.min(1.7, mult));
   }
 
-  let cumWarped = 0;
-  rubatoMap.push({ orig: events[0].tWhole, warped: 0 });
+  // warped 用「開頭速度下的等效全音符」:先照樂譜的速度變化(tempoMap)換算,再套彈性速度,樂譜中途換速度也對得上
+  const C = w => wholeToSec(w) * bpm() / 240;
+  let cumWarped = C(events[0].tWhole);
+  rubatoMap.push({ orig: events[0].tWhole, warped: cumWarped });
   for (let i = 0; i < events.length - 1; i++) {
-    cumWarped += (events[i + 1].tWhole - events[i].tWhole) / localTempoMult(i);
+    cumWarped += (C(events[i + 1].tWhole) - C(events[i].tWhole)) / localTempoMult(i);
     rubatoMap.push({ orig: events[i + 1].tWhole, warped: cumWarped });
   }
   const tailWhole = totalWhole - events[events.length - 1].tWhole;
   if (tailWhole > 0) {
-    cumWarped += tailWhole / localTempoMult(events.length - 1);
+    cumWarped += (C(totalWhole) - C(events[events.length - 1].tWhole)) / localTempoMult(events.length - 1);
     rubatoMap.push({ orig: totalWhole, warped: cumWarped });
   }
 }
@@ -3836,7 +4092,7 @@ function rubatoInterp(map, key, val){
   const f = (val - a[key]) / Math.max(b[key] - a[key], 1e-6);
   return a[other] + (b[other] - a[other]) * f;
 }
-function rubatoToSec(w){ return wholeToSec(rubatoInterp(rubatoMap, "orig", w)); }
+function rubatoToSec(w){ return rubatoInterp(rubatoMap, "orig", w) * 240 / bpm(); }
 function rubatoSecToWhole(sec){ return rubatoInterp(rubatoMap, "warped", sec * bpm() / 240); }
 /* 樂曲上絕對位置(全音符座標)→秒數的統一入口:calibration(真實錄音的tap-along資料)優先權最高,
    其次是rubato(合成的彈性速度模型),都沒有就照原本固定拍點換算 */
@@ -4074,9 +4330,24 @@ function applyHighlightStyles(){
 }
 /* 找出某個時間點落在第幾小節,回傳它在樂譜上的左右邊界(px)。
    measureRanges 存的是全音符座標,直接用 xAtWhole() 換算,不用繞道秒數 */
+/* 演奏位置 → 記譜位置(反覆記號展開後,重播段對應回樂譜上同一個位置) */
+function perfToSrcWhole(w){
+  if (!perfMeasures.length) return w;
+  let lo = 0, hi = perfMeasures.length - 1;
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (perfMeasures[mid].start <= w + 1e-9) lo = mid; else hi = mid - 1; }
+  const m = perfMeasures[lo];
+  return m.srcStart + (w - m.start);
+}
+function measurePixelsAtSrc(sw){
+  for (let i = 0; i < measurePixels.length; i++) {
+    const nextStart = (i + 1 < measurePixels.length) ? measurePixels[i + 1].startWhole : Infinity;
+    if (sw >= measurePixels[i].startWhole && sw < nextStart) return measurePixels[i];
+  }
+  return null;
+}
 function measureBoundsAt(sec){
   if (!events.length) return null;
-  const w = secToWhole(sec);
+  const w = perfToSrcWhole(secToWhole(sec));
   // 優先用 OSMD 排版好的真實小節邊界(對得準小節線)
   if (measurePixels.length) {
     for (let i = 0; i < measurePixels.length; i++) {
@@ -4087,10 +4358,10 @@ function measureBoundsAt(sec){
     return null;
   }
   // 退路:拿不到 OSMD 圖形資料時才用音符位置內插(邊界會略微偏右)
-  if (!measureRanges.length) return null;
-  for (let i = 0; i < measureRanges.length; i++) {
-    const m = measureRanges[i];
-    if (w >= m.start && w < m.end) return { left: xAtWhole(m.start), right: xAtWhole(m.end), index: i };
+  const pw = secToWhole(sec);
+  for (let i = 0; i < perfMeasures.length; i++) {
+    const m = perfMeasures[i];
+    if (pw >= m.start && pw < m.end) return { left: xAtWhole(m.start), right: xAtWhole(m.end - 1e-6), index: i };
   }
   return null;
 }
@@ -4536,13 +4807,15 @@ $("stage").addEventListener("pointerup", (e) => {
   if (Math.abs(dx) < SWIPE_MIN_PX || Math.abs(dx) <= Math.abs(dy)) return; // 距離太短或偏垂直,不算滑動導覽
   didSwipeMeasure = true;
   const curWhole = secToWhole(playing ? currentSec() : pausedAtSec);
-  let curIdx = measureRanges.findIndex(m => curWhole >= m.start && curWhole < m.end);
-  if (curIdx < 0) curIdx = curWhole < measureRanges[0].start ? 0 : measureRanges.length - 1;
+  // 依演奏順序的小節(反覆記號展開後)跳,沒有的話退回記譜小節
+  const list = perfMeasures.length ? perfMeasures : measureRanges;
+  let curIdx = list.findIndex(m => curWhole >= m.start && curWhole < m.end);
+  if (curIdx < 0) curIdx = curWhole < list[0].start ? 0 : list.length - 1;
   const measuresJumped = Math.max(1, Math.round(Math.abs(dx) / SWIPE_MEASURE_PX));
   const dir = dx < 0 ? 1 : -1; // 左滑(手指往左移,dx為負)=前進到後面的小節,右滑=回到前面的小節
-  const targetIdx = Math.max(0, Math.min(measureRanges.length - 1, curIdx + dir * measuresJumped));
-  seekTo(posToSec(measureRanges[targetIdx].start, useCalib()));
-  setStatus(T("statusMeasureN", { n: targetIdx + 1 }));
+  const targetIdx = Math.max(0, Math.min(list.length - 1, curIdx + dir * measuresJumped));
+  seekTo(posToSec(list[targetIdx].start, useCalib()));
+  setStatus(T("statusMeasureN", { n: list[targetIdx].num != null ? list[targetIdx].num : targetIdx + 1 }));
   clearTimeout(swipeStatusTimer);
   swipeStatusTimer = setTimeout(() => setStatus(""), 1000);
 });
@@ -4565,40 +4838,53 @@ function ensureAudio(){
        峰值可達 5.34,遠超過 1.0,而且 93% 的取樣時間都在破音),真實鋼琴不會有這種現象——
        多踩踏板只會變厚,不會破。這裡加一個快起音的限幅器把總音量壓在安全範圍內,
        讓踏板段落只會變得飽滿,而不是破音。 */
-    masterLimiter = audioCtx.createDynamicsCompressor();
-    masterLimiter.threshold.value = -3;  // 只在接近滿刻度時才介入,一般演奏完全不碰,保留動態對比
-    masterLimiter.knee.value = 3;        // 稍微緩和轉折,避免壓縮介入的瞬間聽得出來
-    masterLimiter.ratio.value = 12;      // 高壓縮比,實質上當限幅器用(安全網,不是全時壓縮)
-    masterLimiter.attack.value = 0.001;  // 鋼琴起音極快,反應太慢的話峰值會直接穿過去
-    masterLimiter.release.value = 0.25;  // 放開得慢一點,不會有抽動感
     /* 響度壓縮(loudnessComp):使用者反映一般影片開一半音量就夠大聲,這裡開到 80~90% 才勉強
-       聽清楚——原因不是上面那個安全網限幅器保守,是這個合成器完全保留鋼琴原始力度動態
-       (輕重差很多),只在真正逼近削波的瞬間才被限幅器煞車,平均音量自然遠低於一般影片
-       (影片後製都會做母帶壓縮,把安靜段落墊高、整體塞到接近上限)。
-       這裡加一段真正的響度壓縮,門檻降到 -18dB、壓縮比 3:1,把演奏本身較大聲的部分先壓掉
-       一截,空出來的餘裕再用 makeupGain 補回音量,讓平均音量墊高。實測(取使用者實際曲目
-       的匯出音檔重新過這條鏈路):原本 -10.49 LUFS/+0.03dBTP,加這段後 -7.03 LUFS/+0.03dBTP——
-       平均音量拉高約 3.5 個響度單位,真峰值沒有變得更危險(跟原本一樣貼著上限,不算新增風險),
-       代價是動態範圍(LRA)從 6.1 收到 3.0,大小聲對比會比較不明顯,這是壓縮換音量必然的取捨。 */
+       聽清楚——這個合成器完全保留鋼琴原始力度動態,平均音量自然遠低於一般影片(影片後製都會做母帶)。
+       這裡把較大聲的部分先壓掉一截,空出來的餘裕再用 makeupGain 補回音量。參數見 MASTER */
     const loudnessComp = audioCtx.createDynamicsCompressor();
-    loudnessComp.threshold.value = -18;
-    loudnessComp.knee.value = 8;
-    loudnessComp.ratio.value = 3;
-    loudnessComp.attack.value = 0.008;
-    loudnessComp.release.value = 0.18;
+    loudnessComp.threshold.value = MASTER.compThreshold;
+    loudnessComp.knee.value = MASTER.compKnee;
+    loudnessComp.ratio.value = MASTER.compRatio;
+    loudnessComp.attack.value = MASTER.compAttack;
+    loudnessComp.release.value = MASTER.compRelease;
     const makeupGain = audioCtx.createGain();
-    makeupGain.gain.value = 1.6; // 補回響度壓縮讓出來的餘裕,數值來自實測(見上)而非估算
+    makeupGain.gain.value = MASTER.makeup;
     masterGain.connect(loudnessComp);
     loudnessComp.connect(makeupGain);
-    makeupGain.connect(masterLimiter);
-    /* 最後一道安全網(輸出上限):Web Audio 的 DynamicsCompressor 會「自動補增益」(makeup gain),
-       上面這個限幅器實際會把訊號再推高約 1.6dB,所以它擋不住峰值——實測真實曲子的真峰值到 +0.2dBTP、
-       有削波。這裡接一個 4 倍超取樣的軟削波:−3dBFS 以下完全不動(線性),以上平滑地壓向 −1.4dBFS,
-       保證真峰值 ≤ −1dBTP(手機 DAC、影片 AAC 編碼都不會破) */
-    const ceilPre = audioCtx.createGain(); ceilPre.gain.value = 1 / MASTER_CEIL_RANGE;
-    masterOut = audioCtx.createWaveShaper(); masterOut.curve = buildCeilingCurve(); masterOut.oversample = "4x";
-    masterLimiter.connect(ceilPre); ceilPre.connect(masterOut);
+    /* masterBus:所有樂器最後匯集的地方(鋼琴/吉他走完響度壓縮、鼓組匯流排直接進來),後面只剩母帶限幅器。
+       masterOut:最後的輸出節點,喇叭與匯出影片都從這裡取 */
+    masterBus = audioCtx.createGain();
+    makeupGain.connect(masterBus);
+    masterOut = audioCtx.createGain();
     masterOut.connect(audioCtx.destination);
+    /* 備援(不支援 AudioWorklet 的瀏覽器才用):快起音壓縮器 + 4 倍超取樣軟削波。
+       Web Audio 的 DynamicsCompressor 沒有預讀、又會自動補增益(約 +1.6dB),擋不住峰值,
+       所以後面還要一段軟削波:−3dBFS 以下線性,以上平滑壓向 −1.4dBFS(真峰值 ≤ −1dBTP),但會有一點失真 */
+    masterLimiter = audioCtx.createDynamicsCompressor();
+    masterLimiter.threshold.value = -3; masterLimiter.knee.value = 3; masterLimiter.ratio.value = 12;
+    masterLimiter.attack.value = 0.001; masterLimiter.release.value = 0.25;
+    const ceilPre = audioCtx.createGain(); ceilPre.gain.value = 1 / MASTER_CEIL_RANGE;
+    const ceilShaper = audioCtx.createWaveShaper(); ceilShaper.curve = buildCeilingCurve(); ceilShaper.oversample = "4x";
+    // 這個壓縮器會自動補約 +1.6dB,前面先扣掉,備援跟正式限幅器的音量才一樣
+    const fbTrim = audioCtx.createGain(); fbTrim.gain.value = Math.pow(10, -1.6 / 20);
+    masterBus.connect(fbTrim); fbTrim.connect(masterLimiter); masterLimiter.connect(ceilPre); ceilPre.connect(ceilShaper); ceilShaper.connect(masterOut);
+    /* 正式的母帶限幅器(AudioWorklet,見 MASTER_LIMITER_SRC):預讀 5ms、真峰值偵測、立體聲連動,
+       峰值來之前就把音量平滑地降好,沒有失真;載好之後把備援換掉(通常在取樣載完之前就好了) */
+    masterReady = (async () => {
+      try {
+        if (!audioCtx.audioWorklet || typeof AudioWorkletNode === "undefined") return false;
+        const url = URL.createObjectURL(new Blob([MASTER_LIMITER_SRC], { type: "text/javascript" }));
+        await audioCtx.audioWorklet.addModule(url);
+        URL.revokeObjectURL(url);
+        const lim = new AudioWorkletNode(audioCtx, "ss-master-limiter", {
+          numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2], channelCount: 2, channelCountMode: "explicit",
+          processorOptions: { ceilingDb: MASTER.ceilingDb, lookahead: MASTER.lookahead, release: MASTER.release, releaseSlow: MASTER.releaseSlow }
+        });
+        masterBus.disconnect(fbTrim); masterBus.connect(lim); lim.connect(masterOut);
+        masterLimiterNode = lim;
+        return true;
+      } catch (e) { console.warn("母帶限幅器載入失敗,使用備援:", e); return false; }
+    })();
     buildReverbChain();
   }
   if (audioCtx.state === "suspended") audioCtx.resume();
@@ -4815,7 +5101,7 @@ function playCountIn(){
   ensureAudio();
   return new Promise(resolve => {
     const { clicks, quartersPerClick, levels } = countInPattern();
-    const interval = (60 / bpm()) * quartersPerClick;
+    const interval = (60 / (bpm() * localTempoRatio(secToWhole(pausedAtSec || 0)))) * quartersPerClick;   // 從中間開始播時,用那裡的速度
     const startAt = audioCtx.currentTime + 0.05;
     countInNodes = [];
     for (let i = 0; i < clicks; i++) scheduleMetronomeClick(startAt + i * interval, levels[i]);
@@ -4834,6 +5120,9 @@ async function beginPlayback(fromSec){
     countingIn = false;
     if (countInCancelled) { setPlayBtnState(false); return; }
   }
+  // 母帶限幅器(AudioWorklet)還在載入的話先等它(最多 0.5 秒),不要播到一半才從備援換過去、音量跳一下
+  ensureAudio();
+  await Promise.race([masterReady, new Promise(r => setTimeout(r, 500))]);
   startPlayback(fromSec);
 }
 
@@ -4873,14 +5162,15 @@ function startAudioFrom(fromSec){
     for (const n of ev.notes) {
       try {
         const rollT = computeArpNoteOffsetSec(ev, n, t, calib);
-        const durSec = calib ? Math.max(calibToSec(ev.tWhole + n.durWhole) - t, 0.05) : wholeToSec(n.durWhole);
+        const durSec = calib ? Math.max(calibToSec(ev.tWhole + n.durWhole) - t, 0.05) : spanSec(ev.tWhole, n.durWhole);
         // 吉他:同弦延音範圍(guitarRingEndWhole)取代一般和聲延長判斷,才符合「其他音符要在別條弦上才能延音」的物理限制
         const noteHarmonyEndSec = (isGuitar && n.guitarRingEndWhole != null)
           ? startCtxTime + (posToSec(n.guitarRingEndWhole, calib))
           : harmonyEndSec;
         const noteTech = (isGuitar && n.glissTargetFreq != null) ? Object.assign({}, tech, { glissTargetFreq: n.glissTargetFreq }) : tech;
-        if (n.drum) { const h = humanizeDrumHit(ev, n); scheduleDrum(n.key, startCtxTime + t + rollT + h.dt, h); }
-        else scheduleNote(n.freq, startCtxTime + t + rollT + ((isGuitar ? n.gdt : n.pdt) || 0), durSec, ev.legato, ev.pedalOn, chordAnchors, noteHarmonyEndSec, ev.artic, noteTech, n.staff, isGuitar ? n.gvel : n.pvel, n);
+        // 人性化的時間偏移可能是負的(提早一點點):第一拍剛好在 currentTime 時會變成過去的時間而整個被丟掉,所以不早於現在
+        if (n.drum) { const h = humanizeDrumHit(ev, n); scheduleDrum(n.key, Math.max(audioCtx.currentTime, startCtxTime + t + rollT + h.dt), h); }
+        else scheduleNote(n.freq, Math.max(audioCtx.currentTime, startCtxTime + t + rollT + ((isGuitar ? n.gdt : n.pdt) || 0)), durSec, ev.legato, ev.pedalOn, chordAnchors, noteHarmonyEndSec, ev.artic, noteTech, n.staff, isGuitar ? n.gvel : n.pvel, n);
       } catch (e) {
         errCount++; lastErr = e;
         console.error("排程音符失敗:", e);
@@ -5167,7 +5457,7 @@ function pianoComputeNeeds(){
       if (n.drum || !n.freq) continue;
       const c = pianoCenterFor(Math.round(freqToMidi(n.freq))), L = pianoLayerFor(n.pvel || 70);
       const key = pianoNoteName(c) + "-v" + L;
-      const sound = Math.max(wholeToSec(n.durWhole), hEnd != null ? hEnd - t : 0);
+      const sound = Math.max(spanSec(ev.tWhole, n.durWhole), hEnd != null ? hEnd - t : 0);
       const e = need.get(key) || { key, c, L, uses: 0, sec: 0 };
       e.uses++; e.sec = Math.max(e.sec, sound); need.set(key, e);
     }
@@ -5439,18 +5729,20 @@ function pianoSchedulePedalNoise(fromSec, toSec, timeToCtx){
   if (!pianoMan || !pianoRanges().length) return;
   const calib = useCalib(), d16 = -1.5;
   const g = PIANO_GAIN * Math.pow(10, (-20 - d16) / 20) * 0.6;
-  let cur = null, k = 0;
+  let cur = null, curOff = 0, k = 0;
   const fire = (name, sec, gg) => { if (sec < fromSec - 0.01 || sec > toSec) return; const b = pianoAux[name]; if (b) pianoOneShot(b, timeToCtx(sec), gg, 1, PIANO_VERB_SEND); };
   for (const ev of events) {
-    const r = ev.pedalOn ? pedalRanges.find(r => ev.tWhole >= r.start && ev.tWhole < r.end) : null;
-    if (r !== cur) {
+    // 踏板範圍是記譜位置;反覆記號重播時同一個範圍再踩一次(off = 這一遍演奏位置與記譜位置的差)
+    const sT = ev.srcT != null ? ev.srcT : ev.tWhole, off = ev.tWhole - sT;
+    const r = ev.pedalOn ? pedalRanges.find(r => sT >= r.start && sT < r.end) : null;
+    if (r !== cur || (r && Math.abs(off - curOff) > 1e-6)) {
       const t = posToSec(ev.tWhole, calib);
-      if (cur) fire("pedalU" + (1 + (k & 1)), r ? t - 0.06 : posToSec(cur.end, calib), g);
+      if (cur) fire("pedalU" + (1 + (k & 1)), r ? t - 0.06 : posToSec(Math.min(cur.end + curOff, ev.tWhole), calib), g);
       if (r) fire("pedalD" + (1 + (k & 1)), t + 0.05, g * 0.8);
-      cur = r; k++;
+      cur = r; curOff = off; k++;
     }
   }
-  if (cur) fire("pedalU" + (1 + (k & 1)), posToSec(cur.end, calib), g);
+  if (cur) fire("pedalU" + (1 + (k & 1)), posToSec(cur.end + curOff, calib), g);
 }
 function pianoRanges(){ return pedalRanges || []; }
 
@@ -6493,7 +6785,7 @@ function playSampledInstrument(instKey, freq, when, dur, legato, pedal, chordAnc
    marks(1/2/3)決定每次重彈的音符長度(八分/十六分/三十二分音符),而不是音符本身撐滿整個時值 */
 function scheduleTremolo(freq, when, dur, marks, legato, pedal, chordAnchors, harmonyEndSec, artic, staff, vel, gn){
   const pulseWhole = Math.pow(2, -(marks + 2)); // 1=0.125(八分),2=0.0625(十六分),3=0.03125(三十二分)
-  const pulseSec = Math.max(wholeToSec(pulseWhole), 0.05); // 太快的話至少保留可辨識的最短間隔
+  const pulseSec = Math.max(gn && gn.durWhole > 0 ? dur * pulseWhole / gn.durWhole : wholeToSec(pulseWhole), 0.05); // 依這個音當下的速度;太快的話至少保留可辨識的最短間隔
   const count = Math.max(1, Math.round(dur / pulseSec));
   const actualPulseSec = dur / count; // 微調間隔,讓最後一次重彈剛好對齊音符結尾,不會多出一小段空隙
   for (let i = 0; i < count; i++) {
@@ -6917,7 +7209,7 @@ function getDrumBus(){
   // 匯流排 EQ
   const box = audioCtx.createBiquadFilter(); box.type = "peaking"; box.frequency.value = B.eqBoxFreq; box.Q.value = 1.0; box.gain.value = B.eqBoxGain;
   const air = audioCtx.createBiquadFilter(); air.type = "highshelf"; air.frequency.value = 10000; air.gain.value = B.eqAirGain;
-  out.connect(box); box.connect(air); air.connect(masterLimiter || masterGain);
+  out.connect(box); box.connect(air); air.connect(masterBus || masterGain);
   // 1) 乾聲
   input.connect(out);
   // 2) 平行壓縮
@@ -7183,7 +7475,7 @@ function stopPlayback(){
 function playlineX(){ return $("stage").clientWidth * PLAYLINE_RATIO; }
 
 function secToWhole(sec){
-  return useCalib() ? calibSecToWhole(sec) : (rubatoEnabled() ? rubatoSecToWhole(sec) : sec * bpm() / 240);
+  return useCalib() ? calibSecToWhole(sec) : (rubatoEnabled() ? rubatoSecToWhole(sec) : secToWholeTempo(sec));
 }
 function xAtSec(sec){ return xAtWhole(secToWhole(sec)); } // sec → whole → x
 /* 全音符座標 → 樂譜上的 x。小節高亮需要直接用小節邊界(本來就是全音符座標)算出
@@ -7204,7 +7496,13 @@ function xAtWhole(w){
     if (events[mid].tWhole <= w) lo = mid; else hi = mid - 1;
   }
   const a = events[lo];
-  const b = events[lo + 1] || { tWhole: totalWhole, x: endX };
+  let b = events[lo + 1] || { tWhole: totalWhole, x: endX };
+  // 反覆記號跳過去(跳回重播、跳過第一結尾、D.S./Coda):先走到這個小節的右邊界,到了才跳,不會整段掃過去
+  const jump = b.srcT != null && a.srcT != null && Math.abs((b.tWhole - b.srcT) - (a.tWhole - a.srcT)) > 1e-6;
+  if (jump || b.x < a.x) {
+    const mb = measurePixels.length ? measurePixelsAtSrc(a.srcT != null ? a.srcT : a.tWhole) : null;
+    b = { tWhole: b.tWhole, x: mb ? Math.max(a.x, mb.right) : a.x };
+  }
   const f = (w - a.tWhole) / Math.max(b.tWhole - a.tWhole, 1e-6);
   return a.x + (b.x - a.x) * f;
 }
@@ -7992,6 +8290,7 @@ async function exportVideo(cfg){
   await acquireWakeLock();
   stopPlayback();
   ensureAudio();
+  await Promise.race([masterReady, new Promise(r => setTimeout(r, 500))]);   // 匯出時一定要用正式的母帶限幅器
   if (kitLoading) await kitLoading;
   if (pianoLoading && currentInstrument() === "piano") await pianoLoading;
   if (GTR_INSTS[currentInstrument()] && GTR_INSTS[currentInstrument()].loading) await GTR_INSTS[currentInstrument()].loading;
@@ -8024,7 +8323,7 @@ async function exportVideo(cfg){
       pushFrame = () => {};
     }
     aDest = audioCtx.createMediaStreamDestination();
-    (masterOut || masterLimiter).connect(aDest); // 從輸出上限之後取音,匯出的影片才跟現場聽到的一樣不會破音
+    masterOut.connect(aDest); // 從輸出上限之後取音,匯出的影片才跟現場聽到的一樣不會破音
     const stream = new MediaStream([
       ...vStream.getVideoTracks(),
       ...aDest.stream.getAudioTracks()
@@ -8063,7 +8362,7 @@ async function exportVideo(cfg){
         const tech = (isGuitar && ev.guitarTech) ? Object.assign({}, ev.guitarTech, { vibrato: ev.vibrato }) : (isGuitar && ev.vibrato ? { vibrato: true } : null);
         for (const n of ev.notes) {
           const rollT = computeArpNoteOffsetSec(ev, n, t, calib);
-          const durSec = calib ? Math.max(calibToSec(ev.tWhole + n.durWhole) - t, 0.05) : wholeToSec(n.durWhole);
+          const durSec = calib ? Math.max(calibToSec(ev.tWhole + n.durWhole) - t, 0.05) : spanSec(ev.tWhole, n.durWhole);
           const noteHarmonyEndSec = (isGuitar && n.guitarRingEndWhole != null)
             ? startCtxTime + ((posToSec(n.guitarRingEndWhole, calib)) - rangeStart)
             : harmonyEndSec;
@@ -8121,7 +8420,7 @@ async function exportVideo(cfg){
   } catch (err) {
     setStatus(T("exportFailed", { msg: err.message || err }));
   }
-  if (aDest) { try { (masterOut || masterLimiter).disconnect(aDest); } catch(e){} }
+  if (aDest) { try { masterOut.disconnect(aDest); } catch(e){} }
   stopAudioOnly();
   releaseWakeLock();
   $("exportOverlay").classList.remove("show");

@@ -40,6 +40,13 @@
 - 樂器只保留鋼琴、吉他（民謠、古典兩把）、鼓組
 - 民謠吉他、古典吉他目前標「開發中」並停用（使用者要求）：樂器選單的 <option disabled>，文字加「・開發中」；舊設定存了吉他時退回鋼琴。程式與取樣都保留，拿掉 disabled 即可恢復
 - 匯出影片用 canvas.captureStream + MediaRecorder
+- 時間軸(buildTimeline):OSMD 2.0 的 cursor 會照反覆記號/第一二結尾跳,但 currentTimeStamp(= CurrentSourceTimestamp)是記譜位置、跳回去會變小(以前重播段跟第一遍疊在同一時間、兩遍一起響,反覆根本沒播)。現在 ev.tWhole = 演奏位置(it.CurrentEnrolledTimestamp,OSMD 自己展開好的),ev.srcT = 記譜位置,ev.mIdx = 演奏小節編號;perfMeasures = 演奏順序的小節。查原始 XML 來的資料(articEntries、arpEntries、pedalRanges、slurRanges、repeatChordRanges、vibratoRanges、guitarTechEntries、鬼音/邊擊符頭、力度記號/髮夾、measureRanges、measurePixels)一律用 srcT;排程、捲動、計時用 tWhole。範圍結尾換回演奏位置:ev.tWhole + (r.end − srcT)
+- 速度變化(tempo map):buildTempoMap() 依 perfMeasures 的 OSMD TempoInBPM,只在原檔該小節真的有 <sound tempo>/<metronome> 時換速度(OSMD 會把「Allegro」文字自己換成預設速度,不信);第一個速度記號之前的小節(OSMD 填 120)當成開頭速度。速度滑桿 = 開頭速度,後面等比例縮放。wholeToSec(位置)/secToWholeTempo/spanSec(起點, 長度)(音長一定要用 spanSec,不能用 wholeToSec(長度));預備拍用當下位置的速度。小節中間的速度變化套在小節開頭;漸快/漸慢(rit./accel.)不處理
+- 單行排版的版面保護(renderScore):SheetMaximumWidth = 1e7(OSMD 預設 32767 是 canvas 限制,長曲子會被折成第二行);SlurPlacementUseSkyBottomLine = true(長圓滑線舊算法會往下彎很深,撐開譜表間距);tameFarDirectionsMusicXML() 把掛在上譜表、放在下方的踏板記號改掛最後一個譜表、拿掉 |default-y| > 120 的位置;排完如果譜表間距 > 45 或最下方輪廓 > 40(scoreLayoutTooTall)就不畫踏板記號再排一次(OSMD 某些檔案的踏板記號會一層層往下疊,播放照樣依原檔踏板)
+- 鼓譜顯示轉換(drumStemFixCore,只限有 <unpitched> 的鼓譜音):MuseScore 4 的開放 hi-hat「o」是 <technical><open/>,OSMD 只認得 <open-string/>,要換;邊擊 slashed 符頭 OSMD 不會畫(變一般小鼓符頭),改成 x
+- 排程時間不早於 audioCtx.currentTime(鼓的人性化時間偏移可能是負的,第一拍會變成過去時間被整個丟掉)
+- 測試工具在 tools/audiotest/(見該目錄 README):離線渲染(OfflineAudioContext)量響度/真峰值/LRA、力度階梯、限幅器單元測試、測試鼓譜產生與記譜檢查、截圖。鋼琴測試曲用 ASAP dataset 的 MusicXML(只測試,不放 repo)
+- 測試鼓譜的記譜規則(使用者強調,寫錯過好幾次):照 Weinberg/PAS 與 MuseScore 4 預設鼓組(drumset.cpp)——音符與休止符不跨拍、休止符對齊拍子(空兩拍且從第 1 或 3 拍開始才用二分休止)、手(符桿上)腳(符桿下)兩個聲部各自寫滿、符尾以拍為單位、搖擺用三連音記、開放 hi-hat 是 x 符頭 + 上方「o」、中鼓 48 E5 / 47 D5 / 45 B4、落地鼓 43 A4 / 41 G4。MuseScore 網站上使用者上傳的譜品質參差,不能拿來當記譜依據
 
 ## Git 流程
 - 所有改動完成後直接 commit 並 push 到 main，不用先問我
