@@ -21,10 +21,14 @@
 - 鋼琴殘響送出：一般 0.5、譜上有踏板 ×1.7。harmonyEndSec 一定有值（至少是同時最長音的結尾），不能拿來判斷踏板
 - 譜上沒踏板、由和聲自動延長的音用「半踏板」：放鍵後依 pianoHalfPedalTau（PIANO_HALF_PEDAL 0.7）較快衰減，避免級進旋律全部疊在一起變糊；譜上有踏板才完全延音
 - 「圓滑/踏板」開關已移除（使用者要求）：圓滑線、踏板記號、和聲延音一律開啟，不要再加回開關
-- 民謠吉他音色放在本 repo 的 guitar/steel/：Ella Gitauru 5（Malaclypse the Younger，BJAM 5.25.06，MIT，授權檔 guitar/steel/LICENSE.txt）。原檔 16kHz 單聲道、每檔峰值正規化。原廠「每 2 格一個取樣」其實是空弦錄音加濾波複製的（相干性 0.9，真正不同的錄音只有 0.6），所以只收真錄音：6E/5A/4D/2B 空弦 × 4 層（mp/mf/f/ff，0-48/49-91/92-119/120-127）+ 2B 第二組錄音（輪替）+ B5 短取樣（第 1 弦 20 格以上），共 24 檔；第 3 弦借第 4 弦、第 1 弦借第 2 弦錄音（原廠也是）。重建用 guitar/build/steel_build.py（逐檔音準校正、頻譜降噪、前 0.5 秒 K 加權響度對齊 −18 LKFS、尾巴淡出；--excite / --excite-strong 是高頻激勵的試聽選項，目前沒用）
-- 吉他的弦/把位：computeGuitarStringRinging() 在空著的候選弦裡挑品格最低的（開放把位），存在 n.gstr；把位音色 gtrFretTone()：每格 lowshelf 300Hz +0.27dB、highshelf 2.2kHz −0.5dB（量原廠複製檔擬合，頻率×rate），力度明暗 ±6dB 高頻架。音量 = 0.02 + 0.98×（力度/127）²（原廠 amp_veltrack 98），放開 tau 0.05s（低音空弦 0.09）
+- 民謠吉他音色放在本 repo 的 guitar/steel/：Ella Gitauru 5（Malaclypse the Younger，BJAM 5.25.06，MIT，授權檔 guitar/steel/LICENSE.txt）。原檔 16kHz 單聲道、每檔峰值正規化。原廠「每 2 格一個取樣」其實是空弦錄音加濾波複製的（相干性 0.9，真正不同的錄音只有 0.6），所以只收真錄音：6E/5A/4D/2B 空弦 × 4 層（mp/mf/f/ff，0-48/49-91/92-119/120-127）+ 2B 第二組錄音（輪替）+ B5 短取樣（第 1 弦 20 格以上），共 24 檔；第 3 弦借第 4 弦、第 1 弦借第 2 弦錄音（原廠也是）。重建：python3 guitar/build/steel_build.py <Ella G5 目錄> guitar/steel --excite（逐檔音準校正、頻譜降噪、保守高頻激勵（3.5~7.5kHz 整流產生 8kHz 以上，音量照頻譜斜率外插再 −3dB；使用者選的 B 版）、前 0.5 秒 K 加權響度對齊 −18 LKFS、尾巴淡出），32kHz FLAC
+- 古典吉他音色放在本 repo 的 guitar/nylon/：MF Concert Guitar（Markus Fiedler，CC-BY-NC-SA 3.0 + 可用於商業音樂製作的例外；處理後的檔案同授權，授權檔 guitar/nylon/LICENSE.txt）。來源是 bigcat 的 Kontakt monolith（.nki，mediafire 要用瀏覽器 User-Agent），guitar/build/nylon_build.py 內含 NCW 解碼器。E2 A2 D3 G3 B3 E4 A4 D5 × pp/p/f/ff（1-40/41-74/75-104/105-127）× 2~4 輪替（5 組完全重複的檔案已去掉）+ 6 個放音聲（off，對齊到比音符小 26dB，弦真的被止住時才播）。原檔單聲道、峰值正規化、標示 44000Hz，轉 48kHz FLAC，共 13MB。播放時取最近的音（最多升降 2.5 半音），amp_veltrack 96，不加把位濾波、力度明暗 ±4dB
+- Pettinhouse（ClassicGuitar FREE / AcousticGuitar FREE）不能用：授權禁止把聲音上傳到任何伺服器。tonejs-instruments、Martin HD28、FreePats 都比過，比較差
+- 兩把吉他共用引擎：GTR_INSTS（各自 manifest/buf/loading/fallback/gain）、loadGuitarSamples(inst)、playGuitarNote(inst, …)；manifest 讀不到才退回 REAL_INSTRUMENTS 的 tonejs 取樣
+- 吉他的弦/把位：computeGuitarStringRinging() 在空著的候選弦裡挑品格最低的（開放把位），存在 n.gstr；鋼弦的把位音色 gtrFretTone()：每格 lowshelf 300Hz +0.27dB、highshelf 2.2kHz −0.5dB（量原廠複製檔擬合，頻率×rate），力度明暗 ±6dB 高頻架。音量 = (1−t) + t×（力度/127）²，t = amp_veltrack（鋼弦 98、尼龍 96），放開 tau 0.05s（低音空弦 0.09）
 - computeGuitarDynamics() 算 n.gvel / n.gdt / n.gseed：力度記號/髮夾/段落起伏（共用 pianoLevelAt / pianoAutoMacro）、拍子輕重、4 音以上當刷弦（正拍下刷低→高、反拍上刷高→低且低音弦輕，弦距 6~16ms 越大聲越快）、2~3 音手指同時撥（≤4ms）、單音旋律起伏、AR(1) + 隨機
-- 吉他混音：getGuitarBus()（GTR_EQ：75Hz 高通、220Hz −2dB、2.8kHz −1.5dB、5kHz 高頻架 +2dB）→ masterGain；殘響 getGuitarVerb() 用 buildPianoHallIR(GTR_VERB)（較小房間，RT60 1.15/1.0/0.75/0.45s、早期反射 2.4~29ms），送出 0.45；古典吉他（目前還是 tonejs 取樣）也走這條。GTR_GAIN 1.6：巴哈 BWV846 約 −12 LUFS、刷弦約 −10.8 LUFS（鋼琴同曲 −10.8）
+- 吉他混音：getGuitarBus(inst)，兩把各自的 GTR_EQ：鋼弦 75Hz 高通、220Hz −2dB、2.8kHz −1.5dB、5kHz 高頻架 +2dB；尼龍 70Hz 高通、130Hz −4dB（MF 麥克風近音孔，基音比第 2 諧波大 19dB、琴身 102Hz 共振）、3.5kHz 高頻架 +2dB → masterGain。殘響 getGuitarVerb() 用 buildPianoHallIR(GTR_VERB)（較小房間，RT60 1.15/1.0/0.75/0.45s、早期反射 2.4~29ms），送出 0.45。增益兩把都 1.6：巴哈 BWV846 鋼弦 −11.9、尼龍 −11.3 LUFS（鋼琴同曲 −10.8），刷弦 −10.8 / −11.0
+- 測試：headless Chromium 錄 masterOut（ScriptProcessor），jsdelivr 在雲端環境被擋，要從 npm 拿 OSMD/JSZip 再用 page.route 攔截
 - 樂器只保留鋼琴、吉他（民謠、古典兩把）、鼓組
 - 匯出影片用 canvas.captureStream + MediaRecorder
 

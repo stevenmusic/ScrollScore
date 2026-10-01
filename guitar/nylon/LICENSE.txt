@@ -1,0 +1,11 @@
+MF Concert Guitar samples by Markus Fiedler (http://www.markus-fiedler.de/)
+Kontakt version "MF Natural Concert Guitar" by bigcat instruments (https://bigcatinstruments.blogspot.com/2014/05/mf-natural-concert-guitar.html)
+
+License: Creative Commons Attribution-NonCommercial-ShareAlike 3.0 Unported
+https://creativecommons.org/licenses/by-nc-sa/3.0/
+Exception granted by the author: the recordings may be used for commercial music productions.
+
+Changes made for ScrollScore (guitar/build/nylon_build.py): decoded from the Kontakt monolith,
+duplicate files removed, pitch corrected, resampled to 48 kHz, noise reduced, loudness aligned,
+tails trimmed and faded, saved as FLAC. These processed files are distributed under the same
+CC-BY-NC-SA 3.0 license.

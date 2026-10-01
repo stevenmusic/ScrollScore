@@ -1,0 +1,804 @@
+{
+ "source": "MF Concert Guitar by Markus Fiedler (Kontakt version by bigcat instruments), CC-BY-NC-SA 3.0",
+ "mode": "nearest",
+ "sr": 48000,
+ "velRanges": [
+  [
+   1,
+   40
+  ],
+  [
+   41,
+   74
+  ],
+  [
+   75,
+   104
+  ],
+  [
+   105,
+   127
+  ]
+ ],
+ "ampVeltrack": 96,
+ "samples": {
+  "ny-A2-L3-1": {
+   "root": 45,
+   "L": 3,
+   "rr": 1,
+   "frames": 850560,
+   "tuneFix": 2.5,
+   "peak": -5.8
+  },
+  "ny-A4-L3-1": {
+   "root": 69,
+   "L": 3,
+   "rr": 1,
+   "frames": 286157,
+   "tuneFix": 3.7,
+   "peak": -0.9
+  },
+  "ny-B3-L3-1": {
+   "root": 59,
+   "L": 3,
+   "rr": 1,
+   "frames": 314567,
+   "tuneFix": 2.7,
+   "peak": -3.4
+  },
+  "ny-D3-L3-1": {
+   "root": 50,
+   "L": 3,
+   "rr": 1,
+   "frames": 773995,
+   "tuneFix": 3.1,
+   "peak": -7.4
+  },
+  "ny-D5-L3-1": {
+   "root": 74,
+   "L": 3,
+   "rr": 1,
+   "frames": 208820,
+   "tuneFix": 4.1,
+   "peak": -0.1
+  },
+  "ny-E4-L3-1": {
+   "root": 64,
+   "L": 3,
+   "rr": 1,
+   "frames": 337573,
+   "tuneFix": 4.6,
+   "peak": -0.2
+  },
+  "ny-G3-L3-1": {
+   "root": 55,
+   "L": 3,
+   "rr": 1,
+   "frames": 370560,
+   "tuneFix": 0.2,
+   "peak": -5.3
+  },
+  "ny-A2-L4-1": {
+   "root": 45,
+   "L": 4,
+   "rr": 1,
+   "frames": 728640,
+   "tuneFix": -4.2,
+   "peak": -6.4
+  },
+  "ny-A4-L4-1": {
+   "root": 69,
+   "L": 4,
+   "rr": 1,
+   "frames": 314162,
+   "tuneFix": -0.4,
+   "peak": -1.3
+  },
+  "ny-B3-L4-1": {
+   "root": 59,
+   "L": 4,
+   "rr": 1,
+   "frames": 370546,
+   "tuneFix": 1.8,
+   "peak": -1.1
+  },
+  "ny-D3-L4-1": {
+   "root": 50,
+   "L": 4,
+   "rr": 1,
+   "frames": 786174,
+   "tuneFix": 1.7,
+   "peak": -4.6
+  },
+  "ny-D5-L4-1": {
+   "root": 74,
+   "L": 4,
+   "rr": 1,
+   "frames": 165162,
+   "tuneFix": -1.5,
+   "peak": -0.1
+  },
+  "ny-E2-L4-1": {
+   "root": 40,
+   "L": 4,
+   "rr": 1,
+   "frames": 893355,
+   "tuneFix": 0.3,
+   "peak": -8.4
+  },
+  "ny-E4-L4-1": {
+   "root": 64,
+   "L": 4,
+   "rr": 1,
+   "frames": 361143,
+   "tuneFix": 4.2,
+   "peak": -0.1
+  },
+  "ny-G3-L4-1": {
+   "root": 55,
+   "L": 4,
+   "rr": 1,
+   "frames": 267840,
+   "tuneFix": -0.5,
+   "peak": -3.9
+  },
+  "ny-A2-L2-1": {
+   "root": 45,
+   "L": 2,
+   "rr": 1,
+   "frames": 833317,
+   "tuneFix": 0.3,
+   "peak": -6.6
+  },
+  "ny-A4-L2-1": {
+   "root": 69,
+   "L": 2,
+   "rr": 1,
+   "frames": 240616,
+   "tuneFix": 3.4,
+   "peak": -2.9
+  },
+  "ny-B3-L2-1": {
+   "root": 59,
+   "L": 2,
+   "rr": 1,
+   "frames": 333642,
+   "tuneFix": 1.9,
+   "peak": -5.1
+  },
+  "ny-D3-L2-1": {
+   "root": 50,
+   "L": 2,
+   "rr": 1,
+   "frames": 816233,
+   "tuneFix": 3.2,
+   "peak": -6.0
+  },
+  "ny-D5-L2-1": {
+   "root": 74,
+   "L": 2,
+   "rr": 1,
+   "frames": 185887,
+   "tuneFix": 0.9,
+   "peak": -1.0
+  },
+  "ny-E2-L2-1": {
+   "root": 40,
+   "L": 2,
+   "rr": 1,
+   "frames": 692622,
+   "tuneFix": 4.2,
+   "peak": -6.4
+  },
+  "ny-E4-L2-1": {
+   "root": 64,
+   "L": 2,
+   "rr": 1,
+   "frames": 300164,
+   "tuneFix": 4.0,
+   "peak": -3.5
+  },
+  "ny-G3-L2-1": {
+   "root": 55,
+   "L": 2,
+   "rr": 1,
+   "frames": 331720,
+   "tuneFix": 0.3,
+   "peak": -5.2
+  },
+  "ny-A2-L1-1": {
+   "root": 45,
+   "L": 1,
+   "rr": 1,
+   "frames": 606912,
+   "tuneFix": -3.9,
+   "peak": -6.3
+  },
+  "ny-A4-L1-1": {
+   "root": 69,
+   "L": 1,
+   "rr": 1,
+   "frames": 213940,
+   "tuneFix": 4.3,
+   "peak": -2.1
+  },
+  "ny-B3-L1-1": {
+   "root": 59,
+   "L": 1,
+   "rr": 1,
+   "frames": 401397,
+   "tuneFix": 2.0,
+   "peak": -5.4
+  },
+  "ny-D3-L1-1": {
+   "root": 50,
+   "L": 1,
+   "rr": 1,
+   "frames": 643060,
+   "tuneFix": 3.3,
+   "peak": -4.4
+  },
+  "ny-D5-L1-1": {
+   "root": 74,
+   "L": 1,
+   "rr": 1,
+   "frames": 186425,
+   "tuneFix": 5.6,
+   "peak": -0.1
+  },
+  "ny-E2-L1-1": {
+   "root": 40,
+   "L": 1,
+   "rr": 1,
+   "frames": 607699,
+   "tuneFix": 4.6,
+   "peak": -5.7
+  },
+  "ny-E4-L1-1": {
+   "root": 64,
+   "L": 1,
+   "rr": 1,
+   "frames": 317384,
+   "tuneFix": 4.0,
+   "peak": -2.1
+  },
+  "ny-G3-L1-1": {
+   "root": 55,
+   "L": 1,
+   "rr": 1,
+   "frames": 370022,
+   "tuneFix": -0.3,
+   "peak": -7.6
+  },
+  "ny-E2-L3-1": {
+   "root": 40,
+   "L": 3,
+   "rr": 1,
+   "frames": 764984,
+   "tuneFix": 3.6,
+   "peak": -6.9
+  },
+  "ny-A2-L3-2": {
+   "root": 45,
+   "L": 3,
+   "rr": 2,
+   "frames": 793920,
+   "tuneFix": -3.4,
+   "peak": -5.7
+  },
+  "ny-D3-L3-2": {
+   "root": 50,
+   "L": 3,
+   "rr": 2,
+   "frames": 750730,
+   "tuneFix": 2.9,
+   "peak": -7.3
+  },
+  "ny-G3-L3-2": {
+   "root": 55,
+   "L": 3,
+   "rr": 2,
+   "frames": 422100,
+   "tuneFix": -0.2,
+   "peak": -5.4
+  },
+  "ny-B3-L3-2": {
+   "root": 59,
+   "L": 3,
+   "rr": 2,
+   "frames": 309161,
+   "tuneFix": 2.6,
+   "peak": -3.4
+  },
+  "ny-E4-L3-2": {
+   "root": 64,
+   "L": 3,
+   "rr": 2,
+   "frames": 398676,
+   "tuneFix": 4.7,
+   "peak": -0.6
+  },
+  "ny-A4-L3-2": {
+   "root": 69,
+   "L": 3,
+   "rr": 2,
+   "frames": 263778,
+   "tuneFix": 3.7,
+   "peak": -1.7
+  },
+  "ny-D5-L3-2": {
+   "root": 74,
+   "L": 3,
+   "rr": 2,
+   "frames": 155766,
+   "tuneFix": 0.6,
+   "peak": -0.2
+  },
+  "ny-E2-L4-2": {
+   "root": 40,
+   "L": 4,
+   "rr": 2,
+   "frames": 828675,
+   "tuneFix": 0.4,
+   "peak": -7.8
+  },
+  "ny-A2-L4-2": {
+   "root": 45,
+   "L": 4,
+   "rr": 2,
+   "frames": 1067231,
+   "tuneFix": 2.3,
+   "peak": -5.6
+  },
+  "ny-D3-L4-2": {
+   "root": 50,
+   "L": 4,
+   "rr": 2,
+   "frames": 833659,
+   "tuneFix": 1.6,
+   "peak": -5.1
+  },
+  "ny-G3-L4-2": {
+   "root": 55,
+   "L": 4,
+   "rr": 2,
+   "frames": 386723,
+   "tuneFix": -0.2,
+   "peak": -2.2
+  },
+  "ny-B3-L4-2": {
+   "root": 59,
+   "L": 4,
+   "rr": 2,
+   "frames": 373674,
+   "tuneFix": 2.1,
+   "peak": -0.9
+  },
+  "ny-E4-L4-2": {
+   "root": 64,
+   "L": 4,
+   "rr": 2,
+   "frames": 307578,
+   "tuneFix": 4.5,
+   "peak": -0.1
+  },
+  "ny-A4-L4-2": {
+   "root": 69,
+   "L": 4,
+   "rr": 2,
+   "frames": 311566,
+   "tuneFix": 2.4,
+   "peak": -0.1
+  },
+  "ny-D5-L4-2": {
+   "root": 74,
+   "L": 4,
+   "rr": 2,
+   "frames": 166829,
+   "tuneFix": -0.0,
+   "peak": -0.1
+  },
+  "ny-E2-L2-2": {
+   "root": 40,
+   "L": 2,
+   "rr": 2,
+   "frames": 793900,
+   "tuneFix": 4.3,
+   "peak": -5.4
+  },
+  "ny-A2-L2-2": {
+   "root": 45,
+   "L": 2,
+   "rr": 2,
+   "frames": 770069,
+   "tuneFix": -2.8,
+   "peak": -5.6
+  },
+  "ny-D3-L2-2": {
+   "root": 50,
+   "L": 2,
+   "rr": 2,
+   "frames": 620404,
+   "tuneFix": 3.2,
+   "peak": -7.1
+  },
+  "ny-G3-L2-2": {
+   "root": 55,
+   "L": 2,
+   "rr": 2,
+   "frames": 389637,
+   "tuneFix": 0.4,
+   "peak": -2.4
+  },
+  "ny-B3-L2-2": {
+   "root": 59,
+   "L": 2,
+   "rr": 2,
+   "frames": 374815,
+   "tuneFix": 2.0,
+   "peak": -2.2
+  },
+  "ny-E4-L2-2": {
+   "root": 64,
+   "L": 2,
+   "rr": 2,
+   "frames": 251892,
+   "tuneFix": 4.2,
+   "peak": -1.8
+  },
+  "ny-A4-L2-2": {
+   "root": 69,
+   "L": 2,
+   "rr": 2,
+   "frames": 234559,
+   "tuneFix": 4.0,
+   "peak": -0.1
+  },
+  "ny-E2-L1-2": {
+   "root": 40,
+   "L": 1,
+   "rr": 2,
+   "frames": 610581,
+   "tuneFix": 4.7,
+   "peak": -4.7
+  },
+  "ny-A2-L1-2": {
+   "root": 45,
+   "L": 1,
+   "rr": 2,
+   "frames": 563548,
+   "tuneFix": -3.2,
+   "peak": -6.5
+  },
+  "ny-D3-L1-2": {
+   "root": 50,
+   "L": 1,
+   "rr": 2,
+   "frames": 542273,
+   "tuneFix": 3.2,
+   "peak": -4.1
+  },
+  "ny-G3-L1-2": {
+   "root": 55,
+   "L": 1,
+   "rr": 2,
+   "frames": 348923,
+   "tuneFix": -0.0,
+   "peak": -5.8
+  },
+  "ny-B3-L1-2": {
+   "root": 59,
+   "L": 1,
+   "rr": 2,
+   "frames": 329210,
+   "tuneFix": 1.8,
+   "peak": -5.2
+  },
+  "ny-E4-L1-2": {
+   "root": 64,
+   "L": 1,
+   "rr": 2,
+   "frames": 303192,
+   "tuneFix": 4.1,
+   "peak": -4.1
+  },
+  "ny-A4-L1-2": {
+   "root": 69,
+   "L": 1,
+   "rr": 2,
+   "frames": 188452,
+   "tuneFix": 4.8,
+   "peak": -0.1
+  },
+  "ny-D5-L1-2": {
+   "root": 74,
+   "L": 1,
+   "rr": 2,
+   "frames": 143220,
+   "tuneFix": 4.1,
+   "peak": -0.1
+  },
+  "ny-E2-L3-2": {
+   "root": 40,
+   "L": 3,
+   "rr": 2,
+   "frames": 977151,
+   "tuneFix": 3.9,
+   "peak": -7.1
+  },
+  "ny-A2-L3-3": {
+   "root": 45,
+   "L": 3,
+   "rr": 3,
+   "frames": 707520,
+   "tuneFix": -3.3,
+   "peak": -5.6
+  },
+  "ny-B3-L3-3": {
+   "root": 59,
+   "L": 3,
+   "rr": 3,
+   "frames": 264960,
+   "tuneFix": 2.8,
+   "peak": -2.7
+  },
+  "ny-A4-L3-3": {
+   "root": 69,
+   "L": 3,
+   "rr": 3,
+   "frames": 305998,
+   "tuneFix": 3.2,
+   "peak": -0.1
+  },
+  "ny-E2-L4-3": {
+   "root": 40,
+   "L": 4,
+   "rr": 3,
+   "frames": 1045883,
+   "tuneFix": 0.5,
+   "peak": -7.4
+  },
+  "ny-D3-L4-3": {
+   "root": 50,
+   "L": 4,
+   "rr": 3,
+   "frames": 762240,
+   "tuneFix": 1.8,
+   "peak": -5.6
+  },
+  "ny-G3-L4-3": {
+   "root": 55,
+   "L": 4,
+   "rr": 3,
+   "frames": 298560,
+   "tuneFix": 0.1,
+   "peak": -3.3
+  },
+  "ny-B3-L4-3": {
+   "root": 59,
+   "L": 4,
+   "rr": 3,
+   "frames": 430440,
+   "tuneFix": 2.2,
+   "peak": -1.5
+  },
+  "ny-A4-L4-3": {
+   "root": 69,
+   "L": 4,
+   "rr": 3,
+   "frames": 301786,
+   "tuneFix": 2.8,
+   "peak": -0.1
+  },
+  "ny-E2-L2-3": {
+   "root": 40,
+   "L": 2,
+   "rr": 3,
+   "frames": 679107,
+   "tuneFix": 3.9,
+   "peak": -7.0
+  },
+  "ny-A2-L2-3": {
+   "root": 45,
+   "L": 2,
+   "rr": 3,
+   "frames": 849024,
+   "tuneFix": 2.4,
+   "peak": -6.6
+  },
+  "ny-D3-L2-3": {
+   "root": 50,
+   "L": 2,
+   "rr": 3,
+   "frames": 627102,
+   "tuneFix": 3.2,
+   "peak": -6.3
+  },
+  "ny-G3-L2-3": {
+   "root": 55,
+   "L": 2,
+   "rr": 3,
+   "frames": 293419,
+   "tuneFix": 0.3,
+   "peak": -7.2
+  },
+  "ny-B3-L2-3": {
+   "root": 59,
+   "L": 2,
+   "rr": 3,
+   "frames": 423890,
+   "tuneFix": 1.6,
+   "peak": -5.1
+  },
+  "ny-E4-L2-3": {
+   "root": 64,
+   "L": 2,
+   "rr": 3,
+   "frames": 339849,
+   "tuneFix": 4.3,
+   "peak": -1.2
+  },
+  "ny-A4-L2-3": {
+   "root": 69,
+   "L": 2,
+   "rr": 3,
+   "frames": 193203,
+   "tuneFix": 4.6,
+   "peak": -0.1
+  },
+  "ny-E2-L1-3": {
+   "root": 40,
+   "L": 1,
+   "rr": 3,
+   "frames": 528129,
+   "tuneFix": 4.4,
+   "peak": -6.4
+  },
+  "ny-A2-L1-3": {
+   "root": 45,
+   "L": 1,
+   "rr": 3,
+   "frames": 473000,
+   "tuneFix": 2.2,
+   "peak": -7.5
+  },
+  "ny-D3-L1-3": {
+   "root": 50,
+   "L": 1,
+   "rr": 3,
+   "frames": 669622,
+   "tuneFix": 3.3,
+   "peak": -4.5
+  },
+  "ny-G3-L1-3": {
+   "root": 55,
+   "L": 1,
+   "rr": 3,
+   "frames": 330930,
+   "tuneFix": 0.1,
+   "peak": -6.7
+  },
+  "ny-B3-L1-3": {
+   "root": 59,
+   "L": 1,
+   "rr": 3,
+   "frames": 386352,
+   "tuneFix": 2.1,
+   "peak": -4.8
+  },
+  "ny-A4-L1-3": {
+   "root": 69,
+   "L": 1,
+   "rr": 3,
+   "frames": 219002,
+   "tuneFix": 4.9,
+   "peak": -0.1
+  },
+  "ny-E4-L4-3": {
+   "root": 64,
+   "L": 4,
+   "rr": 3,
+   "frames": 376660,
+   "tuneFix": 4.4,
+   "peak": -0.1
+  },
+  "ny-D5-L4-3": {
+   "root": 74,
+   "L": 4,
+   "rr": 3,
+   "frames": 200275,
+   "tuneFix": -0.1,
+   "peak": -0.1
+  },
+  "ny-D5-L3-3": {
+   "root": 74,
+   "L": 3,
+   "rr": 3,
+   "frames": 274637,
+   "tuneFix": -4.3,
+   "peak": -1.0
+  },
+  "ny-E4-L1-3": {
+   "root": 64,
+   "L": 1,
+   "rr": 3,
+   "frames": 363085,
+   "tuneFix": 4.2,
+   "peak": -2.3
+  },
+  "ny-D5-L1-3": {
+   "root": 74,
+   "L": 1,
+   "rr": 3,
+   "frames": 163318,
+   "tuneFix": 3.2,
+   "peak": -0.1
+  },
+  "ny-D3-L3-3": {
+   "root": 50,
+   "L": 3,
+   "rr": 3,
+   "frames": 807922,
+   "tuneFix": 2.5,
+   "peak": -6.5
+  },
+  "ny-D5-L3-4": {
+   "root": 74,
+   "L": 3,
+   "rr": 4,
+   "frames": 256791,
+   "tuneFix": -4.5,
+   "peak": -1.0
+  },
+  "ny-A4-L4-4": {
+   "root": 69,
+   "L": 4,
+   "rr": 4,
+   "frames": 345969,
+   "tuneFix": 2.8,
+   "peak": -0.1
+  },
+  "ny-D5-L4-4": {
+   "root": 74,
+   "L": 4,
+   "rr": 4,
+   "frames": 210324,
+   "tuneFix": -9.5,
+   "peak": -0.1
+  },
+  "ny-A4-L3-4": {
+   "root": 69,
+   "L": 3,
+   "rr": 4,
+   "frames": 266986,
+   "tuneFix": -5.4,
+   "peak": -3.6
+  }
+ },
+ "off": {
+  "ny-D3-off": {
+   "root": 50,
+   "frames": 10927
+  },
+  "ny-E2-off": {
+   "root": 40,
+   "frames": 11902
+  },
+  "ny-A2-off": {
+   "root": 45,
+   "frames": 15524
+  },
+  "ny-A4-off": {
+   "root": 69,
+   "frames": 22141
+  },
+  "ny-B3-off": {
+   "root": 59,
+   "frames": 15663
+  },
+  "ny-E4-off": {
+   "root": 64,
+   "frames": 8558
+  }
+ }
+}
