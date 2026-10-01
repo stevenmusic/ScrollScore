@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>ScrollScore Promo</title>
+<style>
+@font-face { font-family: "NotoSansTC"; src: url("fonts/NotoSansTC.ttf"); font-weight: 100 900; }
+@font-face { font-family: "NotoSerifTC"; src: url("fonts/NotoSerifTC.ttf"); font-weight: 200 900; }
+@font-face { font-family: "Inter"; src: url("fonts/Inter.ttf"); font-weight: 100 900; }
+:root {
+  --bg0: #0b0906; --bg1: #17110a; --gold: #d6b25e; --gold2: #b8893a; --ivory: #f4ecd9; --muted: #a39679; --line: rgba(214,178,94,.28);
+  --teal: #3fc7b4;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 1920px; height: 1080px; overflow: hidden; background: var(--bg0); }
+body { font-family: "NotoSansTC", "Inter", sans-serif; color: var(--ivory); -webkit-font-smoothing: antialiased; }
+#stage { position: absolute; inset: 0; overflow: hidden; }
+#bg { position: absolute; inset: 0; }
+.scene { position: absolute; inset: 0; opacity: 0; will-change: opacity, transform; }
+.abs { position: absolute; }
+.serif { font-family: "NotoSerifTC", serif; }
+.en { font-family: "Inter", sans-serif; letter-spacing: .02em; }
+.kicker { font-family: "Inter"; font-weight: 600; font-size: 22px; letter-spacing: .35em; color: var(--gold); text-transform: uppercase; }
+.h1 { font-family: "NotoSerifTC"; font-weight: 700; font-size: 84px; line-height: 1.12; color: var(--ivory); letter-spacing: .02em; }
+.h2 { font-family: "NotoSerifTC"; font-weight: 700; font-size: 64px; line-height: 1.15; }
+.sub { font-family: "Inter"; font-weight: 400; font-size: 28px; color: var(--muted); letter-spacing: .04em; }
+.body { font-size: 30px; color: #d9cfb8; line-height: 1.55; }
+.gold { color: var(--gold); }
+.mask { overflow: hidden; display: inline-block; vertical-align: bottom; }
+.mask > span { display: inline-block; will-change: transform; }
+.chip { display: inline-flex; align-items: center; gap: 14px; padding: 16px 28px; border: 1.5px solid var(--line); border-radius: 999px; background: rgba(23,17,10,.75); font-size: 28px; color: var(--ivory); backdrop-filter: blur(6px); white-space: nowrap; }
+.chip b { color: var(--gold); font-weight: 700; }
+.card { border: 1.5px solid var(--line); border-radius: 28px; background: linear-gradient(160deg, rgba(40,30,17,.92), rgba(16,12,8,.92)); box-shadow: 0 30px 80px rgba(0,0,0,.55); }
+/* device frames */
+.laptop { position: absolute; }
+.laptop .screen { position: absolute; border-radius: 18px; overflow: hidden; background: #000; box-shadow: 0 0 0 14px #1d1912, 0 0 0 16px #3a3121, 0 60px 120px rgba(0,0,0,.7); }
+.laptop .base { position: absolute; height: 26px; border-radius: 0 0 26px 26px; background: linear-gradient(#3a3226, #1a160f); box-shadow: 0 30px 60px rgba(0,0,0,.6); }
+.phone .screen { position: absolute; border-radius: 38px; overflow: hidden; background: #000; box-shadow: 0 0 0 14px #1d1912, 0 0 0 16px #4a3f2b, 0 50px 100px rgba(0,0,0,.7); }
+iframe { border: 0; position: absolute; left: 0; top: 0; transform-origin: 0 0; background: #0b0906; }
+.callout { position: absolute; display: flex; align-items: center; gap: 16px; font-size: 30px; font-weight: 600; color: var(--ivory); white-space: nowrap; }
+.callout .dot { width: 18px; height: 18px; border-radius: 50%; background: var(--gold); box-shadow: 0 0 0 8px rgba(214,178,94,.22), 0 0 30px rgba(214,178,94,.8); flex: none; }
+.callout .ln { height: 2px; background: linear-gradient(90deg, var(--gold), rgba(214,178,94,0)); flex: none; }
+.bar { position: absolute; bottom: 0; width: 26px; border-radius: 8px 8px 2px 2px; background: linear-gradient(to top, var(--gold2), var(--gold)); }
+.swatch { position: absolute; width: 90px; height: 90px; border-radius: 50%; border: 3px solid rgba(255,255,255,.18); }
+.icon-circle { width: 120px; height: 120px; border-radius: 50%; display: grid; place-items: center; background: radial-gradient(circle at 35% 30%, rgba(214,178,94,.35), rgba(214,178,94,.06)); border: 1.5px solid var(--line); }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="bg" width="1920" height="1080"></canvas>
+  <div id="scenes"></div>
+</div>
+<script src="comp.js"></script>
+</body>
+</html>
