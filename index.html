@@ -7037,8 +7037,7 @@ function measureStaffExtent(svg){
   const staffTop = top, staffBottom = bottom;
   svg.querySelectorAll(".vf-notehead").forEach(take);          // 譜表外的符頭(銅鈸在上方加線、大鼓在下方)
   if (!isFinite(top) || !isFinite(staffTop)) return null;
-  const pad = (staffBottom - staffTop) * 0.65;
-  return { top: Math.max(0, (top - pad - sr.top) / sr.height), bottom: Math.min(1, (bottom + pad - sr.top) / sr.height) };
+  return { top: (top - sr.top) / sr.height, bottom: (bottom - sr.top) / sr.height, staffH: (staffBottom - staffTop) / sr.height };
 }
 async function rasterizeScore(targetH){
   const svg = $("score").querySelector("svg");
@@ -7317,7 +7316,10 @@ function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
   // 長超多,看起來又粗又突兀;貼著樂譜量才會跟著樂譜大小自然縮放
   const plPad = SCORE_H * 0.1;
   let plTop = topY - plPad, plBottom = topY + SCORE_H + plPad;
-  if (exportStaffExtent) { plTop = topY + SCORE_H * exportStaffExtent.top; plBottom = topY + SCORE_H * exportStaffExtent.bottom; } // 鼓譜:只貼著譜表與符頭
+  if (exportStaffExtent) {   // 鼓譜:只貼著譜表與符頭,上下各留一段(使用者調過:含鼓組 80%、只有樂譜 55% 的譜表高度)
+    const e = exportStaffExtent, pad = e.staffH * (cfg.includeKeyboard ? 0.8 : 0.55);
+    plTop = topY + SCORE_H * Math.max(0, e.top - pad); plBottom = topY + SCORE_H * Math.min(1, e.bottom + pad);
+  }
   const curCol = exportInkColor(hlCursorColor()); // 米色譜面上要換成深色版本,見函式上方說明
   ctx.save();
   ctx.globalAlpha = hlCursorOpacity();
