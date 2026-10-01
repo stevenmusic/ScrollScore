@@ -2108,6 +2108,59 @@ function transposeMusicXML(xmlText, semitones){
   return new XMLSerializer().serializeToString(doc);
 }
 
+/* 鼓譜:同一拍同時有大鼓 + hi-hat(手打的閉合/開放 hi-hat)時,符桿一律朝上,
+   開放 hi-hat 的「o」這類演奏記號(articulations / technical)放在音符與符桿上方。
+   OSMD 預設把演奏記號放在符頭那一側,符桿朝上時「o」會跑到大鼓下面(使用者要求改)。
+   鼓件辨識:midi-unpitched(1 起算,減 1 才是 GM)優先,沒有就看顯示位置(大鼓 E4/F4、hi-hat G5) */
+function drumStemFixMusicXML(xmlText){
+  if (!/sign>\s*percussion/.test(xmlText)) return xmlText;
+  const doc = new DOMParser().parseFromString(xmlText, "text/xml");
+  const kid = (el, name) => { for (const c of el.children) if (c.tagName === name) return c; return null; };
+  const gmOf = {};   // score-instrument id → GM 鼓號
+  for (const mi of Array.from(doc.getElementsByTagName("midi-instrument"))) {
+    const u = kid(mi, "midi-unpitched");
+    if (u && mi.getAttribute("id")) gmOf[mi.getAttribute("id")] = parseInt(u.textContent, 10) - 1;
+  }
+  const kind = note => {
+    const ins = kid(note, "instrument"), gm = ins ? gmOf[ins.getAttribute("id")] : undefined;
+    if (gm === 35 || gm === 36) return "kick";
+    if (gm === 42 || gm === 46) return "hh";
+    if (gm !== undefined) return null;
+    const up = kid(note, "unpitched"), st = up && kid(up, "display-step"), oc = up && kid(up, "display-octave");
+    if (!st || !oc) return null;
+    const pos = st.textContent.trim() + oc.textContent.trim();
+    return (pos === "E4" || pos === "F4") ? "kick" : pos === "G5" ? "hh" : null;
+  };
+  const AFTER_STEM = ["notehead", "notehead-text", "staff", "beam", "notations", "lyric", "play", "listen"];
+  let changed = false;
+  for (const m of Array.from(doc.getElementsByTagName("measure"))) {
+    const groups = [];
+    for (const el of Array.from(m.children)) {
+      if (el.tagName !== "note" || kid(el, "rest")) continue;
+      if (kid(el, "chord") && groups.length) groups[groups.length - 1].push(el); else groups.push([el]);
+    }
+    for (const g of groups) {
+      const kinds = g.map(kind);
+      if (!kinds.includes("kick") || !kinds.includes("hh")) continue;
+      for (const n of g) {
+        let stem = kid(n, "stem");
+        if (!stem) {
+          stem = doc.createElement("stem");
+          const before = AFTER_STEM.map(t => kid(n, t)).find(Boolean);
+          n.insertBefore(stem, before || null);
+        }
+        if (stem.textContent !== "up") { stem.textContent = "up"; changed = true; }
+        const nt = kid(n, "notations");
+        if (nt) for (const box of Array.from(nt.children)) {
+          if (box.tagName !== "articulations" && box.tagName !== "technical") continue;
+          for (const a of Array.from(box.children)) if (a.getAttribute("placement") !== "above") { a.setAttribute("placement", "above"); changed = true; }
+        }
+      }
+    }
+  }
+  return changed ? new XMLSerializer().serializeToString(doc) : xmlText;
+}
+
 /* 檔案完全沒有 <beam> 時自動補上符尾連結(有些程式或 AI 產生的 MusicXML 不寫 beam,OSMD 就會把
    每個八分、十六分音符各自畫成單獨的旗子)。只要檔案裡有任何 <beam> 就完全照原檔,不去動作者的寫法。
    不用 OSMD 內建的 autoBeam:它把同一小節所有聲部混在一起分組,鼓譜手腳分兩個聲部時會連錯或連不起來。
@@ -2339,7 +2392,7 @@ async function renderScore(xmlText){
   osmd.EngravingRules.AutoGenerateMultipleRestMeasuresFromRestMeasures = mergeRests;
 
   const transposedXml = transposeSemitones ? transposeMusicXML(xmlText, transposeSemitones) : xmlText;
-  const beamedXml = autoBeamMusicXML(transposedXml);
+  const beamedXml = autoBeamMusicXML(drumStemFixMusicXML(transposedXml));
   const finalXml = mergeRests ? mergeRestMeasures(beamedXml) : splitRestMeasures(beamedXml);
   await osmd.load(finalXml);
   osmd.zoom = 0.9;
