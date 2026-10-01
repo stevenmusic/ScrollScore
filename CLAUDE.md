@@ -17,10 +17,14 @@
 - 鋼琴只載入樂譜用到的（音 × 力度層）;記憶體預算（桌機 1.2GB、iOS 220MB、4GB Android 280MB、2GB Android 120MB，共鳴/機械聲也算在內）不夠時依序：截短到需要的長度 → 單聲道 → 合併最少用到的層。制音器落下時加 harm/rel（音量用 manifest 的 d 換算成原廠 V3 的相對音量，依按住時間 rt_decay 衰減）;F#6（MIDI 89）以上沒有制音器
 - 鋼琴混音：voice → getPianoBus()（PIANO_EQ：450Hz −2dB、2.8kHz −3.5dB（手機喇叭共振峰，避免尖）、9kHz 高頻架式 +1.5dB）→ masterGain → loudnessComp → 限幅器。試過鋼琴專用慢起音壓縮器，p→ff 被壓扁、清晰度沒變好，不要再換。注意 Web Audio 的 DynamicsCompressor 會自動補增益（makeup），loudnessComp 實際約 +7dB、masterLimiter 約 +1.6dB，所以限幅器擋不住峰值
 - 總輸出：masterLimiter → masterOut（4 倍超取樣軟削波：−3dBFS 以下線性、平滑壓向 −1.4dBFS，真峰值 ≤ −1dBTP），喇叭與匯出影片都從 masterOut 取；所有樂器共用。不要拿掉，否則真實曲子會到 +0.2dBTP 削波
-- 鋼琴用自己的殘響 getPianoVerb()（buildPianoHallIR，參數跟 Surrey 大學真實房間量測比對過）：8 個同極性早期反射（3~40ms，越晚越暗）、四頻段各自指數衰減（RT60 1.5/1.3/0.95/0.55s）、各頻段左右相關性（低音 0.75 → 高音 0.08，真實殘響低音左右幾乎一樣）、預延遲 8ms、送入前 180Hz 高通、固定種子、wet 0.33×殘響滑桿。不用共用的 buildImpulseResponse（(1−t)^2.4 衰減不自然、高頻不衰減、早期反射左右反相、左右完全不相關）；共用的那個目前只剩吉他在用
+- 鋼琴用自己的殘響 getPianoVerb()（buildPianoHallIR，參數跟 Surrey 大學真實房間量測比對過）：8 個同極性早期反射（3~40ms，越晚越暗）、四頻段各自指數衰減（RT60 1.5/1.3/0.95/0.55s）、各頻段左右相關性（低音 0.75 → 高音 0.08，真實殘響低音左右幾乎一樣）、預延遲 8ms、送入前 180Hz 高通、固定種子、wet 0.33×殘響滑桿。不用共用的 buildImpulseResponse（(1−t)^2.4 衰減不自然、高頻不衰減、早期反射左右反相、左右完全不相關）；吉他也不用（見下面吉他的殘響）
 - 鋼琴殘響送出：一般 0.5、譜上有踏板 ×1.7。harmonyEndSec 一定有值（至少是同時最長音的結尾），不能拿來判斷踏板
 - 譜上沒踏板、由和聲自動延長的音用「半踏板」：放鍵後依 pianoHalfPedalTau（PIANO_HALF_PEDAL 0.7）較快衰減，避免級進旋律全部疊在一起變糊；譜上有踏板才完全延音
 - 「圓滑/踏板」開關已移除（使用者要求）：圓滑線、踏板記號、和聲延音一律開啟，不要再加回開關
+- 民謠吉他音色放在本 repo 的 guitar/steel/：Ella Gitauru 5（Malaclypse the Younger，BJAM 5.25.06，MIT，授權檔 guitar/steel/LICENSE.txt）。原檔 16kHz 單聲道、每檔峰值正規化。原廠「每 2 格一個取樣」其實是空弦錄音加濾波複製的（相干性 0.9，真正不同的錄音只有 0.6），所以只收真錄音：6E/5A/4D/2B 空弦 × 4 層（mp/mf/f/ff，0-48/49-91/92-119/120-127）+ 2B 第二組錄音（輪替）+ B5 短取樣（第 1 弦 20 格以上），共 24 檔；第 3 弦借第 4 弦、第 1 弦借第 2 弦錄音（原廠也是）。重建用 guitar/build/steel_build.py（逐檔音準校正、頻譜降噪、前 0.5 秒 K 加權響度對齊 −18 LKFS、尾巴淡出；--excite / --excite-strong 是高頻激勵的試聽選項，目前沒用）
+- 吉他的弦/把位：computeGuitarStringRinging() 在空著的候選弦裡挑品格最低的（開放把位），存在 n.gstr；把位音色 gtrFretTone()：每格 lowshelf 300Hz +0.27dB、highshelf 2.2kHz −0.5dB（量原廠複製檔擬合，頻率×rate），力度明暗 ±6dB 高頻架。音量 = 0.02 + 0.98×（力度/127）²（原廠 amp_veltrack 98），放開 tau 0.05s（低音空弦 0.09）
+- computeGuitarDynamics() 算 n.gvel / n.gdt / n.gseed：力度記號/髮夾/段落起伏（共用 pianoLevelAt / pianoAutoMacro）、拍子輕重、4 音以上當刷弦（正拍下刷低→高、反拍上刷高→低且低音弦輕，弦距 6~16ms 越大聲越快）、2~3 音手指同時撥（≤4ms）、單音旋律起伏、AR(1) + 隨機
+- 吉他混音：getGuitarBus()（GTR_EQ：75Hz 高通、220Hz −2dB、2.8kHz −1.5dB、5kHz 高頻架 +2dB）→ masterGain；殘響 getGuitarVerb() 用 buildPianoHallIR(GTR_VERB)（較小房間，RT60 1.15/1.0/0.75/0.45s、早期反射 2.4~29ms），送出 0.45；古典吉他（目前還是 tonejs 取樣）也走這條。GTR_GAIN 1.6：巴哈 BWV846 約 −12 LUFS、刷弦約 −10.8 LUFS（鋼琴同曲 −10.8）
 - 樂器只保留鋼琴、吉他（民謠、古典兩把）、鼓組
 - 匯出影片用 canvas.captureStream + MediaRecorder
 

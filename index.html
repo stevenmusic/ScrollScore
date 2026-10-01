@@ -2349,6 +2349,7 @@ async function renderScore(xmlText){
   buildTimeline();
   computeDrumSongDynamics();
   computePianoDynamics();
+  computeGuitarDynamics();
   if (currentInstrument() === "piano" && pianoManPromise && !pianoFallback) loadPianoSamples(); // 移調/改速度記號後用到的音可能不同
   rebuildKeyboardRange();
   resizeKeyboardCanvas(); // 可見白鍵數量隨這首曲子的音域改變,鍵盤高度要跟著重新算才會維持真實比例
@@ -3036,7 +3037,7 @@ const GUITAR_OPEN_STRINGS = [40, 45, 50, 55, 59, 64]; // 標準調弦,第6弦(�
 const GUITAR_MAX_FRET = 12; // 一般記譜極少用到12格以上的把位,超過的話视为無法用這條弦彈,不列入候選
 function computeGuitarStringRinging(){
   for (const ev of events) {
-    for (const n of ev.notes) n.guitarRingEndWhole = null; // 先清空,非吉他音符/超出音域的音符維持 null(不套用延音)
+    for (const n of ev.notes) { n.guitarRingEndWhole = null; n.gstr = null; } // 先清空,非吉他音符/超出音域的音符維持 null(不套用延音)
   }
   if (!measureRanges.length) return;
   for (const m of measureRanges) {
@@ -3058,18 +3059,17 @@ function computeGuitarStringRinging(){
         if (fret >= 0 && fret <= GUITAR_MAX_FRET) candidates.push(s);
       }
       if (!candidates.length) continue; // 超出吉他把位範圍(太低或太高),不套用延音判斷
-      // 優先挑「目前沒有音在響」的候選弦;如果每條候選弦都還在響(和絃音多、把位擠),
-      // 就選品格最低的那條(最自然的指法),同時代表原本佔用那條弦的音符在這一刻被止音
-      let chosen = candidates.find(s => !stringOccupant[s]);
-      if (chosen === undefined) {
-        chosen = candidates.reduce((best, s) =>
-          (item.midi - GUITAR_OPEN_STRINGS[s]) < (item.midi - GUITAR_OPEN_STRINGS[best]) ? s : best
-        );
-      }
+      // 優先挑「目前沒有音在響」的候選弦,其中品格最低的那條(開放把位,最自然的指法);
+      // 如果每條候選弦都還在響(和絃音多、把位擠),同樣選品格最低的,代表原本佔用那條弦的音符在這一刻被止音
+      const lowestFret = list => list.reduce((best, s) =>
+        (item.midi - GUITAR_OPEN_STRINGS[s]) < (item.midi - GUITAR_OPEN_STRINGS[best]) ? s : best
+      );
+      const free = candidates.filter(s => !stringOccupant[s]);
+      const chosen = lowestFret(free.length ? free : candidates);
       const prev = stringOccupant[chosen];
       if (prev) prev.n.guitarRingEndWhole = item.tWhole; // 同一條弦被新音佔用,前一個音就在這一刻被止音
       stringOccupant[chosen] = item;
-      item.string = chosen;
+      item.n.gstr = chosen; // 民謠吉他取樣依弦/把位挑錄音與音色(gtrPlayNote)
     }
     // 小節結束時,還在響(沒被同弦後續音符止音)的音符,可以延音到小節結尾
     for (let s = 0; s < 6; s++) {
@@ -4527,6 +4527,7 @@ function reverbWetTarget(){ return reverbAmount() * 0.55; }
 function applyReverbAmount(){
   if (reverbWet) reverbWet.gain.value = reverbWetTarget();
   if (pianoVerbWet) pianoVerbWet.gain.value = reverbAmount() * PIANO_VERB.wet;
+  if (gtrVerbWet) gtrVerbWet.gain.value = reverbAmount() * GTR_VERB.wet;
   const el = $("reverbAmountVal");
   if (el) el.textContent = $("reverbAmount").value;
 }
@@ -4692,7 +4693,7 @@ function startAudioFrom(fromSec){
   }
   const calib = useCalib();
   computeDrumPerformance(); // 依目前的速度重算(速度會影響「越快越輕」)
-  pianoResetVoices();
+  pianoResetVoices(); gtrRR = {};
   if (currentInstrument() === "piano") pianoSchedulePedalNoise(fromSec, Infinity, sec => startCtxTime + sec);
   let errCount = 0, lastErr = null;
   for (const ev of events) {
@@ -4714,7 +4715,7 @@ function startAudioFrom(fromSec){
           : harmonyEndSec;
         const noteTech = (isGuitar && n.glissTargetFreq != null) ? Object.assign({}, tech, { glissTargetFreq: n.glissTargetFreq }) : tech;
         if (n.drum) { const h = humanizeDrumHit(ev, n); scheduleDrum(n.key, startCtxTime + t + rollT + h.dt, h); }
-        else scheduleNote(n.freq, startCtxTime + t + rollT + (n.pdt || 0), durSec, ev.legato, ev.pedalOn, chordAnchors, noteHarmonyEndSec, ev.artic, noteTech, n.staff, n.pvel);
+        else scheduleNote(n.freq, startCtxTime + t + rollT + ((isGuitar ? n.gdt : n.pdt) || 0), durSec, ev.legato, ev.pedalOn, chordAnchors, noteHarmonyEndSec, ev.artic, noteTech, n.staff, isGuitar ? n.gvel : n.pvel, n);
       } catch (e) {
         errCount++; lastErr = e;
         console.error("排程音符失敗:", e);
@@ -4792,6 +4793,7 @@ const instrumentLoading = {};   // instKey -> Promise
 const INSTRUMENT_I18N_KEY = { piano: "instPiano", guitar: "instGuitar", guitarnylon: "instGuitarNylon", drum: "instDrum" };
 function loadInstrumentSamples(instKey){
   if (instKey === "piano" && !pianoFallback) return loadPianoSamples();   // 16 層力度的鋼琴;讀不到才退回下面的 Tone.js 版本
+  if (instKey === "guitar" && !gtrFallback) return loadGuitarSamples();   // Ella Gitauru 鋼弦吉他;讀不到才退回下面的 Tone.js 版本
   const cfg = REAL_INSTRUMENTS[instKey];
   if (!cfg) return Promise.resolve();
   if (instrumentBuffers[instKey] || instrumentLoading[instKey]) return instrumentLoading[instKey] || Promise.resolve();
@@ -5142,8 +5144,8 @@ const PIANO_VERB = { seconds: 2.2, preDelay: 0.008, highpass: 180, wet: 0.33,
   bands: [[0, 350, 1.5, 1.0, 0.75], [350, 1500, 1.3, 0.9, 0.35], [1500, 5000, 0.95, 0.6, 0.15], [5000, 0, 0.55, 0.35, 0.08]],
   // 早期反射 [ms(左), ms(右), 音量]
   early: [[3.1, 3.6, 0.55], [6.7, 7.9, 0.45], [9.8, 9.1, 0.42], [13.4, 14.6, 0.34], [17.9, 16.8, 0.3], [23.5, 25.2, 0.24], [31.0, 29.4, 0.2], [38.6, 40.3, 0.16]] };
-function buildPianoHallIR(){
-  const rate = audioCtx.sampleRate, len = Math.floor(rate * PIANO_VERB.seconds);
+function buildPianoHallIR(cfg = PIANO_VERB){   // 吉他也用同一套演算法,只換房間參數(GTR_VERB)
+  const rate = audioCtx.sampleRate, len = Math.floor(rate * cfg.seconds);
   const ir = audioCtx.createBuffer(2, len, rate);
   const rand = seed => () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
   const coef = (kind, f0) => {           // RBJ 二階濾波器係數(Q 0.707)
@@ -5158,7 +5160,7 @@ function buildPianoHallIR(){
   const L = ir.getChannelData(0), R = ir.getChannelData(1), out = [L, R];
   // 擴散殘響:5ms 開始、40ms 內密度長滿
   const t0 = Math.floor(0.005 * rate), ramp = Math.floor(0.035 * rate);
-  for (const [lo, hi, rt, g, rho] of PIANO_VERB.bands) {
+  for (const [lo, hi, rt, g, rho] of cfg.bands) {
     const shape = x => { let s = x; if (lo) { const k = coef("hp", lo); s = filt(filt(s, k), k); } if (hi) { const k = coef("lp", hi); s = filt(filt(s, k), k); } return s; };
     const c = shape(common), dec = Math.pow(10, -3 / (rt * rate)), a = Math.sqrt(rho), bq = Math.sqrt(1 - rho);
     for (let ch = 0; ch < 2; ch++) {
@@ -5172,7 +5174,7 @@ function buildPianoHallIR(){
   }
   // 早期反射:相對擴散殘響起始的音量,越晚越暗(牆面吸收高頻)
   let ref = 0; for (let i = t0 + ramp; i < t0 + ramp + Math.floor(0.01 * rate); i++) ref = Math.max(ref, Math.abs(L[i]));
-  PIANO_VERB.early.forEach(([ml, mr, lv], k) => {
+  cfg.early.forEach(([ml, mr, lv], k) => {
     const taps = 2 + 2 * k, amp = lv * ref * 2.2 / taps;   // 越晚的反射用越多點攤開 = 越暗
     [[L, ml], [R, mr]].forEach(([d, ms]) => { const at = Math.floor(ms / 1000 * rate); for (let j = 0; j < taps; j++) if (at + j < len) d[at + j] += amp * (1 - j / taps) * 2; });
   });
@@ -5284,6 +5286,256 @@ function pianoSchedulePedalNoise(fromSec, toSec, timeToCtx){
   if (cur) fire("pedalU" + (1 + (k & 1)), posToSec(cur.end, calib), g);
 }
 function pianoRanges(){ return pedalRanges || []; }
+
+/* ── 民謠吉他(鋼弦):Ella Gitauru 5(Malaclypse the Younger,BJAM 5.25.06,MIT 授權)──────────────
+   Fender DG8S + Elixir 80/20 弦,6E/5A/4D/2B 四條空弦 × mp/mf/f/ff 四層力度(2B 另有第二組錄音當輪替,
+   B5 有一組短取樣給第 1 弦最高把位)。原檔是 16kHz 單聲道(原作者就是這樣,8kHz 以上沒有聲音)。
+   原廠「每 2 格一個取樣」的檔案其實是空弦錄音加濾波複製的,所以只收真錄音,把位的音色改在這裡用濾波器做
+   (gtrFretTone,參數是量原廠複製檔相對空弦的頻率響應擬合的);第 3 弦借第 4 弦、第 1 弦借第 2 弦的錄音(原廠也是)。
+   取樣在 guitar/steel/(guitar/build/steel_build.py 產生:逐檔音準校正到 0 音分、頻譜降噪、前 0.5 秒 K 加權響度
+   對齊 -18 LKFS,大小聲交給力度曲線)。弦/把位由 computeGuitarStringRinging() 決定(n.gstr),
+   力度與刷弦時間差由 computeGuitarDynamics() 算(n.gvel / n.gdt) */
+const GTR_BASES = ["guitar/steel/", "https://raw.githubusercontent.com/stevenmusic/ScrollScore/main/guitar/steel/"];
+let GTR_GAIN = 1.6;
+const GTR_VERB_SEND = 0.45;
+const GTR_STRING_SAMPLE = ["6E", "5A", "4D", "4D", "2B", "2B"];   // 第 6 弦 → 第 1 弦用哪條弦的錄音
+let gtrMan = null, gtrBase = null, gtrLoading = null, gtrFallback = false;
+const gtrBuf = {};       // "st-2B-L3-2" -> AudioBuffer
+let gtrRR = {};          // 第 2 弦錄音的輪替計數(每次從頭播放時重設)
+function gtrLayerFor(vel){
+  const r = gtrMan ? gtrMan.velRanges : [[1, 127]];
+  for (let i = 0; i < r.length; i++) if (vel <= r[i][1] + 0.5) return i + 1;
+  return r.length;
+}
+/* 原廠 amp_veltrack 98:音量 = 0.02 + 0.98 ×(力度/127)²(各層錄音已對齊成一樣大聲) */
+function gtrVelGain(vel){ const v = Math.max(1, Math.min(127, vel)) / 127; return 0.02 + 0.98 * v * v; }
+function loadGuitarSamples(){
+  ensureAudio();
+  if (gtrLoading) return gtrLoading;
+  gtrLoading = (async () => {
+    for (const base of GTR_BASES) {
+      try { const r = await fetch(base + "manifest.json"); if (r.ok) { gtrMan = await r.json(); gtrBase = base; break; } } catch (e) {}
+    }
+    if (!gtrMan) { gtrFallback = true; return loadInstrumentSamples("guitar"); }
+    // 先載 mf 層(每條弦一個,馬上可以播),再補其他層
+    const names = Object.keys(gtrMan.samples).sort((a, b) => (gtrMan.samples[a].L === 2 ? 0 : 1) - (gtrMan.samples[b].L === 2 ? 0 : 1));
+    let done = 0;
+    setStatus(T("statusLoadingInstrument", { inst: T("instGuitar") }));
+    await runLimited(names.map(name => async () => {
+      try {
+        const res = await fetch(gtrBase + name + ".flac");
+        if (res.ok) gtrBuf[name] = await audioCtx.decodeAudioData(await res.arrayBuffer());
+      } catch (e) {}
+      done++;
+    }), 6);
+    setStatus(Object.keys(gtrBuf).length ? T("statusInstrumentReady", { n: Object.keys(gtrBuf).length }) : T("statusInstrumentFailed"));
+  })();
+  return gtrLoading;
+}
+/* 沒有算到弦(超出 12 格等)的音:挑品格最低的弦 */
+function gtrPickString(m){
+  let best = 0;
+  for (let s = 0; s < 6; s++) if (m >= GUITAR_OPEN_STRINGS[s]) best = s;
+  return best;
+}
+function gtrSampleFor(root, L, m){
+  const want = [];
+  for (let d = 0; d < 4; d++) for (const l of d ? [L - d, L + d] : [L]) if (l >= 1 && l <= 4) want.push(l);
+  for (const l of want) {
+    const base = "st-" + root + "-L" + l;
+    if (root === "2B" && gtrBuf[base + "-2"]) {               // 第 2 弦有兩組錄音:同一個音輪流用
+      const k = gtrRR[m] = (gtrRR[m] || 0) + 1;
+      if (k % 2 === 0) return base + "-2";
+    }
+    if (gtrBuf[base]) return base;
+  }
+  return null;
+}
+/* 把位音色:越高把位(弦越短)低頻稍厚、高頻越暗。量原廠複製檔相對空弦的頻率響應:
+   每格約 +0.27dB(300Hz 以下)、-0.5dB(2kHz 以上),頻率跟著取樣一起被升調,所以乘上 rate */
+function gtrFretTone(fret, rate, vel){
+  const lo = audioCtx.createBiquadFilter(); lo.type = "lowshelf"; lo.frequency.value = 300 * rate; lo.gain.value = 0.27 * fret;
+  const hi = audioCtx.createBiquadFilter(); hi.type = "highshelf"; hi.frequency.value = Math.min(16000, 2200 * rate);
+  // 力度 → 明暗:原廠高音弦四層錄音的音色幾乎一樣,用 ±6dB 的高頻架補回「彈得越用力越亮」
+  hi.gain.value = -0.5 * fret + (vel - 100) / 127 * 6;
+  lo.connect(hi);
+  return { input: lo, output: hi };
+}
+function playGuitarNote(freq, when, dur, ringEndSec, artic, tech, vel, gn){
+  if (!gtrMan) return false;
+  const tm = freqToMidi(freq), m = Math.round(tm);
+  if (vel == null) vel = 75;
+  const s = gn && gn.gstr != null ? gn.gstr : gtrPickString(m);
+  const fret = Math.max(0, m - GUITAR_OPEN_STRINGS[s]);
+  const root = (s === 5 && fret >= 20) ? "B5" : GTR_STRING_SAMPLE[s];   // 第 1 弦 20 格以上:升太多會像玩具,改用 B5 的錄音
+  const name = gtrSampleFor(root, gtrLayerFor(vel), m);
+  if (!name) return false;
+  const info = gtrMan.samples[name], buf = gtrBuf[name];
+  const detune = gn && gn.gseed != null ? (gn.gseed - 0.5) * 3 : 0;      // ±1.5 音分,同一個音重彈不會一模一樣
+  const rate = Math.pow(2, (tm - info.root + detune / 100) / 12);
+  let gain = GTR_GAIN * gtrVelGain(vel);
+  // 放開:弦被重彈/止音(ringEndSec)或音符結束;斷奏類縮短
+  let hold = Math.max(dur, 0.05);
+  if (artic) {
+    if (artic.staccatissimo) hold = dur * 0.25;
+    else if (artic.spiccato) hold = dur * 0.3;
+    else if (artic.staccato) hold = dur * 0.5;
+    else if (artic.detachedLegato) hold = dur * 0.75;
+    if (artic.tenuto) hold = Math.max(hold, dur * 0.98);
+    if (artic.fermata) hold *= 1.8;
+  }
+  const short = artic && (artic.staccatissimo || artic.spiccato || artic.staccato || artic.detachedLegato);
+  let releaseAt = when + Math.max(0.04, hold);
+  if (ringEndSec != null && !short) releaseAt = Math.max(releaseAt, ringEndSec);
+  const bufEnd = when + buf.duration / rate;
+  const relTau = fret === 0 && s <= 2 ? 0.09 : 0.05;                    // 原廠 ampeg_release 0.15;低音空弦比較難止住
+  const end = Math.min(bufEnd, releaseAt + relTau * 7);
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf; src.playbackRate.setValueAtTime(rate, when);
+  const g = audioCtx.createGain();
+  let vTone = vel, attack = 0;
+  if (tech && tech.hammerPull) { gain *= 0.75; vTone -= 20; attack = 0.012; }   // 搥/勾弦:不是重新撥弦,起音軟、較暗
+  if (tech && tech.harmonic) { gain *= 0.7; attack = 0.008; }
+  const tone = gtrFretTone(fret, rate, vTone);
+  let head = src;
+  if (tech && (tech.harmonic || tech.pizzicato)) {
+    const lp = audioCtx.createBiquadFilter(); lp.type = "lowpass";
+    lp.frequency.value = tech.harmonic ? Math.min(freq * 3, 6000) : Math.max(700, Math.min(freq * 3, 2000));
+    src.connect(lp); head = lp;
+  }
+  head.connect(tone.input); tone.output.connect(g);
+  if (attack) { g.gain.setValueAtTime(0, when); g.gain.linearRampToValueAtTime(gain, when + attack); }
+  else g.gain.setValueAtTime(gain, when);
+  if (tech && tech.pizzicato) g.gain.setTargetAtTime(0, when + 0.03, 0.16);   // 悶音:手掌壓住弦,很快就停
+  if (releaseAt < end) g.gain.setTargetAtTime(0, releaseAt, relTau);
+  if (tech && tech.glissTargetFreq) src.playbackRate.linearRampToValueAtTime(rate * (tech.glissTargetFreq / freq), when + Math.max(dur * 0.85, 0.05));
+  if (tech && tech.bendAlter) {
+    const up = Math.min(dur * 0.3, 0.25);
+    src.playbackRate.linearRampToValueAtTime(rate * Math.pow(2, tech.bendAlter / 12), when + up);
+    if (tech.bendRelease) src.playbackRate.linearRampToValueAtTime(rate, when + Math.max(up * 2, (releaseAt - when) * 0.7));
+  }
+  let vib = null;
+  if (tech && tech.vibrato) {
+    vib = audioCtx.createOscillator(); vib.frequency.value = 5.5;
+    const vg = audioCtx.createGain(); vg.gain.value = rate * (Math.pow(2, 0.3 / 12) - 1);
+    vib.connect(vg); vg.connect(src.playbackRate);
+    vib.start(when + Math.min(0.15, (releaseAt - when) * 0.3)); vib.stop(end);
+    scheduled.push(vib);
+  }
+  gtrConnect(g, GTR_VERB_SEND);
+  src.start(when); src.stop(end + 0.05);
+  scheduled.push(src);
+  return true;
+}
+
+/* 吉他專用 EQ(→ masterGain → loudnessComp → 限幅器,跟鋼琴同一條總輸出):
+   - 75Hz 高通:琴身低頻轟聲,跟鋼琴/鼓疊在一起會糊
+   - 220Hz -2dB:箱子聲(Ella 的低音弦頻譜重心只有 300~450Hz,偏悶)
+   - 2.8kHz -1.5dB:手機喇叭共振峰(同鋼琴的理由);高把位的音是第 2 弦錄音升調上去的,2~5kHz 本來就偏多
+   - 5kHz 高頻架 +2dB:鋼弦的亮度 */
+const GTR_EQ = { hp: 75, boxFreq: 220, boxGain: -2, boxQ: 1.0, harshFreq: 2800, harshGain: -1.5, harshQ: 0.9, airFreq: 5000, airGain: 2 };
+let gtrBusIn = null, gtrBusCtx = null;
+function getGuitarBus(){
+  if (gtrBusIn && gtrBusCtx === audioCtx) return gtrBusIn;
+  const E = GTR_EQ;
+  const hp = audioCtx.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = E.hp; hp.Q.value = 0.6;
+  const box = audioCtx.createBiquadFilter(); box.type = "peaking"; box.frequency.value = E.boxFreq; box.gain.value = E.boxGain; box.Q.value = E.boxQ;
+  const harsh = audioCtx.createBiquadFilter(); harsh.type = "peaking"; harsh.frequency.value = E.harshFreq; harsh.gain.value = E.harshGain; harsh.Q.value = E.harshQ;
+  const air = audioCtx.createBiquadFilter(); air.type = "highshelf"; air.frequency.value = E.airFreq; air.gain.value = E.airGain;
+  hp.connect(box); box.connect(harsh); harsh.connect(air); air.connect(masterGain);
+  gtrBusIn = hp; gtrBusCtx = audioCtx;
+  return hp;
+}
+/* 吉他殘響:跟鋼琴同一套演算法(buildPianoHallIR:同極性早期反射、四頻段各自衰減、低音左右相關),
+   房間小一點、早期反射更近(吉他通常是近距離收音、小錄音室),不用共用的 buildImpulseResponse */
+const GTR_VERB = { seconds: 1.8, preDelay: 0.006, highpass: 160, wet: 0.3,
+  bands: [[0, 350, 1.15, 1.0, 0.75], [350, 1500, 1.0, 0.9, 0.35], [1500, 5000, 0.75, 0.6, 0.15], [5000, 0, 0.45, 0.35, 0.08]],
+  early: [[2.4, 2.9, 0.5], [4.9, 5.8, 0.42], [7.1, 6.6, 0.38], [9.8, 10.7, 0.3], [13.1, 12.3, 0.26], [17.2, 18.4, 0.2], [22.6, 21.5, 0.17], [28.2, 29.4, 0.13]] };
+let gtrVerbIn = null, gtrVerbWet = null, gtrVerbCtx = null;
+function getGuitarVerb(){
+  if (gtrVerbIn && gtrVerbCtx === audioCtx) return gtrVerbIn;
+  const input = audioCtx.createGain();
+  const hp = audioCtx.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = GTR_VERB.highpass;
+  const pre = audioCtx.createDelay(0.1); pre.delayTime.value = GTR_VERB.preDelay;
+  const conv = audioCtx.createConvolver(); conv.buffer = buildPianoHallIR(GTR_VERB);
+  gtrVerbWet = audioCtx.createGain(); gtrVerbWet.gain.value = reverbAmount() * GTR_VERB.wet;
+  input.connect(hp); hp.connect(pre); pre.connect(conv); conv.connect(gtrVerbWet); gtrVerbWet.connect(masterGain);
+  gtrVerbIn = input; gtrVerbCtx = audioCtx;
+  return input;
+}
+function gtrConnect(node, sendAmt){
+  node.connect(getGuitarBus());
+  if (sendAmt) { const s = audioCtx.createGain(); s.gain.value = sendAmt; node.connect(s); s.connect(getGuitarVerb()); }
+}
+
+/* ── 吉他的力度與撥弦時間:模擬吉他手實際彈奏 ──────────────────
+   1) 譜上力度記號/髮夾、整首段落起伏(跟鋼琴共用 pianoLevelAt / pianoAutoMacro)
+   2) 拍子輕重:小節第一拍最重、反拍與十六分音符較輕
+   3) 4 個音以上的和弦當成刷弦:正拍下刷(低→高)、反拍上刷(高→低,低音弦較輕);
+      弦與弦間隔 6~16ms,越大聲刷越快;下刷的最高音稍微突出
+   4) 2~3 個音:手指同時撥(低音用拇指稍重、最高音是旋律),彼此最多差 4ms
+   5) 單音旋律依音高起伏、很快的音較輕;AR(1) 緩慢起伏 + 每個音一點隨機
+   隨機都以位置為種子,同一首每次播放/匯出都一樣 */
+function computeGuitarDynamics(){
+  const hasMarks = scoreDynMarks.length > 0;
+  const auto = pianoAutoMacro(hasMarks);
+  let drift = 0, k = 0, bar = -1, lastM = null, lastPos = -1, lastT = null;
+  const melodyHist = [];
+  for (const ev of events) {
+    if (ev.mIdx !== lastM || (ev.barPos != null && ev.barPos < lastPos - 1e-6)) bar++;
+    lastM = ev.mIdx; if (ev.barPos != null) lastPos = ev.barPos;
+    const ns = ev.notes.filter(n => !n.drum && n.freq).sort((x, y) => x.freq - y.freq);
+    if (!ns.length) continue;
+    k++;
+    let base = 74 + 150 * pianoLevelAt(ev.srcT);
+    const mom = ev.srcT != null && scoreDynMarks.find(d => d.mark in PIANO_MOMENTARY && Math.abs(d.t - ev.srcT) < 1e-4);
+    if (mom) base += PIANO_MOMENTARY[mom.mark];
+    const a = ev.artic;
+    if (a) base += a.strongAccent ? 16 : a.accent ? 11 : a.softAccent ? 5 : 0;
+    let offBeat = false;
+    if (ev.barPos != null && ev.beatLen > 0) {
+      const bf = ev.barPos / ev.beatLen, frac = Math.abs(bf - Math.round(bf));
+      if (ev.barPos < 1e-4) base += 4;
+      else if (frac < 0.02) base += Math.round(bf) % 2 === 0 ? 2 : 0.5;
+      else if (Math.abs(frac - 0.5) < 0.02) { base -= 3; offBeat = true; }
+      else { base -= 4; offBeat = true; }
+      const pos = ev.barLen > 0 ? Math.min(1, ev.barPos / ev.barLen) : 0;
+      const arch = (n, amp) => amp * (Math.sin(Math.PI * (((bar % n) + pos) / n)) - 2 / Math.PI);
+      let mm = (auto.macro[bar] || 0) + arch(4, 3) + arch(8, 4);
+      const fromEnd = auto.nb - (bar + pos);
+      if (fromEnd < 2) mm -= 6 * (1 - fromEnd / 2);
+      base += mm * auto.scale;
+    }
+    if (lastT != null && ev.tWhole - lastT < 1 / 16 - 1e-6) base -= 3;   // 很快的音(比十六分音符還密)較輕
+    lastT = ev.tWhole;
+    drift = 0.8 * drift + 0.6 * (seededRand01(k * 3.17 + 5.1) - 0.5) * 9;
+    base += drift;
+    const strum = ns.length >= 4 && ns.every(n => n.rollIndex == null);
+    const up = strum && offBeat;
+    const gap = Math.max(0.006, Math.min(0.016, 0.014 - (base - 70) * 0.00012));
+    ns.forEach((n, i) => {
+      const m = freqToMidi(n.freq);
+      let v = base;
+      n.gseed = seededRand01(k * 2.37 + m * 0.71);
+      if (strum) {
+        const j = up ? ns.length - 1 - i : i;                     // 刷到的順序
+        v += up ? -6 - (i < 2 ? 5 : 0) : (i === ns.length - 1 ? 3 : 0) - j * 0.6;   // 上刷低音弦常常刷不到/很輕
+        n.gdt = j * gap * (0.85 + 0.3 * seededRand01(k * 9.13 + i));
+      } else if (ns.length > 1) {
+        v += i === ns.length - 1 ? 5 : i === 0 ? 1 : -5;
+        n.gdt = n.rollIndex == null ? seededRand01(k * 5.71 + m * 0.291) * 0.004 : 0;
+      } else {
+        v += 3;
+        if (melodyHist.length) v += Math.max(-4, Math.min(4, (m - melodyHist.reduce((s, x) => s + x, 0) / melodyHist.length) * 0.35));
+        melodyHist.push(m); if (melodyHist.length > 8) melodyHist.shift();
+        n.gdt = 0;
+      }
+      if (n.durWhole >= 0.5) v += 2;
+      v += (seededRand01(k * 7.31 + m * 0.137) - 0.5) * 5;
+      n.gvel = Math.max(10, Math.min(126, v));
+    });
+  }
+}
 
 function freqToMidi(freq){ return 69 + 12 * Math.log2(freq / 440); }
 
@@ -5979,7 +6231,8 @@ function playSampledInstrument(instKey, freq, when, dur, legato, pedal, chordAnc
      那個位置感是鋼琴弦排列的物理特性,套到吉他上反而不對。
      踏板踩著時送多一點進殘響:真實鋼琴踏板一踩,所有沒被制音的弦會跟著共鳴,
      整體空間感明顯變大。這是用殘響量去逼近那個效果,不是真的在模擬弦間共振。 */
-  connectWithPan(g, (instKey === "piano") ? pianoPanFor(freq) : 0, pedal ? 0.85 : 0.5);
+  if (instKey === "guitar" || instKey === "guitarnylon") gtrConnect(g, GTR_VERB_SEND);   // 吉他走自己的 EQ 與殘響
+  else connectWithPan(g, (instKey === "piano") ? pianoPanFor(freq) : 0, pedal ? 0.85 : 0.5);
   if (instKey === "piano" && pianoRoomBus) g.connect(pianoRoomBus); // 多接一條線到共用的遠麥克風匯流排,不必逐音符建節點
   // 滑音(glissando/slide):音高在演奏期間持續滑向下一個音,模擬手指在同一條弦上滑動把位
   if (tech && tech.glissTargetFreq) {
@@ -6017,7 +6270,7 @@ function playSampledInstrument(instKey, freq, when, dur, legato, pedal, chordAnc
 
 /* 顫音(單音 tremolo):古典吉他經典技法(如《阿罕布拉宮的回憶》),同一個音快速反覆撥彈,
    marks(1/2/3)決定每次重彈的音符長度(八分/十六分/三十二分音符),而不是音符本身撐滿整個時值 */
-function scheduleTremolo(freq, when, dur, marks, legato, pedal, chordAnchors, harmonyEndSec, artic, staff){
+function scheduleTremolo(freq, when, dur, marks, legato, pedal, chordAnchors, harmonyEndSec, artic, staff, vel, gn){
   const pulseWhole = Math.pow(2, -(marks + 2)); // 1=0.125(八分),2=0.0625(十六分),3=0.03125(三十二分)
   const pulseSec = Math.max(wholeToSec(pulseWhole), 0.05); // 太快的話至少保留可辨識的最短間隔
   const count = Math.max(1, Math.round(dur / pulseSec));
@@ -6026,18 +6279,19 @@ function scheduleTremolo(freq, when, dur, marks, legato, pedal, chordAnchors, ha
     const pulseWhen = when + i * actualPulseSec;
     // 只有最後一次重彈才套用和聲/踏板延音(harmonyEndSec),前面每次都是正常撥弦的短促衰減
     const isLast = i === count - 1;
-    scheduleNote(freq, pulseWhen, actualPulseSec, legato, pedal, chordAnchors, isLast ? harmonyEndSec : null, isLast ? artic : null, null, staff);
+    scheduleNote(freq, pulseWhen, actualPulseSec, legato, pedal, chordAnchors, isLast ? harmonyEndSec : null, isLast ? artic : null, null, staff, vel != null ? vel - (isLast ? 0 : 4 + (i % 2) * 3) : vel, gn);
   }
 }
-function scheduleNote(freq, when, dur, legato, pedal, chordAnchors, harmonyEndSec, artic, tech, staff, vel){
+function scheduleNote(freq, when, dur, legato, pedal, chordAnchors, harmonyEndSec, artic, tech, staff, vel, gn){
   const inst = currentInstrument();
   const isGuitarInst = inst === "guitar" || inst === "guitarnylon";
   // 顫音(單音tremolo):把一個音符拆成好幾次快速重彈,而不是單一個音撐滿時值
   if (tech && tech.tremolo && isGuitarInst) {
-    scheduleTremolo(freq, when, dur, tech.tremolo, legato, pedal, chordAnchors, harmonyEndSec, artic, staff);
+    scheduleTremolo(freq, when, dur, tech.tremolo, legato, pedal, chordAnchors, harmonyEndSec, artic, staff, vel, gn);
     return;
   }
   if (inst === "piano" && !pianoFallback && playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel)) return;
+  if (inst === "guitar" && !gtrFallback && playGuitarNote(freq, when, dur, harmonyEndSec, artic, tech, vel, gn)) return;
   if (REAL_INSTRUMENTS[inst] && playSampledInstrument(inst, freq, when, dur, legato, pedal, chordAnchors, harmonyEndSec, artic, isGuitarInst ? tech : null, staff)) return;
   // 真實取樣尚未載入完成或缺失時,退回合成音色,絕不會沒有聲音
   switch (inst) {
@@ -7519,6 +7773,7 @@ async function exportVideo(cfg){
   ensureAudio();
   if (kitLoading) await kitLoading;
   if (pianoLoading && currentInstrument() === "piano") await pianoLoading;
+  if (gtrLoading && currentInstrument() === "guitar") await gtrLoading;
   await ensureTitleFontsLoaded(cfg); // 保險:萬一使用者看到預覽秒按確認,字型下載可能還沒跑完
   $("exportOverlayTitle").textContent = T("exportRenderingPct", { pct: 0 });
   $("exportOverlay").classList.add("show");
@@ -7574,6 +7829,7 @@ async function exportVideo(cfg){
     if (importedAudioBuffer) {
       scheduleImportedAudio(startCtxTime, rangeStart); // 有匯入音檔就整段用它,不逐音符排程合成/取樣音色
     } else {
+      gtrRR = {};
       if (currentInstrument() === "piano") pianoSchedulePedalNoise(rangeStart, rangeEnd, sec => startCtxTime + sec - rangeStart);
       const isGuitar = currentInstrument() === "guitar" || currentInstrument() === "guitarnylon";
       for (const ev of events) {
@@ -7592,7 +7848,7 @@ async function exportVideo(cfg){
             : harmonyEndSec;
           const noteTech = (isGuitar && n.glissTargetFreq != null) ? Object.assign({}, tech, { glissTargetFreq: n.glissTargetFreq }) : tech;
           if (n.drum) { const h = humanizeDrumHit(ev, n); scheduleDrum(n.key, startCtxTime + (t - rangeStart) + rollT + h.dt, h); }
-          else scheduleNote(n.freq, startCtxTime + (t - rangeStart) + rollT + (n.pdt || 0), durSec, ev.legato, ev.pedalOn, chordAnchors, noteHarmonyEndSec, ev.artic, noteTech, n.staff, n.pvel);
+          else scheduleNote(n.freq, startCtxTime + (t - rangeStart) + rollT + ((isGuitar ? n.gdt : n.pdt) || 0), durSec, ev.legato, ev.pedalOn, chordAnchors, noteHarmonyEndSec, ev.artic, noteTech, n.staff, isGuitar ? n.gvel : n.pvel, n);
         }
       }
     }
