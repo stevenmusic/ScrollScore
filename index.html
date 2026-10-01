@@ -1622,6 +1622,7 @@ function metronomeUnitLabel(beatUnit, dotCount){
 }
 let importedAudioBuffer = null; // 使用者匯入的音檔(解碼後),有值時播放/匯出都改用這個,不再合成/取樣
 let importedAudioName = null;
+let scoreDynMarks = [], scoreWedges = []; // 力度記號與髮夾(記譜位置),鼓的整首力度用
 let ghostNoteheadEntries = {}; // 同上,記錄括號符頭(鬼音 ghost note,輕輕帶過的小鼓等),播放時用最輕的力度層
 let crossNoteheadEntries = {}; // midi(取整數) -> 已排序的 {t,v} 陣列,記錄哪些時間點是打叉符頭(rim click等特殊擊法),用 findNearestEntry 容許誤差比對
 let articEntries = [], arpEntries = [];
@@ -1918,6 +1919,8 @@ async function loadScoreFile(file){
     for (const mk of Object.keys(parsed.crossNoteheadMap || {})) {
       crossNoteheadEntries[mk] = buildSortedEntries(parsed.crossNoteheadMap[mk]);
     }
+    scoreDynMarks = parsed.dynMarks || [];
+    scoreWedges = parsed.wedges || [];
     ghostNoteheadEntries = {};
     for (const mk of Object.keys(parsed.ghostNoteheadMap || {})) {
       ghostNoteheadEntries[mk] = buildSortedEntries(parsed.ghostNoteheadMap[mk]);
@@ -2254,6 +2257,7 @@ async function renderScore(xmlText){
   extendLedgerLineStems(); // OSMD符桿長度是固定值,不會因為加線音符離譜表遠就自動加長,這裡渲染完手動補上
 
   buildTimeline();
+  computeDrumSongDynamics();
   rebuildKeyboardRange();
   resizeKeyboardCanvas(); // 可見白鍵數量隨這首曲子的音域改變,鍵盤高度要跟著重新算才會維持真實比例
   drawKeyboardLive(0); // resize會清空canvas畫面,不補畫的話鍵盤要等到按下播放才會出現,載入完成後應該馬上看到鍵盤
@@ -2343,6 +2347,9 @@ function parseXmlTimeline(xmlText){
     const pedalStack = [];
     const outPedals = [];
     const measureBoundaries = []; // 每個小節開始時的 cursor(全音符定位),給吉他同弦延音判斷用
+    const dynMarks = [];   // 力度記號 {t: 記譜位置(全音符), mark: "p"/"mf"/"ff"...}
+    const wedges = [];     // 漸強/漸弱髮夾 {start, end, dir: "cresc"|"dim"}
+    const openWedges = {};
     const staffOnsets = {}; // staffNum -> [{tWhole, durWhole, pcs:Set}], 給重複音型偵測用
     const articMap = {}; // tWhole(定點字串) -> {accent,strongAccent,staccato,staccatissimo,tenuto,detachedLegato,spiccato,softAccent,fermata}
     const arpMap = {}; // tWhole(定點字串) -> "up"/"down",分解和弦(琶音)標記
@@ -2403,6 +2410,13 @@ function parseXmlTimeline(xmlText){
           const d = child.getElementsByTagName("divisions")[0];
           if (d) divisions = parseFloat(d.textContent) || divisions;
         } else if (child.tagName === "direction") {
+          const dynEl = child.getElementsByTagName("dynamics")[0];
+          if (dynEl && dynEl.children[0]) dynMarks.push({ t: cursor, mark: dynEl.children[0].tagName.toLowerCase() });
+          for (const w of Array.from(child.getElementsByTagName("wedge"))) {
+            const type = w.getAttribute("type"), num = w.getAttribute("number") || "1";
+            if (type === "crescendo" || type === "diminuendo") openWedges[num] = { start: cursor, dir: type === "crescendo" ? "cresc" : "dim" };
+            else if (type === "stop" && openWedges[num]) { wedges.push(Object.assign(openWedges[num], { end: cursor })); delete openWedges[num]; }
+          }
           const pedalEl = child.getElementsByTagName("pedal")[0];
           if (pedalEl) {
             const type = pedalEl.getAttribute("type");
@@ -2588,7 +2602,7 @@ function parseXmlTimeline(xmlText){
     const measureRanges = measureBoundaries.map((start, i) => ({
       start, end: i + 1 < measureBoundaries.length ? measureBoundaries[i + 1] : cursor
     }));
-    return { slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges, articMap, arpMap, soundTempo, metronomeDisplay, timeSig, isDrumScore, crossNoteheadMap, ghostNoteheadMap, measureRanges, guitarTechMap, vibratoRanges: outWavyLines, scoreTitle };
+    return { slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges, articMap, arpMap, soundTempo, metronomeDisplay, timeSig, isDrumScore, crossNoteheadMap, ghostNoteheadMap, dynMarks, wedges, measureRanges, guitarTechMap, vibratoRanges: outWavyLines, scoreTitle };
   } catch (e) {
     console.error("讀取踏板/圓滑線資訊失敗:", e);
     return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, arpMap: {}, soundTempo: null, metronomeDisplay: null, timeSig: null, isDrumScore: false, crossNoteheadMap: {}, measureRanges: [], guitarTechMap: {}, vibratoRanges: [], scoreTitle: null };
@@ -2810,17 +2824,20 @@ function buildTimeline(){
     }
     // 這個時間點在小節裡的位置(鼓的真人力度模擬要用:正拍/反拍/十六分音符的輕重不同)。
     // 用 OSMD 的「原始記譜位置」減掉小節起點,反覆記號展開後重播的小節也能拿到正確的拍內位置
-    let barPos = null, beatLen = 0.25;
+    let barPos = null, beatLen = 0.25, barLen = 1, srcT = null, mIdx = null;
     try {
       const m = it.CurrentMeasure;
-      barPos = it.CurrentSourceTimestamp.RealValue - m.AbsoluteTimestamp.RealValue;
+      srcT = it.CurrentSourceTimestamp.RealValue;
+      mIdx = it.CurrentMeasureIndex;
+      barPos = srcT - m.AbsoluteTimestamp.RealValue;
       const ts = m.ActiveTimeSignature;
       if (ts && ts.Denominator) {
+        barLen = ts.Numerator / ts.Denominator;
         const compound = ts.Denominator === 8 && ts.Numerator % 3 === 0 && ts.Numerator > 3; // 6/8、9/8、12/8 一拍是附點四分
         beatLen = compound ? 3 / 8 : 1 / ts.Denominator;
       }
     } catch (e) { barPos = null; }
-    events.push({ tWhole, x, notes, arpCount, arpGapBeforeWhole, arpGapAfterWhole: null, arpPrevDurWhole, barPos, beatLen });
+    events.push({ tWhole, x, notes, arpCount, arpGapBeforeWhole, arpGapAfterWhole: null, arpPrevDurWhole, barPos, beatLen, barLen, srcT, mIdx });
     cursor.next();
   }
   // 補上每個事件跟下一個事件的全音符間距,琶音邊界偵測要用(前面那一步只知道跟前一個事件的間距)
@@ -2996,6 +3013,71 @@ function getDrumKey(n, tWhole){
   }
   return key;
 }
+/* ── 鼓:整首歌的力度起伏 ──────────────────────────
+   humanizeDrumHit 只管一小節之內的輕重;真人打整首歌時,段落之間也有大小聲:主歌收著打、副歌放開、
+   過門一路漸強衝進下一段。這裡替每個事件算出 ev.macro(加在 0~1 力度值上的偏移):
+   1) 譜上有力度記號(pp~fff)與漸強/漸弱髮夾時照記號走
+   2) 依每小節的打法自動估「這小節有多用力」:音符密度、用 ride/開放 hi-hat(副歌常見)、crash、過門,
+      前後小節平滑,段落之間才是漸變而不是一小節一跳;譜上有記號時這部分減半,只補細節
+   3) 過門小節從輕到重漸強(真人過門幾乎都是往下一段衝)
+   4) 每小節再加一點點緩慢的隨機起伏,長歌不會從頭到尾死板一個音量 */
+const DYN_MARK_LEVEL = { pppp: -0.34, ppp: -0.3, pp: -0.24, p: -0.16, mp: -0.08, mf: 0, f: 0.1, ff: 0.18, fff: 0.24, ffff: 0.28, sf: 0.1, sfz: 0.1, fz: 0.1, rf: 0.06, rfz: 0.06, fp: 0 };
+const DRUM_TOM_KEYS = new Set([41, 43, 45, 47, 48, 50]);
+function scoreDynamicLevelAt(t){
+  if (!scoreDynMarks.length || t == null) return 0;
+  const levelAt = x => { let lv = 0; for (const d of scoreDynMarks) { if (d.t <= x + 1e-6 && d.mark in DYN_MARK_LEVEL) lv = DYN_MARK_LEVEL[d.mark]; } return lv; };
+  for (const w of scoreWedges) {
+    if (t >= w.start && t < w.end && w.end > w.start) {
+      const a = levelAt(w.start);
+      const next = scoreDynMarks.find(d => d.t >= w.end - 1e-6 && d.mark in DYN_MARK_LEVEL);
+      const b = next ? DYN_MARK_LEVEL[next.mark] : a + (w.dir === "cresc" ? 0.1 : -0.1);
+      return a + (b - a) * (t - w.start) / (w.end - w.start);
+    }
+  }
+  return levelAt(t);
+}
+function computeDrumSongDynamics(){
+  for (const ev of events) ev.macro = 0;
+  if (!events.some(ev => ev.notes.some(n => n.drum))) return;
+  // 依演奏順序切小節(反覆記號展開後重播的小節算新的一小節)
+  const bars = []; let cur = null, lastM = null, lastPos = -1;
+  for (const ev of events) {
+    if (!cur || ev.mIdx !== lastM || (ev.barPos != null && ev.barPos < lastPos - 1e-6)) { cur = { evs: [] }; bars.push(cur); }
+    cur.evs.push(ev); lastM = ev.mIdx; lastPos = ev.barPos != null ? ev.barPos : lastPos;
+  }
+  for (const b of bars) {
+    let hits = 0, toms = 0, ride = 0, open = 0, crash = 0, offSnare = 0;
+    for (const ev of b.evs) for (const n of ev.notes) {
+      if (!n.drum) continue;
+      hits++;
+      if (DRUM_TOM_KEYS.has(n.key)) toms++;
+      if (n.key === 51 || n.key === 53 || n.key === 59) ride++;
+      if (n.key === 46) open++;
+      if (n.key === 49 || n.key === 52 || n.key === 55 || n.key === 57) crash++;
+      if ((n.key === 38 || n.key === 40) && !n.ghost && ev.beatLen > 0 && Math.abs((ev.barPos / ev.beatLen) % 1) > 0.02) offSnare++;
+    }
+    b.hits = hits;
+    b.fill = toms >= 3 || offSnare >= 4;
+    b.feel = Math.min(1, (ride + open * 2) / 4) * 0.25 + Math.min(1, crash) * 0.15 + (b.fill ? 0.15 : 0);
+  }
+  const maxHits = Math.max(1, ...bars.map(b => b.hits));
+  const raw = bars.map(b => 0.45 * b.hits / maxHits + b.feel);
+  // 前後小節平滑(0.25/0.5/0.25),段落交界是漸變
+  const sm = raw.map((v, i) => 0.25 * (raw[i - 1] != null ? raw[i - 1] : v) + 0.5 * v + 0.25 * (raw[i + 1] != null ? raw[i + 1] : v));
+  const mean = sm.reduce((a, x) => a + x, 0) / sm.length;
+  const span = Math.max(...sm) - Math.min(...sm);
+  const hasMarks = scoreDynMarks.length > 0;
+  bars.forEach((b, i) => {
+    let auto = bars.length >= 4 && span > 0.05 ? Math.max(-0.2, Math.min(0.2, (sm[i] - mean) / span * 0.36)) : 0;
+    auto += (seededRand01(i * 7.77 + 3.1) - 0.5) * 0.03;           // 緩慢的隨機起伏
+    if (hasMarks) auto *= 0.5;
+    for (const ev of b.evs) {
+      let m = auto + scoreDynamicLevelAt(ev.srcT);
+      if (b.fill && ev.barLen > 0 && ev.barPos != null) m += -0.08 + 0.24 * (ev.barPos / ev.barLen); // 過門漸強
+      ev.macro = m;
+    }
+  });
+}
 function isGhostDrumNote(n, tWhole){
   const midi = n.Pitch.getHalfTone ? n.Pitch.getHalfTone() + 12 : (n.Pitch.halfTone + 12);
   const entries = ghostNoteheadEntries[Math.round(midi)];
@@ -3029,6 +3111,7 @@ function humanizeDrumHit(ev, n){
     else if (key === 35 || key === 36) s += onBeat ? 0.03 : -0.03;
     if (onBeat && beatIdx === 0 && !n.ghost) s += 0.03;
   }
+  s += (ev.macro || 0) * (n.ghost ? 0.5 : 1); // 整首歌的力度起伏(段落、記號、過門漸強),鬼音只跟一半
   s += (drumHitRand(ev, key, 1) + drumHitRand(ev, key, 2) - 1) * 0.08;
   s = Math.max(0.12, Math.min(1, s));
   const vel = s < 0.42 ? 3 : s < 0.78 ? 4 : 5;
@@ -5610,21 +5693,25 @@ function pickDrumLayer(name, vel){
   return list && list.length ? { key: name, list, gain: DRUM_VEL_GAIN[vel] } : null;
 }
 
-/* 鼓組匯流排:所有鼓件先匯到這裡。壓縮器只當「峰值安全網」,門檻設高、只在很大聲的重擊才介入。
-   原本用一般 drum bus 的設定(門檻 −16dB、2.5:1)做黏合,實測會把 hi-hat 正拍/反拍的力度差從 3dB
-   壓到只剩 0.6dB,真人演奏模擬的力度起伏幾乎全被抹平,每一下聽起來又一樣大,反而更像機器 */
+/* 鼓組匯流排:所有鼓件先匯到這裡,再「繞過」主輸出的響度壓縮器(loudnessComp),直接進安全網限幅器。
+   主輸出那段響度壓縮(門檻 −18dB、3:1)是為了讓鋼琴聽起來夠大聲而加的,但鼓也經過它的話,
+   真人力度模擬做出來的輕重(段落大小聲、過門漸強、正反拍)會被壓掉三分之二以上,實測 4dB 的力度差
+   到輸出只剩 1dB 左右。鼓改走自己這條:一個溫和的匯流排壓縮(只把最重的幾下收一點)+ 補償增益,
+   整體響度跟原本差不多,力度起伏卻能保留下來。參數由自動量測(響度、峰值、段落對比)挑出來 */
+const DRUM_BUS = { threshold: -6, knee: 10, ratio: 1, attack: 0.01, release: 0.15, makeup: 0.62 }; // ratio 1 = 不壓縮;壓縮任何一點,力度差都會被吃掉(實測見上)
 let drumBus = null;
 function getDrumBus(){
   if (drumBus && drumBus.context === audioCtx) return drumBus;
   const comp = audioCtx.createDynamicsCompressor();
-  comp.threshold.value = -6;
-  comp.knee.value = 4;
-  comp.ratio.value = 3;
-  comp.attack.value = 0.003;
-  comp.release.value = 0.12;
+  comp.threshold.value = DRUM_BUS.threshold;
+  comp.knee.value = DRUM_BUS.knee;
+  comp.ratio.value = DRUM_BUS.ratio;
+  comp.attack.value = DRUM_BUS.attack;
+  comp.release.value = DRUM_BUS.release;
   const makeup = audioCtx.createGain();
-  makeup.gain.value = 1.0;
-  comp.connect(makeup); makeup.connect(masterGain);
+  makeup.gain.value = DRUM_BUS.makeup;
+  comp.connect(makeup);
+  makeup.connect(masterLimiter || masterGain);
   drumBus = comp;
   return drumBus;
 }
@@ -5730,23 +5817,23 @@ function synthCymbal(when, decay, hpFreq, gain, noiseMix){
    因為取樣本身就有同一個房間的房間麥克風。DRSKit 有三顆鼓(一顆中鼓、兩顆落地鼓),記譜常用的
    高音鼓(48)→ Tom1、中音鼓(47)→ Tom2、落地鼓(43)→ Tom3 都是原音,其餘 GM 音高才微幅變調 */
 const DRUM_VOICES = {
-  kick:      { piece: "kick",     gain: 0.705,  send: 0.04, synth: (w, V) => synthKick(w) },
+  kick:      { piece: "kick",     gain: 0.957,  send: 0.04, synth: (w, V) => synthKick(w) },
   snare:     { piece: "snare",    gain: 1.0,  send: 0.04, synth: (w, V) => synthSnare(w, 0.95 * V) },
-  xstick:    { piece: "xstick",   gain: 0.656,  send: 0.04, synth: (w, V) => synthRimClick(w, 0.7 * V) },
+  xstick:    { piece: "xstick",   gain: 0.772,  send: 0.04, synth: (w, V) => synthRimClick(w, 0.7 * V) },
   clap:      { piece: "snare",    gain: 0.8,  send: 0.04, synth: (w, V) => synthSnare(w, 0.8 * V) },
-  hhClosed:  { piece: "hhClosed", gain: 0.288, send: 0.04, synth: (w, V) => synthCymbal(w, 0.06, 8000, 0.25 * V, 0.25), choke: true },
-  hhPedal:   { piece: "hhPedal",  gain: 0.23, send: 0.04, synth: (w, V) => synthCymbal(w, 0.05, 8000, 0.16 * V, 0.2), choke: true },
-  hhOpen:    { piece: "hhOpen",   gain: 0.2, send: 0.04, sustain: 0.6, synth: (w, V) => synthCymbal(w, 0.45, 7000, 0.28 * V, 0.4), openHat: true },
-  tomHigh:   { piece: "tom1",     gain: 0.397,  rate: 1.06, send: 0.04, synth: (w, V) => synthTom(w, 190) },
-  tomHiMid:  { piece: "tom1",     gain: 0.397,  send: 0.04, synth: (w, V) => synthTom(w, 175) },
-  tomLowMid: { piece: "tom2",     gain: 0.53,  send: 0.04, synth: (w, V) => synthTom(w, 150) },
-  tomLow:    { piece: "tom2",     gain: 0.53,  rate: 0.94, send: 0.04, synth: (w, V) => synthTom(w, 130) },
-  floorHigh: { piece: "tom3",     gain: 0.712,  send: 0.04, synth: (w, V) => synthTom(w, 100) },
-  floorLow:  { piece: "tom3",     gain: 0.712,  rate: 0.92, send: 0.04, synth: (w, V) => synthTom(w, 85) },
-  crash1:    { piece: "crashL",   gain: 0.182,  send: 0.05, sustain: 2.2, synth: (w, V) => synthCymbal(w, 1.6, 5500, 0.4 * V, 0.45) },
-  crash2:    { piece: "crashR",   gain: 0.17,  send: 0.05, sustain: 2.2, synth: (w, V) => synthCymbal(w, 1.6, 5500, 0.4 * V, 0.45) },
-  ride:      { piece: "ride",     gain: 0.262, send: 0.05, sustain: 1.8, synth: (w, V) => synthCymbal(w, 1.3, 8500, 0.22 * V, 0.55) },
-  rideBell:  { piece: "rideBell", gain: 0.256,  send: 0.05, sustain: 1.2, synth: (w, V) => synthCymbal(w, 0.6, 11000, 0.32 * V, 0.12) }
+  hhClosed:  { piece: "hhClosed", gain: 0.438, send: 0.04, synth: (w, V) => synthCymbal(w, 0.06, 8000, 0.25 * V, 0.25), choke: true },
+  hhPedal:   { piece: "hhPedal",  gain: 0.351, send: 0.04, synth: (w, V) => synthCymbal(w, 0.05, 8000, 0.16 * V, 0.2), choke: true },
+  hhOpen:    { piece: "hhOpen",   gain: 0.304, send: 0.04, sustain: 0.6, synth: (w, V) => synthCymbal(w, 0.45, 7000, 0.28 * V, 0.4), openHat: true },
+  tomHigh:   { piece: "tom1",     gain: 0.603,  rate: 1.06, send: 0.04, synth: (w, V) => synthTom(w, 190) },
+  tomHiMid:  { piece: "tom1",     gain: 0.603,  send: 0.04, synth: (w, V) => synthTom(w, 175) },
+  tomLowMid: { piece: "tom2",     gain: 0.766,  send: 0.04, synth: (w, V) => synthTom(w, 150) },
+  tomLow:    { piece: "tom2",     gain: 0.766,  rate: 0.94, send: 0.04, synth: (w, V) => synthTom(w, 130) },
+  floorHigh: { piece: "tom3",     gain: 0.952,  send: 0.04, synth: (w, V) => synthTom(w, 100) },
+  floorLow:  { piece: "tom3",     gain: 0.952,  rate: 0.92, send: 0.04, synth: (w, V) => synthTom(w, 85) },
+  crash1:    { piece: "crashL",   gain: 0.276,  send: 0.05, sustain: 2.2, synth: (w, V) => synthCymbal(w, 1.6, 5500, 0.4 * V, 0.45) },
+  crash2:    { piece: "crashR",   gain: 0.258,  send: 0.05, sustain: 2.2, synth: (w, V) => synthCymbal(w, 1.6, 5500, 0.4 * V, 0.45) },
+  ride:      { piece: "ride",     gain: 0.398, send: 0.05, sustain: 1.8, synth: (w, V) => synthCymbal(w, 1.3, 8500, 0.22 * V, 0.55) },
+  rideBell:  { piece: "rideBell", gain: 0.39,  send: 0.05, sustain: 1.2, synth: (w, V) => synthCymbal(w, 0.6, 11000, 0.32 * V, 0.12) }
 };
 const DRUM_KEY_VOICE = {
   35: "kick", 36: "kick", 38: "snare", 40: "snare", 37: "xstick", 39: "clap",
