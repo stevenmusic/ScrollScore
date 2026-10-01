@@ -866,18 +866,17 @@ body.exporting-active .empty-card{
     <div class="settings-group-title" data-i18n="settingsGroupPlayback">播放與顯示</div>
     <div class="switch-grid">
       <!-- 排列順序是照「這個開關做什麼事」分的,每一列兩個是同一類:
-           1. 預備拍 / 圓滑踏板   —— 只影響聲音,不動樂譜,切換是即時的
+           1. 預備拍 / 小節高亮   —— 切換是即時的,不動樂譜內容
            2. 速度記號 / 合併休止 —— 這兩個是唯一會呼叫 renderScore() 重新排版整份樂譜的,
-                                     而且會先 stopPlayback() 再從原位置接回去。行為一樣就該放在同一列;
-                                     原本一個在第2列右、一個在第3列左,對角線分開最看不出是同類
-           3. 小節高亮 —— 只改視覺呈現(寫 CSS 變數),不碰樂譜內容,也是即時的,現在自己一列
+                                     而且會先 stopPlayback() 再從原位置接回去。行為一樣就該放在同一列
+           「圓滑/踏板」開關已移除:圓滑線、踏板記號與和聲延音一律開啟(16 層鋼琴沒有延音非常難聽)
            彈性速度目前被 FEATURE_RUBATO 隱藏,DOM 位置留在聲音那一組,之後放回來就在原本的類別裡。
            淺色模式已經搬到頁首常駐圖示按鈕(#themeToggle),不再放在這個面板裡 -->
       <label class="switch-row" data-i18n-attr="title:countInTitle">
         <span class="switch"><input type="checkbox" id="countIn"><span class="switch-track"></span></span><span data-i18n="countInLabel">預備拍</span>
       </label>
-      <label class="switch-row" data-i18n-attr="title:legatoPedalTitle">
-        <span class="switch"><input type="checkbox" id="legatoPedal" checked><span class="switch-track"></span></span><span data-i18n="legatoPedalLabel">圓滑/踏板</span>
+      <label class="switch-row" data-i18n-attr="title:measureHlTitle">
+        <span class="switch"><input type="checkbox" id="measureHl"><span class="switch-track"></span></span><span data-i18n="measureHlLabel">小節高亮</span>
       </label>
       <label class="switch-row" id="rubatoRow" data-i18n-attr="title:rubatoTitle">
         <span class="switch"><input type="checkbox" id="useRubato"><span class="switch-track"></span></span><span data-i18n="rubatoLabel">彈性速度</span>
@@ -887,9 +886,6 @@ body.exporting-active .empty-card{
       </label>
       <label class="switch-row" data-i18n-attr="title:mergeRestMeasuresTitle">
         <span class="switch"><input type="checkbox" id="mergeRestMeasures"><span class="switch-track"></span></span><span data-i18n="mergeRestMeasuresLabel">合併休止</span>
-      </label>
-      <label class="switch-row" data-i18n-attr="title:measureHlTitle">
-        <span class="switch"><input type="checkbox" id="measureHl"><span class="switch-track"></span></span><span data-i18n="measureHlLabel">小節高亮</span>
       </label>
     </div>
   </div>
@@ -1158,8 +1154,6 @@ const I18N = {
     settingsGroupPlayback: "播放與顯示",
     countInTitle: "播放前先敲一小節節拍器,留時間把手放到樂器上",
     countInLabel: "預備拍",
-    legatoPedalTitle: "圓滑線與踏板記號的延音效果",
-    legatoPedalLabel: "圓滑/踏板",
     rubatoTitle: "模擬真人彈奏的節奏彈性(樂句抑揚、結尾漸慢、重音拉長),而非機械式的固定拍點。套用在整首曲子共用的主時間軸上,所有樂器/雙手會一起呼吸伸縮",
     rubatoLabel: "彈性速度",
     showTempoMarksTitle: "顯示樂譜上的速度記號",
@@ -1365,8 +1359,6 @@ const I18N = {
     settingsGroupPlayback: "Playback & Display",
     countInTitle: "Clicks a metronome bar before playback, giving you time to get your hands ready",
     countInLabel: "Count-in",
-    legatoPedalTitle: "Sustain effect from slur and pedal markings",
-    legatoPedalLabel: "Slur/Pedal",
     rubatoTitle: "Simulates a human performer's rhythmic flexibility (phrasing swell, ritardando, agogic accents) instead of a rigid, mechanical beat. Applied to the shared master timeline, so all instruments/hands breathe together",
     rubatoLabel: "Rubato",
     showTempoMarksTitle: "Show tempo markings on the score",
@@ -4096,7 +4088,6 @@ const PREF_FIELDS = [
   { id: "instrument",        prop: "value" },
   { id: "scoreBgOpacity",    prop: "value" },
   { id: "countIn",           prop: "checked" },
-  { id: "legatoPedal",       prop: "checked" },
   { id: "useRubato",         prop: "checked" },
   { id: "showTempoMarks",    prop: "checked" },
   { id: "mergeRestMeasures", prop: "checked" },
@@ -4570,7 +4561,7 @@ function startAudioFrom(fromSec){
   const calib = useCalib();
   computeDrumPerformance(); // 依目前的速度重算(速度會影響「越快越輕」)
   pianoResetVoices();
-  if (currentInstrument() === "piano" && $("legatoPedal").checked) pianoSchedulePedalNoise(fromSec, Infinity, sec => startCtxTime + sec);
+  if (currentInstrument() === "piano") pianoSchedulePedalNoise(fromSec, Infinity, sec => startCtxTime + sec);
   let errCount = 0, lastErr = null;
   for (const ev of events) {
     const t = posToSec(ev.tWhole, calib);
@@ -5853,7 +5844,6 @@ function scheduleTremolo(freq, when, dur, marks, legato, pedal, chordAnchors, ha
   }
 }
 function scheduleNote(freq, when, dur, legato, pedal, chordAnchors, harmonyEndSec, artic, tech, staff, vel){
-  if (!$("legatoPedal").checked) { legato = false; pedal = false; harmonyEndSec = null; tech = null; }
   const inst = currentInstrument();
   const isGuitarInst = inst === "guitar" || inst === "guitarnylon";
   // 顫音(單音tremolo):把一個音符拆成好幾次快速重彈,而不是單一個音撐滿時值
@@ -7378,7 +7368,7 @@ async function exportVideo(cfg){
     if (importedAudioBuffer) {
       scheduleImportedAudio(startCtxTime, rangeStart); // 有匯入音檔就整段用它,不逐音符排程合成/取樣音色
     } else {
-      if (currentInstrument() === "piano" && $("legatoPedal").checked) pianoSchedulePedalNoise(rangeStart, rangeEnd, sec => startCtxTime + sec - rangeStart);
+      if (currentInstrument() === "piano") pianoSchedulePedalNoise(rangeStart, rangeEnd, sec => startCtxTime + sec - rangeStart);
       const isGuitar = currentInstrument() === "guitar" || currentInstrument() === "guitarnylon";
       for (const ev of events) {
         const t = posToSec(ev.tWhole, calib);

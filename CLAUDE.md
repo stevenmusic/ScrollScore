@@ -19,6 +19,7 @@
 - 鋼琴用自己的殘響 getPianoVerb()（buildPianoHallIR：四頻段各自指數衰減，RT60 低 1.9s → 5kHz 以上 0.65s、固定種子、送入前 180Hz 高通、wet 0.33×殘響滑桿），不用共用的 buildImpulseResponse（(1−t)^2.4 衰減不自然、高頻不衰減、早期反射左右反相）；共用的那個目前只剩吉他在用
 - 鋼琴殘響送出：一般 0.5、譜上有踏板 ×1.7。harmonyEndSec 一定有值（至少是同時最長音的結尾），不能拿來判斷踏板
 - 譜上沒踏板、由和聲自動延長的音用「半踏板」：放鍵後依 pianoHalfPedalTau（PIANO_HALF_PEDAL 0.7）較快衰減，避免級進旋律全部疊在一起變糊；譜上有踏板才完全延音
+- 「圓滑/踏板」開關已移除（使用者要求）：圓滑線、踏板記號、和聲延音一律開啟，不要再加回開關
 - 樂器只保留鋼琴、吉他（民謠、古典兩把）、鼓組
 - 匯出影片用 canvas.captureStream + MediaRecorder
 
