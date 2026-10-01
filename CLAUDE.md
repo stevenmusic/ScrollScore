@@ -6,7 +6,9 @@
 - 鼓的力度照原廠 sfz：s(0~1)×127 = MIDI 力度，依原廠力度分區挑層，音量 = 0.01 + 0.99×(力度/127)²（amp_veltrack 99）；一般擊打 s≈0.72（≈91）、鬼音 0.3、重音 0.95
 - humanizeDrumHit() 算 0~1 力度（鬼音/一般/重音 + 正反拍律動重音 + 隨機 + 整首力度 ev.macro）；時間是整拍共用 ±4ms + 各肢體 ±1.5ms
 - 鼓的整首力度：computeDrumSongDynamics() 算 ev.macro（譜上 pp~fff 與漸強/漸弱髮夾 + 依每小節密度/ride/開放 hi-hat/crash/過門自動估段落大小聲 + 過門漸強 + 緩慢隨機）
-- 鼓音量平衡用響度（LUFS）量，不是峰值；鼓的匯流排繞過主輸出的 loudnessComp（那是給鋼琴的），且不壓縮（DRUM_BUS ratio 1），只有主限幅器當安全網——任何壓縮都會把力度差吃掉。鼓因此比鋼琴小聲（約 −21 LUFS），是刻意的取捨
+- 鼓的演奏細節：computeDrumPerformance()（肢體分配、AR(1) 連續起伏、越快越輕、重音前後、過門左右手、開放 hi-hat、樂句）放在 n.perf，播放/匯出前依當下速度重算
+- 鼓的混音（getDrumBus / DRUM_BUS）：乾聲不壓縮 + 平行壓縮 + 鼓用 plate 殘響（RT60 2.2s，跟著殘響滑桿）+ 輕微 EQ，繞過鋼琴用的 loudnessComp，只有主限幅器當安全網。plate 的雜訊用固定種子，不要用 Math.random
+- 鼓音量平衡用響度（LUFS）量，不是峰值；鼓約 −20 LUFS，比鋼琴小聲，是保留力度的取捨
 - MusicXML midi-unpitched 是 1 起算、OSMD 不會減 1，normalizeDrumKey 一律減 1
 - 樂器只保留鋼琴、吉他（民謠、古典兩把）、鼓組
 - 匯出影片用 canvas.captureStream + MediaRecorder

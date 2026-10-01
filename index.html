@@ -3061,7 +3061,8 @@ function computeDrumSongDynamics(){
     b.feel = Math.min(1, (ride + open * 2) / 4) * 0.25 + Math.min(1, crash) * 0.15 + (b.fill ? 0.15 : 0);
   }
   const maxHits = Math.max(1, ...bars.map(b => b.hits));
-  const raw = bars.map(b => 0.45 * b.hits / maxHits + b.feel);
+  // 音符密度只給小權重:16 分音符 hi-hat 的律動常常反而是比較收的主歌,密度不是可靠的「大聲」線索
+  const raw = bars.map(b => 0.2 * b.hits / maxHits + b.feel);
   // 前後小節平滑(0.25/0.5/0.25),段落交界是漸變
   const sm = raw.map((v, i) => 0.25 * (raw[i - 1] != null ? raw[i - 1] : v) + 0.5 * v + 0.25 * (raw[i + 1] != null ? raw[i + 1] : v));
   const mean = sm.reduce((a, x) => a + x, 0) / sm.length;
@@ -3072,11 +3073,78 @@ function computeDrumSongDynamics(){
     auto += (seededRand01(i * 7.77 + 3.1) - 0.5) * 0.03;           // 緩慢的隨機起伏
     if (hasMarks) auto *= 0.5;
     for (const ev of b.evs) {
+      ev.barIdx = i;
       let m = auto + scoreDynamicLevelAt(ev.srcT);
       if (b.fill && ev.barLen > 0 && ev.barPos != null) m += -0.08 + 0.24 * (ev.barPos / ev.barLen); // 過門漸強
       ev.macro = m;
     }
   });
+}
+/* ── 鼓:真人演奏的力度細節(肢體、速度、技巧)──────────────────
+   一般「人性化」只是每一下加亂數;真人的力度是被身體與技巧決定的,這裡模擬幾個鼓手教學與演奏研究裡都會提到的現象:
+   1) 肢體分配:hi-hat/ride/銅鈸 → 右手、跟 hi-hat 同時的小鼓/中鼓 → 左手、大鼓 → 右腳、踩 hi-hat → 左腳;
+      過門(沒有 hi-hat 的段落)左右手輪流(single stroke),慣用手(右)稍重
+   2) 連續起伏:每個肢體的力度是「緩慢飄移」的(AR(1),前一下的狀態保留 70%),而不是每一下獨立亂跳——
+      真人會一連幾下稍重、再一連幾下稍輕
+   3) 速度 → 抬棒高度:同一隻手兩下間隔越短,棒子抬不高,越快的音越輕(16 分音符的 hi-hat、快速過門)
+   4) 重音技巧:重音前一下要把棒子抬高預備(upstroke,較輕),重音那一下打下去之後棒子停在低處(downstroke),
+      下一下也會比較輕
+   5) 快速的單手 hi-hat 16 分音符改成雙手交替,弱手那下稍輕
+   6) 開放 hi-hat 要打得比較紮實才張得開;緊貼在 backbeat 旁的鬼音會更輕
+   7) 樂句:以 4 小節為一句,最後一小節稍微往前推
+   所有亂數都以時間點為種子,同一首曲子每次播放/匯出都一樣 */
+const DRUM_CYMBAL_KEYS = new Set([49, 52, 55, 57]);
+function computeDrumPerformance(){
+  if (!events.length) return;
+  const calib = useCalib();
+  const hits = [];
+  let fillHand = "R", prevHadTimekeeper = true;
+  for (const ev of events) {
+    const drums = ev.notes.filter(n => n.drum);
+    if (!drums.length) continue;
+    const t = posToSec(ev.tWhole, calib);
+    const accented = !!(ev.artic && (ev.artic.accent || ev.artic.strongAccent));
+    const hasTimekeeper = drums.some(n => DRUM_TIMEKEEPERS.has(n.key) && n.key !== 44);
+    if (!hasTimekeeper && prevHadTimekeeper) fillHand = "R";   // 過門一開始都是慣用手起手
+    prevHadTimekeeper = hasTimekeeper;
+    for (const n of drums) {
+      let limb, alternated = false;
+      if (n.key === 35 || n.key === 36) limb = "RF";
+      else if (n.key === 44) limb = "LF";
+      else if (DRUM_TIMEKEEPERS.has(n.key) || DRUM_CYMBAL_KEYS.has(n.key)) limb = "R";
+      else if (hasTimekeeper) limb = "L";
+      else { limb = fillHand; fillHand = fillHand === "R" ? "L" : "R"; alternated = true; }
+      hits.push({ ev, n, t, limb, alternated, acc: accented && !n.ghost });
+    }
+  }
+  const byLimb = {};
+  for (const h of hits) (byLimb[h.limb] = byLimb[h.limb] || []).push(h);
+  for (const seq of Object.values(byLimb)) {
+    let x = 0, runIdx = 0;
+    seq.forEach((h, i) => {
+      const r = (seededRand01(h.ev.tWhole * 91.3 + h.n.key * 3.7 + 11) + seededRand01(h.ev.tWhole * 57.1 + h.n.key * 5.3 + 7) - 1) * 0.06;
+      x = 0.7 * x + r;                                    // 2) 連續起伏
+      let p = x;
+      const prev = seq[i - 1], next = seq[i + 1];
+      const gapPrev = prev ? h.t - prev.t : Infinity, gapNext = next ? next.t - h.t : Infinity;
+      // 3) 越快越輕:兩下間隔 300ms 以下開始,棒子抬的高度隨間隔變短而線性降低(100ms 時最低),起伏也跟著變小
+      const fast = Math.max(0, Math.min(1, (0.3 - gapPrev) / 0.2));
+      p = p * (1 - 0.3 * fast) - 0.1 * fast;
+      if (next && next.acc && !h.acc && gapNext < 0.35) p -= 0.04;              // 4) 重音前預備
+      if (prev && prev.acc && !h.acc && gapPrev < 0.35) p -= 0.03;              //    重音後 downstroke
+      if (h.alternated && h.limb === "L") p -= 0.035;                           // 1) 過門弱手(約 1dB)
+      // 5) 快速單手 hi-hat → 雙手交替,第二隻手稍輕
+      if (DRUM_TIMEKEEPERS.has(h.n.key) && gapPrev < 0.13) { runIdx++; if (runIdx % 2 === 1) p -= 0.03; } else runIdx = 0;
+      if (h.n.key === 46) p += 0.04;                                            // 6) 開放 hi-hat
+      h.n.perf = p;
+    });
+  }
+  // 6) 緊貼 backbeat 的鬼音更輕;7) 樂句最後一小節稍微往前推
+  const backbeats = hits.filter(h => (h.n.key === 38 || h.n.key === 40) && !h.n.ghost).map(h => h.t);
+  for (const h of hits) {
+    if (h.n.ghost && backbeats.some(t => Math.abs(t - h.t) < 0.13)) h.n.perf -= 0.03;
+    if (h.ev.barIdx != null && h.ev.barIdx % 4 === 3) h.n.perf += 0.015;
+  }
 }
 function isGhostDrumNote(n, tWhole){
   const midi = n.Pitch.getHalfTone ? n.Pitch.getHalfTone() + 12 : (n.Pitch.halfTone + 12);
@@ -3107,14 +3175,17 @@ function humanizeDrumHit(ev, n){
     const inBeat = beatF - beatIdx;
     const onBeat = inBeat < 0.02 || inBeat > 0.98;
     const offEighth = Math.abs(inBeat - 0.5) < 0.02;
-    if (DRUM_TIMEKEEPERS.has(key)) s += onBeat ? 0.08 : offEighth ? -0.05 : -0.1;
+    if (DRUM_TIMEKEEPERS.has(key)) s += onBeat ? 0.1 : offEighth ? -0.06 : -0.1;
     else if ((key === 38 || key === 40) && !n.ghost) s += onBeat ? (beatIdx % 2 === 1 ? 0.05 : 0.02) : -0.04;
     else if (key === 35 || key === 36) s += onBeat ? 0.03 : -0.03;
     if (onBeat && beatIdx === 0 && !n.ghost) s += 0.03;
   }
   s += (ev.macro || 0) * (n.ghost ? 0.5 : 1); // 整首歌的力度起伏(段落、記號、過門漸強),鬼音只跟一半
-  s += (drumHitRand(ev, key, 1) + drumHitRand(ev, key, 2) - 1) * 0.08;
-  s = Math.max(0.12, Math.min(1, s));
+  // 演奏細節(肢體、速度、重音前後、連續起伏…)由 computeDrumPerformance() 預先算好放在 n.perf;
+  // 另外留一點完全獨立的小亂數(每一下手感不可能完全一樣)
+  s += (n.perf != null ? n.perf : (drumHitRand(ev, key, 1) + drumHitRand(ev, key, 2) - 1) * 0.08)
+     + (drumHitRand(ev, key, 5) + drumHitRand(ev, key, 6) - 1) * 0.02;
+  s = Math.max(0.08, Math.min(1, s));
   const vel = s < 0.42 ? 3 : s < 0.78 ? 4 : 5;
   // 層內微調:每 0.1 力度約 1.6dB,讓同一層裡的每一下也有大小聲
   const gainMul = Math.pow(10, (s - DRUM_LAYER_STRENGTH[vel]) * 16 / 20);
@@ -3748,6 +3819,7 @@ for (const id of ["cursorColor","cursorOpacity"]) {
   $(id).addEventListener("input", applyHighlightStyles);
 }
 $("reverbAmount").addEventListener("input", applyReverbAmount);
+$("reverbAmount").addEventListener("input", () => { if (drumVerbWet) drumVerbWet.gain.value = drumVerbWetTarget(); });
 $("measureHl").addEventListener("change", applyHighlightStyles);
 $("lightTheme").addEventListener("change", applyTheme);
 $("lightTheme").addEventListener("change", () => {
@@ -4489,6 +4561,7 @@ function startAudioFrom(fromSec){
     return;
   }
   const calib = useCalib();
+  computeDrumPerformance(); // 依目前的速度重算(速度會影響「越快越輕」)
   let errCount = 0, lastErr = null;
   for (const ev of events) {
     const t = posToSec(ev.tWhole, calib);
@@ -5723,28 +5796,76 @@ function pickDrumLayer(name, s){
   return { key: name + ":" + best, list: layers[best], gain: drumVelGain(s) };
 }
 
-/* 鼓組匯流排:所有鼓件先匯到這裡,再「繞過」主輸出的響度壓縮器(loudnessComp),直接進安全網限幅器。
-   主輸出那段響度壓縮(門檻 −18dB、3:1)是為了讓鋼琴聽起來夠大聲而加的,但鼓也經過它的話,
-   真人力度模擬做出來的輕重(段落大小聲、過門漸強、正反拍)會被壓掉三分之二以上,實測 4dB 的力度差
-   到輸出只剩 1dB 左右。鼓改走自己這條:一個溫和的匯流排壓縮(只把最重的幾下收一點)+ 補償增益,
-   整體響度跟原本差不多,力度起伏卻能保留下來。參數由自動量測(響度、峰值、段落對比)挑出來 */
-const DRUM_BUS = { threshold: -6, knee: 10, ratio: 1, attack: 0.01, release: 0.15, makeup: 0.62 }; // ratio 1 = 不壓縮;壓縮任何一點,力度差都會被吃掉(實測見上)
-let drumBus = null;
+/* ── 鼓組混音 ──────────────────────────────────
+   Naked Drums 是在很乾的房間錄的(名字就叫 Naked:給人自己混音的原始素材),實測小鼓 210ms 就衰減到 −30dB,
+   把房間麥克風推大 10dB 也幾乎不變長。所以這裡照錄音室混鼓的做法自己混:
+   1) 乾聲路徑原封不動:力度起伏(真人力度模擬、段落大小聲)全部保留
+   2) 平行壓縮(New York compression):另外複製一份重壓縮的訊號墊在乾聲下面,補鼓的「肉」與延音,
+      因為乾聲沒被壓,大小聲的對比不會被抹平
+   3) 鼓用的 plate 殘響(不是鋼琴那個 2.1 秒的暗色大廳):RT60 約 2.2 秒、明亮、密度高、沒有明顯分離的回音,
+      送出端先濾掉 250Hz 以下(大鼓送進去會糊),預延遲 12ms 讓擊打先清楚出來;主要送小鼓與中鼓,
+      銅鈸送一點點。殘響量跟著設定裡的「殘響」滑桿走
+   4) 匯流排輕微 EQ:350Hz 附近稍微挖一點(悶箱聲),10kHz 以上稍微提亮
+   整條路徑繞過主輸出的響度壓縮器(那是給鋼琴的),只有主限幅器當安全網。
+   參數由自動量測挑出來:小鼓餘韻長度、殘響/直接音比、立體聲寬度、力度傳遞、響度與峰值 */
+const DRUM_BUS = {
+  makeup: 0.62,
+  parallel: 0.35, compThreshold: -32, compRatio: 8, compAttack: 0.003, compRelease: 0.12,
+  verb: 3.5, verbSeconds: 2.6, verbRT60: 2.2, verbPreDelay: 0.012, verbHighpass: 250,
+  eqBoxFreq: 350, eqBoxGain: -1.5, eqAirGain: 1.5
+};
+let drumBus = null, drumVerbIn = null, drumVerbWet = null;
+function buildDrumPlateIR(seconds, rt60){
+  const rate = audioCtx.sampleRate, len = Math.max(1, Math.floor(rate * seconds));
+  const ir = audioCtx.createBuffer(2, len, rate);
+  // 自己的固定種子亂數(mulberry32):每次產生的殘響完全一樣,左右聲道用不同種子才有立體寬度
+  const rand = seed => () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+  for (let ch = 0; ch < 2; ch++) {
+    const d = ir.getChannelData(ch);
+    const rnd = rand(ch ? 90210 : 12345);
+    let lp = 0;
+    for (let i = 0; i < len; i++) {
+      const tSec = i / rate;
+      const env = Math.pow(10, -3 * tSec / rt60);                 // 指數衰減,rt60 秒衰減 60dB
+      const a = 0.78 - 0.5 * Math.min(1, tSec / seconds);         // 越後面高頻吸收越多,但整體比鋼琴大廳亮
+      lp += a * ((rnd() * 2 - 1) - lp);
+      // 起頭 6ms 淡入:plate 沒有明顯的直達反射,密度一開始就很高
+      d[i] = lp * env * Math.min(1, tSec / 0.006);
+    }
+  }
+  return ir;
+}
 function getDrumBus(){
   if (drumBus && drumBus.context === audioCtx) return drumBus;
-  const comp = audioCtx.createDynamicsCompressor();
-  comp.threshold.value = DRUM_BUS.threshold;
-  comp.knee.value = DRUM_BUS.knee;
-  comp.ratio.value = DRUM_BUS.ratio;
-  comp.attack.value = DRUM_BUS.attack;
-  comp.release.value = DRUM_BUS.release;
-  const makeup = audioCtx.createGain();
-  makeup.gain.value = DRUM_BUS.makeup;
-  comp.connect(makeup);
-  makeup.connect(masterLimiter || masterGain);
-  drumBus = comp;
+  const B = DRUM_BUS;
+  const input = audioCtx.createGain();
+  const out = audioCtx.createGain(); out.gain.value = B.makeup;
+  // 匯流排 EQ
+  const box = audioCtx.createBiquadFilter(); box.type = "peaking"; box.frequency.value = B.eqBoxFreq; box.Q.value = 1.0; box.gain.value = B.eqBoxGain;
+  const air = audioCtx.createBiquadFilter(); air.type = "highshelf"; air.frequency.value = 10000; air.gain.value = B.eqAirGain;
+  out.connect(box); box.connect(air); air.connect(masterLimiter || masterGain);
+  // 1) 乾聲
+  input.connect(out);
+  // 2) 平行壓縮
+  if (B.parallel > 0) {
+    const comp = audioCtx.createDynamicsCompressor();
+    comp.threshold.value = B.compThreshold; comp.knee.value = 6; comp.ratio.value = B.compRatio;
+    comp.attack.value = B.compAttack; comp.release.value = B.compRelease;
+    const pm = audioCtx.createGain(); pm.gain.value = B.parallel;
+    input.connect(comp); comp.connect(pm); pm.connect(out);
+  }
+  // 3) plate 殘響
+  drumVerbIn = audioCtx.createGain();
+  const hp = audioCtx.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = B.verbHighpass;
+  const pre = audioCtx.createDelay(0.1); pre.delayTime.value = B.verbPreDelay;
+  const conv = audioCtx.createConvolver(); conv.buffer = buildDrumPlateIR(B.verbSeconds, B.verbRT60);
+  drumVerbWet = audioCtx.createGain(); drumVerbWet.gain.value = drumVerbWetTarget();
+  drumVerbIn.connect(hp); hp.connect(pre); pre.connect(conv); conv.connect(drumVerbWet); drumVerbWet.connect(out);
+  drumBus = input;
   return drumBus;
 }
+// 殘響量跟著設定裡的「殘響」滑桿(預設 30)走:滑桿 30 = DRUM_BUS.verb
+function drumVerbWetTarget(){ return DRUM_BUS.verb * reverbAmount() / 0.3; }
 
 /* sustainSec:銅鈸/開放 hi-hat 的真實錄音自然延音長達 5~8 秒,快速段落直接整段播會糊成一片,
    要主動包一個振幅包絡收尾;鼓皮類不傳,讓它自然結束。
@@ -5776,10 +5897,10 @@ function playSample(name, when, gain, rate, sustainSec, strength, pan, send){
     g.connect(p); out = p;
   }
   out.connect(getDrumBus());
-  if (send && reverbBus) {
+  if (send && drumVerbIn) {
     const sg = audioCtx.createGain();
     sg.gain.value = send;
-    out.connect(sg); sg.connect(reverbBus);
+    out.connect(sg); sg.connect(drumVerbIn);
   }
   src.start(when);
   if (sustainSec) src.stop(when + sustainSec + 0.1);
@@ -5847,26 +5968,26 @@ function synthCymbal(when, decay, hpFreq, gain, noiseMix){
    因為取樣本身就有同一個房間的房間麥克風。DRSKit 有三顆鼓(一顆中鼓、兩顆落地鼓),記譜常用的
    高音鼓(48)→ Tom1、中音鼓(47)→ Tom2、落地鼓(43)→ Tom3 都是原音,其餘 GM 音高才微幅變調 */
 const DRUM_VOICES = {
-  kick:      { piece: "kick",     gain: 1.0,  send: 0.03, synth: (w, V) => synthKick(w) },
-  snare:     { piece: "snare",    gain: 1.0,  send: 0.03, synth: (w, V) => synthSnare(w, 0.95 * V) },
-  snare2:    { piece: "snare2",   gain: 1.0,  send: 0.03, synth: (w, V) => synthSnare(w, 0.95 * V) },
-  xstick:    { piece: "xstick",   gain: 0.905,  send: 0.03, synth: (w, V) => synthRimClick(w, 0.7 * V) },
-  clap:      { piece: "snare",    gain: 0.8,  send: 0.03, synth: (w, V) => synthSnare(w, 0.8 * V) },
-  hhClosed:  { piece: "hhClosed", gain: 0.353, send: 0.03, synth: (w, V) => synthCymbal(w, 0.06, 8000, 0.25 * V, 0.25), choke: true },
-  hhPedal:   { piece: "hhPedal",  gain: 0.404, send: 0.03, synth: (w, V) => synthCymbal(w, 0.05, 8000, 0.16 * V, 0.2), choke: true },
-  hhOpen:    { piece: "hhOpen",   gain: 0.336, send: 0.03, sustain: 1.2, synth: (w, V) => synthCymbal(w, 0.45, 7000, 0.28 * V, 0.4), openHat: true },
-  tomHigh:   { piece: "tom1",     gain: 1.168,  rate: 1.05, send: 0.03, synth: (w, V) => synthTom(w, 190) },
-  tom1:      { piece: "tom1",     gain: 1.168,  send: 0.03, synth: (w, V) => synthTom(w, 175) },
-  tom2:      { piece: "tom2",     gain: 1.173,  send: 0.03, synth: (w, V) => synthTom(w, 150) },
-  tom3:      { piece: "tom3",     gain: 0.998,  send: 0.03, synth: (w, V) => synthTom(w, 130) },
-  tom4:      { piece: "tom4",     gain: 1.059,  send: 0.03, synth: (w, V) => synthTom(w, 100) },
-  tom5:      { piece: "tom5",     gain: 1.147,  send: 0.03, synth: (w, V) => synthTom(w, 85) },
-  crash1:    { piece: "crashL",   gain: 0.356,  send: 0.03, sustain: 2.8, synth: (w, V) => synthCymbal(w, 1.6, 5500, 0.4 * V, 0.45) },
-  crash2:    { piece: "crashR",   gain: 0.324,  send: 0.03, sustain: 2.8, synth: (w, V) => synthCymbal(w, 1.6, 5500, 0.4 * V, 0.45) },
-  splash:    { piece: "splash",   gain: 0.444,  send: 0.03, sustain: 1.6, synth: (w, V) => synthCymbal(w, 0.9, 6500, 0.35 * V, 0.45) },
-  china:     { piece: "china",    gain: 0.34,  send: 0.03, sustain: 2.4, synth: (w, V) => synthCymbal(w, 1.4, 4500, 0.4 * V, 0.5) },
-  ride:      { piece: "ride",     gain: 0.799, send: 0.03, sustain: 2.4, synth: (w, V) => synthCymbal(w, 1.3, 8500, 0.22 * V, 0.55) },
-  rideBell:  { piece: "rideBell", gain: 0.439,  send: 0.03, sustain: 2.2, synth: (w, V) => synthCymbal(w, 0.6, 11000, 0.32 * V, 0.12) }
+  kick:      { piece: "kick",     gain: 1.584,  send: 0.08, synth: (w, V) => synthKick(w) },
+  snare:     { piece: "snare",    gain: 1.0,  send: 0.35, synth: (w, V) => synthSnare(w, 0.95 * V) },
+  snare2:    { piece: "snare2",   gain: 1.0,  send: 0.35, synth: (w, V) => synthSnare(w, 0.95 * V) },
+  xstick:    { piece: "xstick",   gain: 0.832,  send: 0.3, synth: (w, V) => synthRimClick(w, 0.7 * V) },
+  clap:      { piece: "snare",    gain: 0.8,  send: 0.35, synth: (w, V) => synthSnare(w, 0.8 * V) },
+  hhClosed:  { piece: "hhClosed", gain: 0.27, send: 0.06, synth: (w, V) => synthCymbal(w, 0.06, 8000, 0.25 * V, 0.25), choke: true },
+  hhPedal:   { piece: "hhPedal",  gain: 0.355, send: 0.05, synth: (w, V) => synthCymbal(w, 0.05, 8000, 0.16 * V, 0.2), choke: true },
+  hhOpen:    { piece: "hhOpen",   gain: 0.26, send: 0.08, sustain: 1.2, synth: (w, V) => synthCymbal(w, 0.45, 7000, 0.28 * V, 0.4), openHat: true },
+  tomHigh:   { piece: "tom1",     gain: 1.117,  rate: 1.05, send: 0.3, synth: (w, V) => synthTom(w, 190) },
+  tom1:      { piece: "tom1",     gain: 1.117,  send: 0.3, synth: (w, V) => synthTom(w, 175) },
+  tom2:      { piece: "tom2",     gain: 1.306,  send: 0.3, synth: (w, V) => synthTom(w, 150) },
+  tom3:      { piece: "tom3",     gain: 1.233,  send: 0.3, synth: (w, V) => synthTom(w, 130) },
+  tom4:      { piece: "tom4",     gain: 1.174,  send: 0.3, synth: (w, V) => synthTom(w, 100) },
+  tom5:      { piece: "tom5",     gain: 1.057,  send: 0.3, synth: (w, V) => synthTom(w, 85) },
+  crash1:    { piece: "crashL",   gain: 0.26,  send: 0.1, sustain: 2.8, synth: (w, V) => synthCymbal(w, 1.6, 5500, 0.4 * V, 0.45) },
+  crash2:    { piece: "crashR",   gain: 0.255,  send: 0.1, sustain: 2.8, synth: (w, V) => synthCymbal(w, 1.6, 5500, 0.4 * V, 0.45) },
+  splash:    { piece: "splash",   gain: 0.401,  send: 0.1, sustain: 1.6, synth: (w, V) => synthCymbal(w, 0.9, 6500, 0.35 * V, 0.45) },
+  china:     { piece: "china",    gain: 0.274,  send: 0.1, sustain: 2.4, synth: (w, V) => synthCymbal(w, 1.4, 4500, 0.4 * V, 0.5) },
+  ride:      { piece: "ride",     gain: 0.425, send: 0.08, sustain: 2.4, synth: (w, V) => synthCymbal(w, 1.3, 8500, 0.22 * V, 0.55) },
+  rideBell:  { piece: "rideBell", gain: 0.361,  send: 0.08, sustain: 2.2, synth: (w, V) => synthCymbal(w, 0.6, 11000, 0.32 * V, 0.12) }
 };
 /* GM 鼓號 → 鼓件。五顆鼓照 Naked Drums 原廠鍵位:48 Tom1(10")、47 Tom2(12")、45 Tom3(13")、43 Tom4(14")、41 Tom5(16"),
    記譜常用的高音鼓/中音鼓/落地鼓都是原音;50(最高的中鼓)才用 Tom1 微幅升調 */
@@ -6820,6 +6941,7 @@ async function exportVideo(cfg){
     rec.start(3000); // 每3秒分段一次:避免資料完全不釋放而累積過多記憶體,又不會像每秒切一次那麼頻繁
 
     const calib = useCalib();
+    computeDrumPerformance();
     // 匯出區間(手動輸入的開始/結束時間);沒指定就是整首曲子,跟以前行為一樣
     const rangeStart = cfg.startSec != null ? Math.max(0, cfg.startSec) : 0;
     const rangeEnd = cfg.endSec != null ? Math.min(totalSec(), cfg.endSec) : totalSec();
