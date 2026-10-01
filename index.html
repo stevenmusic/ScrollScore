@@ -4793,7 +4793,7 @@ const instrumentLoading = {};   // instKey -> Promise
 const INSTRUMENT_I18N_KEY = { piano: "instPiano", guitar: "instGuitar", guitarnylon: "instGuitarNylon", drum: "instDrum" };
 function loadInstrumentSamples(instKey){
   if (instKey === "piano" && !pianoFallback) return loadPianoSamples();   // 16 層力度的鋼琴;讀不到才退回下面的 Tone.js 版本
-  if (isGuitarSampled(instKey)) return loadGuitarSamples(instKey);   // 鋼弦 Ella Gitauru / 尼龍弦 MF Concert Guitar;讀不到才退回下面的 Tone.js 版本
+  if (isGuitarSampled(instKey)) return loadGuitarSamples(instKey);   // 鋼弦 FSS / 尼龍弦;讀不到才退回下面的 Tone.js 版本
   const cfg = REAL_INSTRUMENTS[instKey];
   if (!cfg) return Promise.resolve();
   if (instrumentBuffers[instKey] || instrumentLoading[instKey]) return instrumentLoading[instKey] || Promise.resolve();
@@ -5287,14 +5287,9 @@ function pianoSchedulePedalNoise(fromSec, toSec, timeToCtx){
 }
 function pianoRanges(){ return pedalRanges || []; }
 
-/* ── 民謠吉他(鋼弦):Ella Gitauru 5(Malaclypse the Younger,BJAM 5.25.06,MIT 授權)──────────────
-   Fender DG8S + Elixir 80/20 弦,6E/5A/4D/2B 四條空弦 × mp/mf/f/ff 四層力度(2B 另有第二組錄音當輪替,
-   B5 有一組短取樣給第 1 弦最高把位)。原檔是 16kHz 單聲道(原作者就是這樣,8kHz 以上沒有聲音)。
-   原廠「每 2 格一個取樣」的檔案其實是空弦錄音加濾波複製的,所以只收真錄音,把位的音色改在這裡用濾波器做
-   (gtrFretTone,參數是量原廠複製檔相對空弦的頻率響應擬合的);第 3 弦借第 4 弦、第 1 弦借第 2 弦的錄音(原廠也是)。
-   取樣在 guitar/steel/(guitar/build/steel_build.py 產生:逐檔音準校正到 0 音分、頻譜降噪、前 0.5 秒 K 加權響度
-   對齊 -18 LKFS,大小聲交給力度曲線)。弦/把位由 computeGuitarStringRinging() 決定(n.gstr),
-   力度與刷弦時間差由 computeGuitarDynamics() 算(n.gvel / n.gdt) */
+/* ── 民謠吉他(鋼弦):FSS Steel-String Acoustic Guitar(FreePats,FlameStudios 的 FS Seagull 取樣,GPL + 音色例外)──
+   E2~C6 每個半音都有錄音(重彈 42 個、中彈 17 個),44.1kHz。原本用的 Ella Gitauru 真正的錄音只有 5 個音高,其他音都要升調,
+   使用者聽了覺得很不自然,換掉。guitar/build/fss_build.py:逐檔音準校正、降噪、音色連續性修正(原錄音 B3 以上亮很多)、響度對齊 */
 /* ── 古典吉他(尼龍弦):MF Concert Guitar(Markus Fiedler,CC-BY-NC-SA 3.0,另允許用於商業音樂製作)──────
    E2 A2 D3 G3 B3 E4 A4 D5 八個音 × pp/p/f/ff × 2~4 次輪替 + 放音聲(手指離弦),44kHz,播放時取最近的音(最多升降 2.5 個半音)。
    Kontakt monolith 裡的 NCW 用 guitar/build/nylon_build.py 解出來,逐檔音準校正、降噪、響度對齊(同鋼弦),放在 guitar/nylon/ */
@@ -5304,7 +5299,6 @@ const GTR_INSTS = {
 };
 for (const G of Object.values(GTR_INSTS)) Object.assign(G, { man: null, base: null, loading: null, fallback: false, buf: {} });
 const GTR_VERB_SEND = 0.45;
-const GTR_STRING_SAMPLE = ["6E", "5A", "4D", "4D", "2B", "2B"];   // 鋼弦:第 6 弦 → 第 1 弦用哪條弦的錄音
 let gtrRR = {};          // 輪替計數(每次從頭播放時重設,同一首每次聽起來都一樣)
 function isGuitarSampled(inst){ const G = GTR_INSTS[inst]; return !!(G && !G.fallback); }
 function gtrLayerFor(G, vel){
@@ -5325,7 +5319,7 @@ function loadGuitarSamples(inst){
     if (!G.man) { G.fallback = true; return loadInstrumentSamples(inst); }
     // 先載第 2 層(每個音一個,馬上可以播),再補其他層與放音聲
     const first = n => { const i = G.man.samples[n]; return i ? (i.L === 2 && (i.rr || 1) === 1 ? 0 : 1) : 2; };
-    const names = [...Object.keys(G.man.samples), ...Object.keys(G.man.off || {}), ...Object.keys(G.man.mute || {}), ...Object.keys(G.man.harm || {}), ...Object.keys(G.man.fret || {})].sort((a, b) => first(a) - first(b));
+    const names = [...Object.keys(G.man.samples), ...Object.keys(G.man.off || {}), ...Object.keys(G.man.fret || {})].sort((a, b) => first(a) - first(b));
     setStatus(T("statusLoadingInstrument", { inst: T(G.i18n) }));
     await runLimited(names.map(name => async () => {
       try {
@@ -5348,50 +5342,15 @@ function gtrLayerOrder(L){
   for (let d = 0; d < 4; d++) for (const l of d ? [L - d, L + d] : [L]) if (l >= 1 && l <= 4) want.push(l);
   return want;
 }
-/* 鋼弦:依弦挑錄音(第 2 弦有兩組錄音輪流用) */
-function gtrSteelSample(G, root, L, m){
-  for (const l of gtrLayerOrder(L)) {
-    const base = "st-" + root + "-L" + l;
-    if (root === "2B" && G.buf[base + "-2"]) {
-      const k = gtrRR[m] = (gtrRR[m] || 0) + 1;
-      if (k % 2 === 0) return base + "-2";
-    }
-    if (G.buf[base]) return base;
-  }
-  return null;
-}
-/* 鋼弦的悶音/泛音真錄音:
-   - 悶音:每條弦輕悶(L)、重悶(H),音高是空弦;很大聲或斷奏用重悶。第 1 弦借第 2 弦(原廠也是)
-   - 泛音:每條弦 12 格(空弦 +12)、5 格(空弦 +24)的自然泛音,取音高最近的;這條弦沒有就找有的弦裡最近的 */
-const GTR_STRING_NAME = ["6E", "5A", "4D", "3G", "2B", "1E"];
-function gtrSteelTechSample(G, s, tm, tech, vel, artic){
-  if (tech.pizzicato && G.man.mute) {
-    const heavy = vel >= 100 || (artic && (artic.staccato || artic.staccatissimo));
-    for (const st of s === 5 ? ["2B"] : [GTR_STRING_NAME[s]]) for (const k of heavy ? ["H", "L"] : ["L", "H"]) {
-      const n = "st-" + st + "-mute" + k;
-      if (G.buf[n]) return n;
-    }
-  }
-  if (tech.harmonic && G.man.harm) {
-    let best = null, bd = 1e9;
-    for (const [n, i] of Object.entries(G.man.harm)) {
-      if (!G.buf[n]) continue;
-      const d = Math.abs(i.root - tm) + (i.string === GTR_STRING_NAME[s] ? 0 : 3);   // 同一條弦優先
-      if (d < bd) { bd = d; best = n; }
-    }
-    if (best && bd <= 7) return best;
-  }
-  return null;
-}
-/* 尼龍弦:最近的取樣音(一樣近時取低的那個往上升,升調比降調自然),同一個(音 × 層)的輪替依序輪流 */
-let gtrNylonRoots = null;
-function gtrNylonSample(G, m, L){
-  if (!gtrNylonRoots || gtrNylonRoots.man !== G.man) {
+/* 最近的取樣音(一樣近時取低的那個往上升,升調比降調自然),同一個(音 × 層)的輪替依序輪流 */
+let gtrNearestRoots = null;
+function gtrNearestSample(G, m, L){
+  if (!gtrNearestRoots || gtrNearestRoots.man !== G.man) {
     const roots = {};
     for (const [n, i] of Object.entries(G.man.samples)) ((roots[i.root] = roots[i.root] || {})[i.L] = roots[i.root][i.L] || []).push(n);
-    gtrNylonRoots = { man: G.man, roots, keys: Object.keys(roots).map(Number).sort((a, b) => a - b) };
+    gtrNearestRoots = { man: G.man, roots, keys: Object.keys(roots).map(Number).sort((a, b) => a - b) };
   }
-  const R = gtrNylonRoots;
+  const R = gtrNearestRoots;
   const byDist = R.keys.slice().sort((a, b) => Math.abs(a - m) - Math.abs(b - m) || a - b);
   for (const root of byDist.slice(0, 2)) for (const l of gtrLayerOrder(L)) {
     const list = (R.roots[root][l] || []).filter(n => G.buf[n]);
@@ -5401,31 +5360,23 @@ function gtrNylonSample(G, m, L){
   }
   return null;
 }
-/* 把位音色:越高把位(弦越短)低頻稍厚、高頻越暗。量原廠複製檔相對空弦的頻率響應:
-   每格約 +0.27dB(300Hz 以下)、-0.5dB(2kHz 以上),頻率跟著取樣一起被升調,所以乘上 rate */
-function gtrFretTone(fret, rate, vel, velDb){
-  const lo = audioCtx.createBiquadFilter(); lo.type = "lowshelf"; lo.frequency.value = 300 * rate; lo.gain.value = 0.27 * fret;
+/* 力度 → 明暗:高頻架 ±velDb(2.2kHz × rate) */
+function gtrVelTone(rate, vel, velDb){
   const hi = audioCtx.createBiquadFilter(); hi.type = "highshelf"; hi.frequency.value = Math.min(16000, 2200 * rate);
-  // 力度 → 明暗:原廠高音弦四層錄音的音色幾乎一樣,用 ±6dB 的高頻架補回「彈得越用力越亮」
-  hi.gain.value = -0.5 * fret + (vel - 100) / 127 * velDb;
-  lo.connect(hi);
-  return { input: lo, output: hi };
+  hi.gain.value = (vel - 100) / 127 * velDb;
+  return { input: hi, output: hi };
 }
 function playGuitarNote(inst, freq, when, dur, ringEndSec, artic, tech, vel, gn){
   const G = GTR_INSTS[inst];
   if (!G || !G.man) return false;
-  const nylon = G.man.mode === "nearest";
+  const nylon = inst === "guitarnylon";
   const tm = freqToMidi(freq), m = Math.round(tm);
   if (vel == null) vel = 75;
   const s = gn && gn.gstr != null ? gn.gstr : gtrPickString(m);
   const fret = Math.max(0, m - GUITAR_OPEN_STRINGS[s]);
-  const L = gtrLayerFor(G, vel);
-  // 鋼弦的悶音/泛音用原廠真錄音(gtrSteelTechSample),沒有才退回一般取樣 + 濾波
-  const techName = !nylon && tech && (tech.pizzicato || tech.harmonic) ? gtrSteelTechSample(G, s, tm, tech, vel, artic) : null;
-  const name = techName || (nylon ? gtrNylonSample(G, m, L)
-    : gtrSteelSample(G, (s === 5 && fret >= 20) ? "B5" : GTR_STRING_SAMPLE[s], L, m));   // 第 1 弦 20 格以上:升太多會像玩具,改用 B5 的錄音
+  const name = gtrNearestSample(G, m, gtrLayerFor(G, vel));
   if (!name) return false;
-  const info = G.man.samples[name] || (G.man.mute || {})[name] || (G.man.harm || {})[name], buf = G.buf[name];
+  const info = G.man.samples[name], buf = G.buf[name];
   const detune = gn && gn.gseed != null ? (gn.gseed - 0.5) * 3 : 0;      // ±1.5 音分,同一個音重彈不會一模一樣
   const rate = Math.pow(2, (tm - info.root + detune / 100) / 12);
   let gain = G.gain * gtrVelGain(G, vel);
@@ -5450,12 +5401,11 @@ function playGuitarNote(inst, freq, when, dur, ringEndSec, artic, tech, vel, gn)
   const g = audioCtx.createGain();
   let vTone = vel, attack = 0;
   if (tech && tech.hammerPull) { gain *= 0.75; vTone -= 20; attack = 0.012; }   // 搥/勾弦:不是重新撥弦,起音軟、較暗
-  if (tech && tech.harmonic) { gain *= techName ? 0.8 : 0.7; attack = techName ? 0 : 0.008; }
-  if (techName && tech.pizzicato) gain *= 0.7;                                     // 悶音比一般撥弦小聲約 3dB
-  // 尼龍弦每個音高都是真錄音,不加把位濾波;力度明暗 ±4dB(四層錄音本來就有音色差,只補不一致的地方)
-  const tone = gtrFretTone(nylon || techName ? 0 : fret, rate, vTone, nylon ? 4 : 6);
+  if (tech && tech.harmonic) { gain *= 0.7; attack = 0.008; }
+  // 力度明暗:鋼弦只有中/重兩層,補 ±6dB;尼龍弦四層錄音本來就有音色差,±4dB
+  const tone = gtrVelTone(rate, vTone, nylon ? 4 : 6);
   let head = src;
-  if (!techName && tech && (tech.harmonic || tech.pizzicato)) {
+  if (tech && (tech.harmonic || tech.pizzicato)) {
     const lp = audioCtx.createBiquadFilter(); lp.type = "lowpass";
     lp.frequency.value = tech.harmonic ? Math.min(freq * 3, 6000) : Math.max(700, Math.min(freq * 3, 2000));
     src.connect(lp); head = lp;
@@ -5463,7 +5413,7 @@ function playGuitarNote(inst, freq, when, dur, ringEndSec, artic, tech, vel, gn)
   head.connect(tone.input); tone.output.connect(g);
   if (attack) { g.gain.setValueAtTime(0, when); g.gain.linearRampToValueAtTime(gain, when + attack); }
   else g.gain.setValueAtTime(gain, when);
-  if (!techName && tech && tech.pizzicato) g.gain.setTargetAtTime(0, when + 0.03, 0.16);   // 悶音(沒有真錄音時):手掌壓住弦,很快就停
+  if (tech && tech.pizzicato) g.gain.setTargetAtTime(0, when + 0.03, 0.16);   // 悶音:手掌壓住弦,很快就停
   if (releaseAt < end) g.gain.setTargetAtTime(0, releaseAt, relTau);
   if (tech && tech.glissTargetFreq) src.playbackRate.linearRampToValueAtTime(rate * (tech.glissTargetFreq / freq), when + Math.max(dur * 0.85, 0.05));
   if (tech && tech.bendAlter) {
@@ -5510,15 +5460,15 @@ function playGuitarNote(inst, freq, when, dur, ringEndSec, artic, tech, vel, gn)
 /* 吉他專用 EQ(→ masterGain → loudnessComp → 限幅器,跟鋼琴同一條總輸出),兩把各自一組:
    鋼弦(guitar)
    - 75Hz 高通:琴身低頻轟聲,跟鋼琴/鼓疊在一起會糊
-   - 220Hz -2dB:箱子聲(Ella 的低音弦頻譜重心只有 300~450Hz,偏悶)
-   - 2.8kHz -1.5dB:手機喇叭共振峰(同鋼琴的理由);高把位的音是第 2 弦錄音升調上去的,2~5kHz 本來就偏多
-   - 5kHz 高頻架 +2dB:鋼弦的亮度
+   - 220Hz -2dB:箱子聲
+   - 2.8kHz -1.5dB:手機喇叭共振峰(同鋼琴的理由)
+   - 不加高頻:FSS 本身就亮(巴哈 BWV846 的 10kHz 以上只比 500~2k 低 12dB)
    尼龍弦(guitarnylon):MF 的麥克風離音孔近,A2 的基音比第 2 諧波大 19dB,巴哈 BWV846 的 200Hz 以下
    比鋼弦多 23dB、比鋼琴多 14dB,聽起來轟
    - 70Hz 高通、130Hz -4dB(寬):收音孔的轟聲
    - 3.5kHz 高頻架 +2dB:指甲撥弦的清晰度(原錄音 2~5kHz 比鋼弦少約 9dB);尼龍弦本來就軟,不做 2.8kHz 下凹 */
 const GTR_EQ = {
-  guitar:      { hp: 75, lowFreq: 220, lowGain: -2, lowQ: 1.0, midFreq: 2800, midGain: -1.5, midQ: 0.9, airFreq: 5000, airGain: 2 },
+  guitar:      { hp: 75, lowFreq: 220, lowGain: -2, lowQ: 1.0, midFreq: 2800, midGain: -1.5, midQ: 0.9, airFreq: 5000, airGain: 0 },
   guitarnylon: { hp: 70, lowFreq: 130, lowGain: -4, lowQ: 0.7, midFreq: 2800, midGain: 0, midQ: 0.9, airFreq: 3500, airGain: 2 }
 };
 const gtrBus = {};

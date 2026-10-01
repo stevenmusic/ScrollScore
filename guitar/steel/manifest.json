@@ -1,366 +1,667 @@
 {
- "source": "Ella Gitauru 5 (Malaclypse the Younger, BJAM 5.25.06), MIT License",
- "sr": 32000,
- "excite": true,
+ "source": "FSS Steel-String Acoustic Guitar (FreePats 2020-05-21, samples by Gary Campion / FlameStudios), GPL-3.0-or-later with the FreePats sound exception",
+ "mode": "nearest",
+ "sr": 48000,
  "velRanges": [
   [
    1,
-   48
+   85
   ],
   [
-   49,
-   91
-  ],
-  [
-   92,
-   119
-  ],
-  [
-   120,
+   86,
    127
   ]
  ],
  "ampVeltrack": 98,
  "samples": {
-  "st-6E-L1": {
+  "fs-E2-L2": {
    "root": 40,
-   "string": "6E",
-   "L": 1,
-   "rr": 1,
-   "frames": 433920,
-   "tuneFix": -4.5,
-   "peak": -8.2
-  },
-  "st-6E-L2": {
-   "root": 40,
-   "string": "6E",
    "L": 2,
    "rr": 1,
-   "frames": 569082,
-   "tuneFix": -4.5,
-   "peak": -7.6
+   "frames": 698880,
+   "tuneFix": -8.5,
+   "tone": [
+    1.8,
+    2.9
+   ]
   },
-  "st-6E-L3": {
-   "root": 40,
-   "string": "6E",
-   "L": 3,
-   "rr": 1,
-   "frames": 432640,
-   "tuneFix": -4.5,
-   "peak": -6.4
-  },
-  "st-6E-L4": {
-   "root": 40,
-   "string": "6E",
-   "L": 4,
-   "rr": 1,
-   "frames": 428800,
-   "tuneFix": -4.5,
-   "peak": -6.2
-  },
-  "st-5A-L1": {
-   "root": 45,
-   "string": "5A",
-   "L": 1,
-   "rr": 1,
-   "frames": 478080,
-   "tuneFix": -8.8,
-   "peak": -6.4
-  },
-  "st-5A-L2": {
-   "root": 45,
-   "string": "5A",
+  "fs-F2-L2": {
+   "root": 41,
    "L": 2,
    "rr": 1,
-   "frames": 478080,
-   "tuneFix": -8.8,
-   "peak": -5.2
+   "frames": 431040,
+   "tuneFix": -7.5,
+   "tone": [
+    1.4,
+    0.6
+   ]
   },
-  "st-5A-L3": {
-   "root": 45,
-   "string": "5A",
-   "L": 3,
-   "rr": 1,
-   "frames": 478080,
-   "tuneFix": -8.7,
-   "peak": -4.4
-  },
-  "st-5A-L4": {
-   "root": 45,
-   "string": "5A",
-   "L": 4,
-   "rr": 1,
-   "frames": 478080,
-   "tuneFix": -8.6,
-   "peak": -4.3
-  },
-  "st-4D-L1": {
-   "root": 50,
-   "string": "4D",
-   "L": 1,
-   "rr": 1,
-   "frames": 485760,
-   "tuneFix": -1.4,
-   "peak": -6.5
-  },
-  "st-4D-L2": {
-   "root": 50,
-   "string": "4D",
+  "fs-Fs2-L2": {
+   "root": 42,
    "L": 2,
    "rr": 1,
-   "frames": 482560,
-   "tuneFix": -1.4,
-   "peak": -5.7
+   "frames": 288960,
+   "tuneFix": -27.9,
+   "tone": [
+    2.1,
+    -1.0
+   ]
   },
-  "st-4D-L3": {
-   "root": 50,
-   "string": "4D",
-   "L": 3,
-   "rr": 1,
-   "frames": 482560,
-   "tuneFix": -1.3,
-   "peak": -4.6
-  },
-  "st-4D-L4": {
-   "root": 50,
-   "string": "4D",
-   "L": 4,
-   "rr": 1,
-   "frames": 528000,
-   "tuneFix": -1.1,
-   "peak": -3.8
-  },
-  "st-2B-L1": {
-   "root": 59,
-   "string": "2B",
-   "L": 1,
-   "rr": 1,
-   "frames": 329600,
-   "tuneFix": -1.7,
-   "peak": -7.6
-  },
-  "st-2B-L1-2": {
-   "root": 59,
-   "string": "2B",
-   "L": 1,
-   "rr": 2,
-   "frames": 296960,
-   "tuneFix": -1.3,
-   "peak": -6.4
-  },
-  "st-2B-L2": {
-   "root": 59,
-   "string": "2B",
+  "fs-G2-L2": {
+   "root": 43,
    "L": 2,
    "rr": 1,
-   "frames": 331520,
-   "tuneFix": -1.7,
-   "peak": -6.5
+   "frames": 242880,
+   "tuneFix": 0.9,
+   "tone": [
+    0.5,
+    -1.4
+   ]
   },
-  "st-2B-L2-2": {
-   "root": 59,
-   "string": "2B",
-   "L": 2,
-   "rr": 2,
-   "frames": 296960,
-   "tuneFix": -1.3,
-   "peak": -5.7
-  },
-  "st-2B-L3": {
-   "root": 59,
-   "string": "2B",
-   "L": 3,
-   "rr": 1,
-   "frames": 329600,
-   "tuneFix": -1.7,
-   "peak": -5.8
-  },
-  "st-2B-L3-2": {
-   "root": 59,
-   "string": "2B",
-   "L": 3,
-   "rr": 2,
-   "frames": 289280,
-   "tuneFix": -1.3,
-   "peak": -4.6
-  },
-  "st-2B-L4": {
-   "root": 59,
-   "string": "2B",
-   "L": 4,
-   "rr": 1,
-   "frames": 329600,
-   "tuneFix": -1.5,
-   "peak": -5.0
-  },
-  "st-2B-L4-2": {
-   "root": 59,
-   "string": "2B",
-   "L": 4,
-   "rr": 2,
-   "frames": 289280,
-   "tuneFix": -1.2,
-   "peak": -4.1
-  },
-  "st-B5-L1": {
-   "root": 83,
-   "string": "B5",
-   "L": 1,
-   "rr": 1,
-   "frames": 83840,
-   "tuneFix": 1.7,
-   "peak": -6.9
-  },
-  "st-B5-L2": {
-   "root": 83,
-   "string": "B5",
+  "fs-Gs2-L2": {
+   "root": 44,
    "L": 2,
    "rr": 1,
-   "frames": 83840,
-   "tuneFix": 1.7,
-   "peak": -6.3
+   "frames": 209280,
+   "tuneFix": -11.9,
+   "tone": [
+    1.1,
+    -3.1
+   ]
   },
-  "st-B5-L3": {
-   "root": 83,
-   "string": "B5",
-   "L": 3,
-   "rr": 1,
-   "frames": 83840,
-   "tuneFix": 1.7,
-   "peak": -5.3
-  },
-  "st-B5-L4": {
-   "root": 83,
-   "string": "B5",
-   "L": 4,
-   "rr": 1,
-   "frames": 83840,
-   "tuneFix": 1.7,
-   "peak": -3.8
-  }
- },
- "mute": {
-  "st-6E-muteL": {
-   "root": 40,
-   "string": "6E",
-   "kind": "L",
-   "frames": 115200
-  },
-  "st-6E-muteH": {
-   "root": 40,
-   "string": "6E",
-   "kind": "H",
-   "frames": 116016
-  },
-  "st-5A-muteL": {
+  "fs-A2-L2": {
    "root": 45,
-   "string": "5A",
-   "kind": "L",
-   "frames": 118400
+   "L": 2,
+   "rr": 1,
+   "frames": 313920,
+   "tuneFix": -4.2,
+   "tone": [
+    1.7,
+    0.5
+   ]
   },
-  "st-5A-muteH": {
-   "root": 45,
-   "string": "5A",
-   "kind": "H",
-   "frames": 118017
+  "fs-As2-L2": {
+   "root": 46,
+   "L": 2,
+   "rr": 1,
+   "frames": 521280,
+   "tuneFix": -7.1,
+   "tone": [
+    2.7,
+    2.2
+   ]
   },
-  "st-4D-muteL": {
+  "fs-B2-L2": {
+   "root": 47,
+   "L": 2,
+   "rr": 1,
+   "frames": 395520,
+   "tuneFix": -9.3,
+   "tone": [
+    1.4,
+    1.2
+   ]
+  },
+  "fs-C3-L2": {
+   "root": 48,
+   "L": 2,
+   "rr": 1,
+   "frames": 248535,
+   "tuneFix": -6.3,
+   "tone": [
+    0.1,
+    1.3
+   ]
+  },
+  "fs-Cs3-L2": {
+   "root": 49,
+   "L": 2,
+   "rr": 1,
+   "frames": 312000,
+   "tuneFix": -6.8,
+   "tone": [
+    -2.3,
+    -0.6
+   ]
+  },
+  "fs-D3-L2": {
    "root": 50,
-   "string": "4D",
-   "kind": "L",
-   "frames": 101760
+   "L": 2,
+   "rr": 1,
+   "frames": 443520,
+   "tuneFix": -3.9,
+   "tone": [
+    -1.6,
+    -1.1
+   ]
   },
-  "st-4D-muteH": {
-   "root": 50,
-   "string": "4D",
-   "kind": "H",
-   "frames": 113267
+  "fs-Ds3-L2": {
+   "root": 51,
+   "L": 2,
+   "rr": 1,
+   "frames": 286080,
+   "tuneFix": -6.8,
+   "tone": [
+    -1.1,
+    -0.1
+   ]
   },
-  "st-3G-muteL": {
-   "root": 55,
-   "string": "3G",
-   "kind": "L",
-   "frames": 59520
-  },
-  "st-3G-muteH": {
-   "root": 55,
-   "string": "3G",
-   "kind": "H",
-   "frames": 82560
-  },
-  "st-2B-muteL": {
-   "root": 59,
-   "string": "2B",
-   "kind": "L",
-   "frames": 60800
-  },
-  "st-2B-muteH": {
-   "root": 59,
-   "string": "2B",
-   "kind": "H",
-   "frames": 68500
-  }
- },
- "harm": {
-  "st-6E-harm2": {
+  "fs-E3-L2": {
    "root": 52,
-   "string": "6E",
-   "frames": 572160
+   "L": 2,
+   "rr": 1,
+   "frames": 278400,
+   "tuneFix": -6.3,
+   "tone": [
+    2.8,
+    6.2
+   ]
   },
-  "st-6E-harm4": {
-   "root": 64,
-   "string": "6E",
-   "frames": 332800
+  "fs-F3-L2": {
+   "root": 53,
+   "L": 2,
+   "rr": 1,
+   "frames": 224640,
+   "tuneFix": -5.2,
+   "tone": [
+    2.3,
+    3.9
+   ]
   },
-  "st-5A-harm2": {
+  "fs-G3-L2": {
+   "root": 55,
+   "L": 2,
+   "rr": 1,
+   "frames": 311040,
+   "tuneFix": 2.2,
+   "tone": [
+    0.0,
+    2.6
+   ]
+  },
+  "fs-Gs3-L2": {
+   "root": 56,
+   "L": 2,
+   "rr": 1,
+   "frames": 390720,
+   "tuneFix": -7.0,
+   "tone": [
+    -1.1,
+    4.8
+   ]
+  },
+  "fs-A3-L2": {
    "root": 57,
-   "string": "5A",
-   "frames": 410880
+   "L": 2,
+   "rr": 1,
+   "frames": 124797,
+   "tuneFix": -7.4,
+   "tone": [
+    1.0,
+    5.6
+   ]
   },
-  "st-5A-harm4": {
-   "root": 69,
-   "string": "5A",
-   "frames": 317440
+  "fs-As3-L2": {
+   "root": 58,
+   "L": 2,
+   "rr": 1,
+   "frames": 234240,
+   "tuneFix": -5.8,
+   "tone": [
+    1.1,
+    5.7
+   ]
   },
-  "st-4D-harm2": {
+  "fs-B3-L2": {
+   "root": 59,
+   "L": 2,
+   "rr": 1,
+   "frames": 183360,
+   "tuneFix": -3.6,
+   "tone": [
+    -2.2,
+    -2.9
+   ]
+  },
+  "fs-C4-L2": {
+   "root": 60,
+   "L": 2,
+   "rr": 1,
+   "frames": 168960,
+   "tuneFix": -12.0,
+   "tone": [
+    -3.5,
+    -6.3
+   ]
+  },
+  "fs-Cs4-L2": {
+   "root": 61,
+   "L": 2,
+   "rr": 1,
+   "frames": 251520,
+   "tuneFix": -11.8,
+   "tone": [
+    -7.0,
+    -4.9
+   ]
+  },
+  "fs-D4-L2": {
    "root": 62,
-   "string": "4D",
-   "frames": 376320
+   "L": 2,
+   "rr": 1,
+   "frames": 240000,
+   "tuneFix": -9.6,
+   "tone": [
+    -4.4,
+    -6.6
+   ]
   },
-  "st-4D-harm4": {
-   "root": 74,
-   "string": "4D",
-   "frames": 260480
+  "fs-Ds4-L2": {
+   "root": 63,
+   "L": 2,
+   "rr": 1,
+   "frames": 298560,
+   "tuneFix": -5.8,
+   "tone": [
+    -2.6,
+    -5.9
+   ]
   },
-  "st-3G-harm2": {
+  "fs-E4-L2": {
+   "root": 64,
+   "L": 2,
+   "rr": 1,
+   "frames": 214080,
+   "tuneFix": -1.0,
+   "tone": [
+    -3.0,
+    -5.7
+   ]
+  },
+  "fs-F4-L2": {
+   "root": 65,
+   "L": 2,
+   "rr": 1,
+   "frames": 205440,
+   "tuneFix": -4.6,
+   "tone": [
+    -2.1,
+    -4.2
+   ]
+  },
+  "fs-Fs4-L2": {
+   "root": 66,
+   "L": 2,
+   "rr": 1,
+   "frames": 199680,
+   "tuneFix": -4.6,
+   "tone": [
+    2.5,
+    0.8
+   ]
+  },
+  "fs-G4-L2": {
    "root": 67,
-   "string": "3G",
-   "frames": 388480
+   "L": 2,
+   "rr": 1,
+   "frames": 159360,
+   "tuneFix": -4.5,
+   "tone": [
+    -2.1,
+    -2.7
+   ]
   },
-  "st-3G-harm4": {
-   "root": 79,
-   "string": "3G",
-   "frames": 266240
+  "fs-Gs4-L2": {
+   "root": 68,
+   "L": 2,
+   "rr": 1,
+   "frames": 266880,
+   "tuneFix": -3.6,
+   "tone": [
+    -2.0,
+    -4.6
+   ]
   },
-  "st-2B-harm2": {
+  "fs-A4-L2": {
+   "root": 69,
+   "L": 2,
+   "rr": 1,
+   "frames": 131149,
+   "tuneFix": -3.9,
+   "tone": [
+    -1.7,
+    -3.0
+   ]
+  },
+  "fs-As4-L2": {
+   "root": 70,
+   "L": 2,
+   "rr": 1,
+   "frames": 173760,
+   "tuneFix": -3.3,
+   "tone": [
+    -0.1,
+    -0.4
+   ]
+  },
+  "fs-B4-L2": {
    "root": 71,
-   "string": "2B",
-   "frames": 318080
+   "L": 2,
+   "rr": 1,
+   "frames": 156480,
+   "tuneFix": -3.3,
+   "tone": [
+    0.4,
+    -0.8
+   ]
   },
-  "st-2B-harm4": {
-   "root": 83,
-   "string": "2B",
-   "frames": 195200
+  "fs-C5-L2": {
+   "root": 72,
+   "L": 2,
+   "rr": 1,
+   "frames": 74712,
+   "tuneFix": -3.8,
+   "tone": [
+    -0.4,
+    1.9
+   ]
   },
-  "st-1E-harm2": {
+  "fs-Cs5-L2": {
+   "root": 73,
+   "L": 2,
+   "rr": 1,
+   "frames": 131520,
+   "tuneFix": -5.2,
+   "tone": [
+    4.3,
+    1.6
+   ]
+  },
+  "fs-D5-L2": {
+   "root": 74,
+   "L": 2,
+   "rr": 1,
+   "frames": 123388,
+   "tuneFix": -3.5,
+   "tone": [
+    0.1,
+    -2.1
+   ]
+  },
+  "fs-Ds5-L2": {
+   "root": 75,
+   "L": 2,
+   "rr": 1,
+   "frames": 89544,
+   "tuneFix": -4.8,
+   "tone": [
+    -1.6,
+    -2.5
+   ]
+  },
+  "fs-E5-L2": {
    "root": 76,
-   "string": "1E",
-   "frames": 271360
+   "L": 2,
+   "rr": 1,
+   "frames": 109958,
+   "tuneFix": -8.6,
+   "tone": [
+    -1.0,
+    -1.8
+   ]
   },
-  "st-1E-harm4": {
-   "root": 88,
-   "string": "1E",
-   "frames": 149760
+  "fs-F5-L2": {
+   "root": 77,
+   "L": 2,
+   "rr": 1,
+   "frames": 87667,
+   "tuneFix": -7.9,
+   "tone": [
+    -1.2,
+    2.6
+   ]
+  },
+  "fs-Fs5-L2": {
+   "root": 78,
+   "L": 2,
+   "rr": 1,
+   "frames": 146880,
+   "tuneFix": -10.3,
+   "tone": [
+    5.7,
+    9.0
+   ]
+  },
+  "fs-G5-L2": {
+   "root": 79,
+   "L": 2,
+   "rr": 1,
+   "frames": 143040,
+   "tuneFix": -4.8,
+   "tone": [
+    0.4,
+    2.3
+   ]
+  },
+  "fs-Gs5-L2": {
+   "root": 80,
+   "L": 2,
+   "rr": 1,
+   "frames": 97377,
+   "tuneFix": -14.6,
+   "tone": [
+    0.2,
+    -0.8
+   ]
+  },
+  "fs-As5-L2": {
+   "root": 82,
+   "L": 2,
+   "rr": 1,
+   "frames": 147840,
+   "tuneFix": -20.1,
+   "tone": [
+    2.3,
+    5.3
+   ]
+  },
+  "fs-B5-L2": {
+   "root": 83,
+   "L": 2,
+   "rr": 1,
+   "frames": 98515,
+   "tuneFix": -16.1,
+   "tone": [
+    4.8,
+    0.3
+   ]
+  },
+  "fs-E2-L1": {
+   "root": 40,
+   "L": 1,
+   "rr": 1,
+   "frames": 810240,
+   "tuneFix": -1.1,
+   "tone": [
+    -2.0,
+    -6.3
+   ]
+  },
+  "fs-G2-L1": {
+   "root": 43,
+   "L": 1,
+   "rr": 1,
+   "frames": 209280,
+   "tuneFix": -3.6,
+   "tone": [
+    2.8,
+    -0.3
+   ]
+  },
+  "fs-Gs2-L1": {
+   "root": 44,
+   "L": 1,
+   "rr": 1,
+   "frames": 208320,
+   "tuneFix": -15.0,
+   "tone": [
+    3.3,
+    -0.8
+   ]
+  },
+  "fs-A2-L1": {
+   "root": 45,
+   "L": 1,
+   "rr": 1,
+   "frames": 424320,
+   "tuneFix": -3.4,
+   "tone": [
+    1.8,
+    2.6
+   ]
+  },
+  "fs-D3-L1": {
+   "root": 50,
+   "L": 1,
+   "rr": 1,
+   "frames": 266880,
+   "tuneFix": -0.8,
+   "tone": [
+    -4.2,
+    -0.4
+   ]
+  },
+  "fs-Ds3-L1": {
+   "root": 51,
+   "L": 1,
+   "rr": 1,
+   "frames": 267840,
+   "tuneFix": -5.4,
+   "tone": [
+    0.3,
+    2.7
+   ]
+  },
+  "fs-Fs3-L1": {
+   "root": 54,
+   "L": 1,
+   "rr": 1,
+   "frames": 157440,
+   "tuneFix": -4.8,
+   "tone": [
+    1.4,
+    2.6
+   ]
+  },
+  "fs-G3-L1": {
+   "root": 55,
+   "L": 1,
+   "rr": 1,
+   "frames": 279360,
+   "tuneFix": -3.2,
+   "tone": [
+    -2.3,
+    -0.1
+   ]
+  },
+  "fs-Gs3-L1": {
+   "root": 56,
+   "L": 1,
+   "rr": 1,
+   "frames": 332160,
+   "tuneFix": -6.5,
+   "tone": [
+    -3.4,
+    2.9
+   ]
+  },
+  "fs-C5-L1": {
+   "root": 72,
+   "L": 1,
+   "rr": 1,
+   "frames": 116160,
+   "tuneFix": -2.5,
+   "tone": [
+    -2.0,
+    -0.7
+   ]
+  },
+  "fs-Cs5-L1": {
+   "root": 73,
+   "L": 1,
+   "rr": 1,
+   "frames": 141519,
+   "tuneFix": -4.3,
+   "tone": [
+    3.3,
+    1.1
+   ]
+  },
+  "fs-Fs5-L1": {
+   "root": 78,
+   "L": 1,
+   "rr": 1,
+   "frames": 128200,
+   "tuneFix": -6.8,
+   "tone": [
+    3.7,
+    0.7
+   ]
+  },
+  "fs-Gs5-L1": {
+   "root": 80,
+   "L": 1,
+   "rr": 1,
+   "frames": 155286,
+   "tuneFix": -10.0,
+   "tone": [
+    -1.9,
+    -3.0
+   ]
+  },
+  "fs-A5-L1": {
+   "root": 81,
+   "L": 1,
+   "rr": 1,
+   "frames": 130073,
+   "tuneFix": -15.9,
+   "tone": [
+    -3.1,
+    -1.5
+   ]
+  },
+  "fs-As5-L1": {
+   "root": 82,
+   "L": 1,
+   "rr": 1,
+   "frames": 137280,
+   "tuneFix": -17.0,
+   "tone": [
+    0.1,
+    -1.1
+   ]
+  },
+  "fs-B5-L1": {
+   "root": 83,
+   "L": 1,
+   "rr": 1,
+   "frames": 110986,
+   "tuneFix": -13.0,
+   "tone": [
+    2.1,
+    1.8
+   ]
+  },
+  "fs-C6-L1": {
+   "root": 84,
+   "L": 1,
+   "rr": 1,
+   "frames": 97730,
+   "tuneFix": -12.5,
+   "tone": [
+    0.0,
+    -0.2
+   ]
   }
  }
 }
