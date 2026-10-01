@@ -12,9 +12,12 @@
 - MusicXML midi-unpitched 是 1 起算、OSMD 不會減 1，normalizeDrumKey 一律減 1
 - 鋼琴音色放在本 repo 的 piano/：Accurate-Salamander Grand Piano V6.2（Salamander V3 by Alexander Holm，CC-BY 3.0），30 個取樣音 × 16 層力度 + 放鍵弦共鳴（harmL/harmS）+ 放鍵機械聲（rel）+ 踏板聲，48k/16-bit FLAC + piano/manifest.json;讀不到才退回 raw.githubusercontent，manifest 都讀不到才退回 Tone.js 單層鋼琴
 - 鋼琴取樣已做過「單聲道相容」處理（AB 立體聲對某些音加成單聲道會抵消 10dB）：逐 STFT 頻格保留能量的 mid、side×0.45、低音左高音右 ±0.25，再還原原本響度;重建取樣要用同一套處理（piano/build/pf_build.py、stereo_fix.py）
-- 鋼琴力度照 Accurate-Salamander V6.2：各層錄音已校正成一樣大聲，依力度分區挑層（VEL_16），音量 = 0.015 + 0.985×（力度/127）²（amp_veltrack 98.5）;PIANO_GAIN 1.4（整首約 −11 LUFS、不削波）
+- 鋼琴力度照 Accurate-Salamander V6.2：各層錄音已校正成一樣大聲，依力度分區挑層（VEL_16），音量 = 0.015 + 0.985×（力度/127）²（amp_veltrack 98.5）;PIANO_GAIN 1.5（整首約 −11.5 LUFS、不削波）
 - computePianoDynamics() 算每個音的 n.pvel(1~127)與 n.pdt(和弦內聲部最多晚 7ms):力度記號/髮夾(sf/sfz 只影響當下)、旋律較重、內聲部與左手較輕、拍子輕重、旋律起伏、4 小節樂句、重音、左右手 AR(1) 起伏 + 隨機
 - 鋼琴只載入樂譜用到的（音 × 力度層）;記憶體預算（桌機 1.2GB、iOS 220MB、4GB Android 280MB、2GB Android 120MB，共鳴/機械聲也算在內）不夠時依序：截短到需要的長度 → 單聲道 → 合併最少用到的層。制音器落下時加 harm/rel（音量用 manifest 的 d 換算成原廠 V3 的相對音量，依按住時間 rt_decay 衰減）;F#6（MIDI 89）以上沒有制音器
+- 鋼琴混音：voice → getPianoBus()（PIANO_EQ：450Hz −2dB、6kHz 高頻架式 +3dB，補 Accurate-Salamander 削掉的 5kHz 以上）→ masterGain → loudnessComp → 限幅器。試過鋼琴專用慢起音壓縮器，p→ff 被壓扁、清晰度沒變好，不要再換
+- 殘響送出：一般 0.5、譜上有踏板 ×1.7。harmonyEndSec 一定有值（至少是同時最長音的結尾），不能拿來判斷踏板
+- 譜上沒踏板、由和聲自動延長的音用「半踏板」：放鍵後依 pianoHalfPedalTau（PIANO_HALF_PEDAL 0.7）較快衰減，避免級進旋律全部疊在一起變糊；譜上有踏板才完全延音
 - 樂器只保留鋼琴、吉他（民謠、古典兩把）、鼓組
 - 匯出影片用 canvas.captureStream + MediaRecorder
 

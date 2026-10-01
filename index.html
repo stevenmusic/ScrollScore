@@ -4708,7 +4708,7 @@ function loadInstrumentSamples(instKey){
    全部載入解碼後約 1.5GB,所以只載入「這首曲子用得到的音 × 力度層」,超過裝置記憶體預算時
    依序:截短到曲子實際需要的長度 → 改單聲道 → 合併最少用到的力度層(找最近的層代替)。 */
 const PIANO_BASES = ["piano/", "https://raw.githubusercontent.com/stevenmusic/ScrollScore/main/piano/"];
-let PIANO_GAIN = 1.4;          // 實測:整首約 -11 LUFS、完全不削波,p→ff 仍有約 8dB 差(再大聲限幅器就開始削波、力度被壓平)
+let PIANO_GAIN = 1.5;          // 實測:整首約 -11.5 LUFS、完全不削波,p→ff 仍有約 8dB 差(再大聲限幅器就開始削波、力度被壓平)
 const PIANO_VERB_SEND = 0.5;     // 殘響送出量(踩踏板時 ×1.7,琴弦全部放開共鳴、空間感變大)
 let PIANO_RELEASE_TRIM = 0;    // 放鍵弦共鳴的額外增減(dB)
 const PIANO_NOTE_NAMES = ["C","Cs","D","Ds","E","F","Fs","G","Gs","A","As","B"];
@@ -4727,6 +4727,9 @@ function pianoLayerFor(vel){
 function pianoVelGain(vel){ const v = Math.max(1, Math.min(127, vel)) / 127; return 0.015 + 0.985 * v * v; }
 /* 制音器落下後的衰減時間常數:低音弦粗重、制音器壓不太住,尾巴約 1 秒;高音 0.3 秒內就停 */
 function pianoDamperTau(m){ return m <= 48 ? 0.16 - (m - 21) / 27 * 0.06 : m <= 72 ? 0.10 - (m - 48) / 24 * 0.04 : Math.max(0.045, 0.06 - (m - 72) / 16 * 0.015); }
+/* 半踏板(制音器輕碰琴弦)時的衰減時間常數:低音弦重、比較壓不住 */
+let PIANO_HALF_PEDAL = 0.7;   // 倍率:實測無踏板記號的曲子清晰度 +0.8dB,又保留和聲延長的豐滿感
+function pianoHalfPedalTau(m){ return PIANO_HALF_PEDAL * Math.max(0.35, 1.3 - (m - 21) / 87 * 0.95); }
 function isIOSDevice(){ return /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1); }
 function pianoMemoryBudgetBytes(){
   const dm = navigator.deviceMemory;
@@ -4941,8 +4944,23 @@ function pianoSampleFor(m, L){
 }
 let pianoVoices = [], pianoLastByKey = {};
 function pianoResetVoices(){ pianoVoices = []; pianoLastByKey = {}; }
+/* 鋼琴專用 EQ(接在 masterGain 之前,後面一樣走 loudnessComp → 限幅器):
+   跟舊鋼琴比(響度對齊、看頻譜包絡),Accurate-Salamander 在 5kHz 以上少 5~7dB(它有針對泛音共鳴做削減),
+   聽起來比較悶;350~700Hz(箱子聲)再收一點。另外試過給鋼琴獨立的慢起音壓縮器取代 loudnessComp,
+   實測同樣響度下 p→ff 的差距從 7.7dB 縮到 5.6dB、清晰度沒有變好,所以壓縮維持原本的 */
+const PIANO_EQ = { mudFreq: 450, mudGain: -2, mudQ: 1.0, airFreq: 6000, airGain: 3 };
+let pianoBusIn = null, pianoBusCtx = null;
+function getPianoBus(){
+  if (pianoBusIn && pianoBusCtx === audioCtx) return pianoBusIn;
+  const E = PIANO_EQ;
+  const mud = audioCtx.createBiquadFilter(); mud.type = "peaking"; mud.frequency.value = E.mudFreq; mud.gain.value = E.mudGain; mud.Q.value = E.mudQ;
+  const air = audioCtx.createBiquadFilter(); air.type = "highshelf"; air.frequency.value = E.airFreq; air.gain.value = E.airGain;
+  mud.connect(air); air.connect(masterGain);
+  pianoBusIn = mud; pianoBusCtx = audioCtx;
+  return mud;
+}
 function pianoConnect(node, sendAmt){
-  node.connect(masterGain);
+  node.connect(getPianoBus());
   if (reverbBus && sendAmt) { const s = audioCtx.createGain(); s.gain.value = sendAmt; node.connect(s); s.connect(reverbBus); }
 }
 function pianoOneShot(buf, when, gain, rate, sendAmt){
@@ -4992,10 +5010,12 @@ function playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel
   src.buffer = s.buf; src.playbackRate.value = rate;
   const g = audioCtx.createGain();
   g.gain.setValueAtTime(gain, when);
+  // 譜上沒寫踏板、是程式依和聲自動延長的(harmonyEndSec):當成「半踏板」——制音器輕碰琴弦,放鍵後還有餘音但衰減較快,
+  // 不然一串級進的旋律(C D E F…)全部疊在一起響到小節結束,就是聽起來「糊」的主因。譜上真的有踏板才完全延音
+  if (!pedal && !noDamper && damperAt > keyUp + 0.02) g.gain.setTargetAtTime(0, keyUp, pianoHalfPedalTau(m));
   if (damperAt < end) g.gain.setTargetAtTime(0, damperAt, tau);
   src.connect(g);
-  const sustained = !!pedal || harmonyEndSec != null;
-  pianoConnect(g, PIANO_VERB_SEND * (sustained ? 1.7 : 1));
+  pianoConnect(g, PIANO_VERB_SEND * (pedal ? 1.7 : 1));   // harmonyEndSec 一定有值(至少是同時最長音的結尾),不能拿來判斷踏板
   src.start(when); src.stop(end + 0.05);
   scheduled.push(src);
   const v = { src, g, end, rel: [] };
