@@ -2114,8 +2114,13 @@ function transposeMusicXML(xmlText, semitones){
    鼓件辨識:midi-unpitched(1 起算,減 1 才是 GM)優先,沒有就看顯示位置(大鼓 E4/F4、hi-hat G5) */
 function drumStemFixMusicXML(xmlText){
   if (!/sign>\s*percussion/.test(xmlText)) return xmlText;
+  try { return drumStemFixCore(xmlText); }
+  catch (e) { console.warn("drumStemFixMusicXML 失敗,照原檔顯示:", e); return xmlText; }   // 記譜美化失敗不能讓整份樂譜載入失敗
+}
+function drumStemFixCore(xmlText){
   const doc = new DOMParser().parseFromString(xmlText, "text/xml");
-  const kid = (el, name) => { for (const c of el.children) if (c.tagName === name) return c; return null; };
+  const elems = el => { const out = []; if (!el || !el.childNodes) return out; for (const c of Array.from(el.childNodes)) if (c.nodeType === 1) out.push(c); return out; };
+  const kid = (el, name) => { for (const c of elems(el)) if (c.nodeName === name) return c; return null; };
   const gmOf = {};   // score-instrument id → GM 鼓號
   for (const mi of Array.from(doc.getElementsByTagName("midi-instrument"))) {
     const u = kid(mi, "midi-unpitched");
@@ -2135,8 +2140,8 @@ function drumStemFixMusicXML(xmlText){
   let changed = false;
   for (const m of Array.from(doc.getElementsByTagName("measure"))) {
     const groups = [];
-    for (const el of Array.from(m.children)) {
-      if (el.tagName !== "note" || kid(el, "rest")) continue;
+    for (const el of elems(m)) {
+      if (el.nodeName !== "note" || kid(el, "rest")) continue;
       if (kid(el, "chord") && groups.length) groups[groups.length - 1].push(el); else groups.push([el]);
     }
     for (const g of groups) {
@@ -2151,9 +2156,9 @@ function drumStemFixMusicXML(xmlText){
         }
         if (stem.textContent !== "up") { stem.textContent = "up"; changed = true; }
         const nt = kid(n, "notations");
-        if (nt) for (const box of Array.from(nt.children)) {
-          if (box.tagName !== "articulations" && box.tagName !== "technical") continue;
-          for (const a of Array.from(box.children)) if (a.getAttribute("placement") !== "above") { a.setAttribute("placement", "above"); changed = true; }
+        if (nt) for (const box of elems(nt)) {
+          if (box.nodeName !== "articulations" && box.nodeName !== "technical") continue;
+          for (const a of elems(box)) if (a.getAttribute("placement") !== "above") { a.setAttribute("placement", "above"); changed = true; }
         }
       }
     }
@@ -4968,6 +4973,8 @@ function pianoAutoMacro(hasMarks){
     const b = bars[i];
     feat.push(b ? [b.n / b.len, b.n / b.ev, b.top / b.ev] : null);
   }
+  // 整首沒有任何有音高的音(純鼓譜):沒有織度可估,段落力度全 0(之前這裡會 feat.find() 找不到而讓整份樂譜載入失敗)
+  if (!feat.some(f => f)) return { macro: new Array(nb).fill(0), nb, scale: hasMarks ? 0.4 : 1 };
   for (let i = 0; i < nb; i++) if (!feat[i]) feat[i] = (feat[i - 1] || feat.find(f => f)).slice();   // 整小節休止:沿用前一小節
   const z = feat[0].map((_, j) => {
     const col = feat.map(f => f[j]), mean = col.reduce((a, x) => a + x, 0) / nb;
