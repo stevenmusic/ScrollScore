@@ -15,8 +15,9 @@
 - 鋼琴力度照 Accurate-Salamander V6.2：各層錄音已校正成一樣大聲，依力度分區挑層（VEL_16），音量 = 0.015 + 0.985×（力度/127）²（amp_veltrack 98.5）;PIANO_GAIN 1.5（整首約 −11.5 LUFS、不削波）
 - computePianoDynamics() 算每個音的 n.pvel(1~127)與 n.pdt(和弦內聲部最多晚 7ms):力度記號/髮夾(sf/sfz 只影響當下)、旋律較重、內聲部與左手較輕、拍子輕重、旋律起伏、4 小節樂句、重音、左右手 AR(1) 起伏 + 隨機
 - 鋼琴只載入樂譜用到的（音 × 力度層）;記憶體預算（桌機 1.2GB、iOS 220MB、4GB Android 280MB、2GB Android 120MB，共鳴/機械聲也算在內）不夠時依序：截短到需要的長度 → 單聲道 → 合併最少用到的層。制音器落下時加 harm/rel（音量用 manifest 的 d 換算成原廠 V3 的相對音量，依按住時間 rt_decay 衰減）;F#6（MIDI 89）以上沒有制音器
-- 鋼琴混音：voice → getPianoBus()（PIANO_EQ：450Hz −2dB、6kHz 高頻架式 +3dB，補 Accurate-Salamander 削掉的 5kHz 以上）→ masterGain → loudnessComp → 限幅器。試過鋼琴專用慢起音壓縮器，p→ff 被壓扁、清晰度沒變好，不要再換
-- 殘響送出：一般 0.5、譜上有踏板 ×1.7。harmonyEndSec 一定有值（至少是同時最長音的結尾），不能拿來判斷踏板
+- 鋼琴混音：voice → getPianoBus()（PIANO_EQ：450Hz −2dB、2.8kHz −3.5dB（手機喇叭共振峰，避免尖）、9kHz 高頻架式 +1.5dB）→ masterGain → loudnessComp → 限幅器。試過鋼琴專用慢起音壓縮器，p→ff 被壓扁、清晰度沒變好，不要再換
+- 鋼琴用自己的殘響 getPianoVerb()（buildPianoHallIR：四頻段各自指數衰減，RT60 低 1.9s → 5kHz 以上 0.65s、固定種子、送入前 180Hz 高通、wet 0.33×殘響滑桿），不用共用的 buildImpulseResponse（(1−t)^2.4 衰減不自然、高頻不衰減、早期反射左右反相）；共用的那個目前只剩吉他在用
+- 鋼琴殘響送出：一般 0.5、譜上有踏板 ×1.7。harmonyEndSec 一定有值（至少是同時最長音的結尾），不能拿來判斷踏板
 - 譜上沒踏板、由和聲自動延長的音用「半踏板」：放鍵後依 pianoHalfPedalTau（PIANO_HALF_PEDAL 0.7）較快衰減，避免級進旋律全部疊在一起變糊；譜上有踏板才完全延音
 - 樂器只保留鋼琴、吉他（民謠、古典兩把）、鼓組
 - 匯出影片用 canvas.captureStream + MediaRecorder
