@@ -5516,41 +5516,39 @@ function scheduleGuitar(freq, when, dur, harmonyEndSec, tech){
   if (vibLfo) scheduled.push(vibLfo);
 }
 
-/* ── 鼓音色引擎:自有鼓組取樣(stevenmusic/drum-samples)+ 合成備援 ───────── */
-/* 全部鼓件都從 stevenmusic/drum-samples 的 web/ 載入,每個鼓件都有 v3/v4/v5 三個力度層 × 數個 round-robin:
-   - 大鼓/小鼓/中鼓/落地鼓:indiedrums「DW Collectors Kit + Keplinger Snare」,roomy 收音(含房間聲,
-     比 close 乾聲自然、比 slam 壓縮版乾淨),每層 4 個 round-robin
-   - Hi-Hat(閉合/踩/半開):DRSKit(DrumGizmo × DRSDrums,CC-BY 4.0),Paiste hi-hat 多支麥克風實錄,
-     混成立體聲(hi-hat 近距麥克風 + 時間對齊的 overhead + 少量房間麥克風)。原本用的 OSDK hi-hat
-     每一下的擊打瞬間差很多(峰值忽高忽低 5~10dB、衰減 80~300ms 不等),混在一起就是「一下正常一下怪」
-   - Ride/Crash/邊擊:THE OPEN SOURCE DRUM KIT(Real Music Media,公有領域)
-   各鼓件都依實測響度分成三個力度層(步距對齊 DW 鼓組),同一層的 round-robin 響度也對齊
-   兩套在 repo 裡都已經轉成裁尾 16-bit / 48kHz FLAC,並把 v5 峰值統一調到約 0.5,
-   所以這裡不做峰值正規化,只乘一個整體增益,力度差異與鼓件平衡才會保留下來。
-   用到的檔案直接放在 ScrollScore 自己的 drums/ 資料夾(跟網頁同一個網域,不依賴其他 repo);
-   從本機檔案開啟等 drums/ 讀不到的情況,才改從 drum-samples repo 的 raw.githubusercontent.com 載入 */
+/* ── 鼓音色引擎:DRSKit 整套鼓取樣(放在 drums/,來源 stevenmusic/drum-samples)+ 合成備援 ───────── */
+/* 整組鼓全部來自同一套實錄:DRSKit(DrumGizmo 團隊 × DRSDrums 的 Jes Eiler,CC-BY 4.0),
+   同一場錄音、同一個房間、同一組 13 支麥克風。之前大鼓/小鼓/中鼓、hi-hat、銅鈸分別來自三套不同的鼓,
+   各自的房間聲、麥克風、音色都不一樣,就算各別調好,合在一起還是聽得出是拼起來的。
+   每一下都用同一套混音配方混成立體聲:該鼓件的近距麥克風擺在它在鼓組上的位置(鼓手視角),
+   加上所有鼓件共用、同樣音量的 overhead 與房間麥克風,所以左右位置與空間感是錄音本身帶的,
+   App 這邊不再另外擺聲像。每個鼓件都有 v3/v4/v5 三個力度層 × 數個 round-robin,
+   依實測響度分層、同層響度對齊,並優先挑擊打瞬間一致的錄音。
+   repo 裡已轉成 48kHz / 16-bit FLAC,v5 峰值統一約 0.5,這裡只乘一個整體增益 */
 const OWN_KIT_BASES = [
   "drums/",
   "https://raw.githubusercontent.com/stevenmusic/drum-samples/main/web/"
 ];
 const OWN_KIT = {           // name → [檔名前綴, 每個力度層的 round-robin 數]
-  kick:     ["dw-kick-roomy", 4],
-  snare:    ["keplinger-snare-roomy", 4],
-  tomRack:  ["dw-rack-roomy", 4],
-  tomFloor: ["dw-floor-roomy", 4],
+  kick:     ["drs-kick", 4],
+  snare:    ["drs-snare", 4],
+  xstick:   ["drs-xstick", 3],
+  tom1:     ["drs-tom1", 3],
+  tom2:     ["drs-tom2", 3],
+  tom3:     ["drs-tom3", 3],
   hhClosed: ["drs-hhclosed", 3],
   hhPedal:  ["drs-hhpedal", 2],
   hhOpen:   ["drs-hhopen", 3],
-  ride:     ["osdk-ride", 3],
-  rideBell: ["osdk-ridebell", 2],
-  crash:    ["osdk-crash", 2],
-  xstick:   ["osdk-sidestick", 4]
+  ride:     ["drs-ride", 3],
+  rideBell: ["drs-ridebell", 3],
+  crashL:   ["drs-crashl", 2],
+  crashR:   ["drs-crashr", 2]
 };
 const OWN_KIT_VELOCITIES = [3, 4, 5];
-const OWN_KIT_GAIN = 1.8; // v5 峰值 0.5 → 0.9
+const OWN_KIT_GAIN = 2.3; // v5 峰值 0.5 → 1.15;整套 DRSKit 的峰值/響度比較大(自然的動態),這樣整體響度才跟之前一樣,過頭的峰值由 drum bus 安全網壓住
 /* 取樣整個鼓件都抓不到時,退回 Tone.js 原聲鼓組(有對應檔案的鼓件才有),再不行才用合成音 */
 const KIT_URL = "https://tonejs.github.io/audio/drum-samples/acoustic-kit/";
-const KIT_FALLBACK = { kick: "kick", snare: "snare", hhClosed: "hihat", hhPedal: "hihat", tomRack: "tom1", tomFloor: "tom3" };
+const KIT_FALLBACK = { kick: "kick", snare: "snare", hhClosed: "hihat", hhPedal: "hihat", tom1: "tom1", tom2: "tom2", tom3: "tom3" };
 const kitBuffers = {};   // name 或 "name:力度層" → [{buffer, norm}]
 const kitRoundRobin = {};
 let kitLoading = null;
@@ -5728,27 +5726,27 @@ function synthCymbal(when, decay, hpFreq, gain, noiseMix){
 /* 各鼓件的 gain 是用響度計(BS.1770 LUFS,取 400ms 瞬時響度)量過之後定的,不是看峰值:
    以小鼓 v4 為基準,大鼓 ≈ 0(大鼓取樣本身已做過小喇叭補強)、中鼓/落地鼓 ≈ 0、
    開放 hi-hat/ride bell/crash/邊擊 −3~−5、閉合 hi-hat/ride −6~−7、踩 hi-hat −10。
-   pan 是鼓手視角的左右位置(hi-hat 與第一片 crash 在左、落地鼓與 ride 在右、中鼓由左到右),幅度刻意保守;
-   send 是送進共用殘響的量:鼓皮類取樣本身已含房間聲所以少送,銅鈸多送一點,兩套取樣才會像在同一個房間。
-   只有一顆中鼓、一顆落地鼓,六種 GM 中鼓音高用變調區分(rate) */
+   左右位置已經混在取樣裡(同一組 overhead),這裡不再擺聲像;send 只送一點點共用殘響,
+   因為取樣本身就有同一個房間的房間麥克風。DRSKit 有三顆鼓(一顆中鼓、兩顆落地鼓),記譜常用的
+   高音鼓(48)→ Tom1、中音鼓(47)→ Tom2、落地鼓(43)→ Tom3 都是原音,其餘 GM 音高才微幅變調 */
 const DRUM_VOICES = {
-  kick:      { piece: "kick",     gain: 2.088,  pan: 0,     send: 0.05, synth: (w, V) => synthKick(w) },
-  snare:     { piece: "snare",    gain: 1.0,  pan: -0.08, send: 0.08, synth: (w, V) => synthSnare(w, 0.95 * V) },
-  xstick:    { piece: "xstick",   gain: 1.216,  pan: -0.08, send: 0.1,  synth: (w, V) => synthRimClick(w, 0.7 * V) },
-  clap:      { piece: "snare",    gain: 0.8,  pan: -0.08, send: 0.08, synth: (w, V) => synthSnare(w, 0.8 * V) },
-  hhClosed:  { piece: "hhClosed", gain: 0.34, pan: -0.32, send: 0.1,  synth: (w, V) => synthCymbal(w, 0.06, 8000, 0.25 * V, 0.25), choke: true },
-  hhPedal:   { piece: "hhPedal",  gain: 0.268, pan: -0.32, send: 0.08, synth: (w, V) => synthCymbal(w, 0.05, 8000, 0.16 * V, 0.2), choke: true },
-  hhOpen:    { piece: "hhOpen",   gain: 0.224, pan: -0.32, send: 0.14, sustain: 0.6, synth: (w, V) => synthCymbal(w, 0.45, 7000, 0.28 * V, 0.4), openHat: true },
-  tomHigh:   { piece: "tomRack",  gain: 0.572,  rate: 1.06, pan: -0.2,  send: 0.08, synth: (w, V) => synthTom(w, 190) },
-  tomHiMid:  { piece: "tomRack",  gain: 0.572,  rate: 1.0,  pan: -0.12, send: 0.08, synth: (w, V) => synthTom(w, 175) },
-  tomLowMid: { piece: "tomRack",  gain: 0.572,  rate: 0.89, pan: 0.05,  send: 0.08, synth: (w, V) => synthTom(w, 150) },
-  tomLow:    { piece: "tomRack",  gain: 0.572,  rate: 0.84, pan: 0.12,  send: 0.08, synth: (w, V) => synthTom(w, 130) },
-  floorHigh: { piece: "tomFloor", gain: 0.582, rate: 1.0,  pan: 0.25,  send: 0.08, synth: (w, V) => synthTom(w, 100) },
-  floorLow:  { piece: "tomFloor", gain: 0.582, rate: 0.89, pan: 0.3,   send: 0.08, synth: (w, V) => synthTom(w, 85) },
-  crash1:    { piece: "crash",    gain: 0.587,  pan: -0.38, send: 0.16, sustain: 2.2, synth: (w, V) => synthCymbal(w, 1.6, 5500, 0.4 * V, 0.45) },
-  crash2:    { piece: "crash",    gain: 0.587,  pan: 0.42,  send: 0.16, sustain: 2.2, synth: (w, V) => synthCymbal(w, 1.6, 5500, 0.4 * V, 0.45) },
-  ride:      { piece: "ride",     gain: 0.433, pan: 0.35,  send: 0.14, sustain: 1.8, synth: (w, V) => synthCymbal(w, 1.3, 8500, 0.22 * V, 0.55) },
-  rideBell:  { piece: "rideBell", gain: 0.46,  pan: 0.35,  send: 0.14, sustain: 1.2, synth: (w, V) => synthCymbal(w, 0.6, 11000, 0.32 * V, 0.12) }
+  kick:      { piece: "kick",     gain: 0.705,  send: 0.04, synth: (w, V) => synthKick(w) },
+  snare:     { piece: "snare",    gain: 1.0,  send: 0.04, synth: (w, V) => synthSnare(w, 0.95 * V) },
+  xstick:    { piece: "xstick",   gain: 0.656,  send: 0.04, synth: (w, V) => synthRimClick(w, 0.7 * V) },
+  clap:      { piece: "snare",    gain: 0.8,  send: 0.04, synth: (w, V) => synthSnare(w, 0.8 * V) },
+  hhClosed:  { piece: "hhClosed", gain: 0.288, send: 0.04, synth: (w, V) => synthCymbal(w, 0.06, 8000, 0.25 * V, 0.25), choke: true },
+  hhPedal:   { piece: "hhPedal",  gain: 0.23, send: 0.04, synth: (w, V) => synthCymbal(w, 0.05, 8000, 0.16 * V, 0.2), choke: true },
+  hhOpen:    { piece: "hhOpen",   gain: 0.2, send: 0.04, sustain: 0.6, synth: (w, V) => synthCymbal(w, 0.45, 7000, 0.28 * V, 0.4), openHat: true },
+  tomHigh:   { piece: "tom1",     gain: 0.397,  rate: 1.06, send: 0.04, synth: (w, V) => synthTom(w, 190) },
+  tomHiMid:  { piece: "tom1",     gain: 0.397,  send: 0.04, synth: (w, V) => synthTom(w, 175) },
+  tomLowMid: { piece: "tom2",     gain: 0.53,  send: 0.04, synth: (w, V) => synthTom(w, 150) },
+  tomLow:    { piece: "tom2",     gain: 0.53,  rate: 0.94, send: 0.04, synth: (w, V) => synthTom(w, 130) },
+  floorHigh: { piece: "tom3",     gain: 0.712,  send: 0.04, synth: (w, V) => synthTom(w, 100) },
+  floorLow:  { piece: "tom3",     gain: 0.712,  rate: 0.92, send: 0.04, synth: (w, V) => synthTom(w, 85) },
+  crash1:    { piece: "crashL",   gain: 0.182,  send: 0.05, sustain: 2.2, synth: (w, V) => synthCymbal(w, 1.6, 5500, 0.4 * V, 0.45) },
+  crash2:    { piece: "crashR",   gain: 0.17,  send: 0.05, sustain: 2.2, synth: (w, V) => synthCymbal(w, 1.6, 5500, 0.4 * V, 0.45) },
+  ride:      { piece: "ride",     gain: 0.262, send: 0.05, sustain: 1.8, synth: (w, V) => synthCymbal(w, 1.3, 8500, 0.22 * V, 0.55) },
+  rideBell:  { piece: "rideBell", gain: 0.256,  send: 0.05, sustain: 1.2, synth: (w, V) => synthCymbal(w, 0.6, 11000, 0.32 * V, 0.12) }
 };
 const DRUM_KEY_VOICE = {
   35: "kick", 36: "kick", 38: "snare", 40: "snare", 37: "xstick", 39: "clap",
