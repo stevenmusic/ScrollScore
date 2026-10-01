@@ -2108,6 +2108,90 @@ function transposeMusicXML(xmlText, semitones){
   return new XMLSerializer().serializeToString(doc);
 }
 
+/* 檔案完全沒有 <beam> 時自動補上符尾連結(有些程式或 AI 產生的 MusicXML 不寫 beam,OSMD 就會把
+   每個八分、十六分音符各自畫成單獨的旗子)。只要檔案裡有任何 <beam> 就完全照原檔,不去動作者的寫法。
+   不用 OSMD 內建的 autoBeam:它把同一小節所有聲部混在一起分組,鼓譜手腳分兩個聲部時會連錯或連不起來。
+   規則:每個聲部各自分組;單拍子以四分音符為一組,複拍子(6/8、9/8、12/8、3/8)以附點四分為一組;
+   4/4、2/4、2/2 若相鄰兩拍都剛好是兩個八分音符就連成四個一組;休止符、四分以上的音、跨組的音會中斷符尾;
+   十六分以下的第二、三條符尾照前後音的長短接續,單獨一個時畫短符尾(hook) */
+function autoBeamMusicXML(xmlText){
+  if (/<beam[\s>]/.test(xmlText)) return xmlText;
+  const doc = new DOMParser().parseFromString(xmlText, "text/xml");
+  const BEAMS = { eighth: 1, "16th": 2, "32nd": 3, "64th": 4, "128th": 5 };
+  const kid = (el, name) => { for (const c of el.children) if (c.tagName === name) return c; return null; };
+  const num = (el, name, def) => { const c = el && kid(el, name); const v = c ? parseFloat(c.textContent) : NaN; return isFinite(v) ? v : def; };
+  let changed = false;
+  for (const part of Array.from(doc.getElementsByTagName("part"))) {
+    let div = 1, beats = 4, beatType = 4;
+    for (const m of Array.from(part.getElementsByTagName("measure"))) {
+      const voices = new Map();
+      let pos = 0, maxPos = 0;
+      for (const el of Array.from(m.children)) {
+        if (el.tagName === "attributes") {
+          div = num(el, "divisions", div);
+          const t = kid(el, "time");
+          if (t && kid(t, "beats")) {
+            const b = kid(t, "beats").textContent.split("+").reduce((s, x) => s + (parseFloat(x) || 0), 0);
+            if (b > 0) { beats = b; beatType = num(t, "beat-type", beatType); }
+          }
+        } else if (el.tagName === "backup") pos -= num(el, "duration", 0);
+        else if (el.tagName === "forward") { pos += num(el, "duration", 0); maxPos = Math.max(maxPos, pos); }
+        else if (el.tagName === "note") {
+          if (kid(el, "grace") || kid(el, "chord")) continue;
+          const dur = num(el, "duration", 0);
+          const key = num(el, "staff", 1) + ":" + (kid(el, "voice") ? kid(el, "voice").textContent.trim() : "1");
+          const typ = kid(el, "type") ? kid(el, "type").textContent.trim() : "";
+          if (!voices.has(key)) voices.set(key, []);
+          voices.get(key).push({ el, start: pos, dur, rest: !!kid(el, "rest"), n: BEAMS[typ] || 0, tup: !!kid(el, "time-modification") });
+          pos += dur; maxPos = Math.max(maxPos, pos);
+        }
+      }
+      const fullLen = beats * div * 4 / beatType;
+      const offset = m.getAttribute("implicit") === "yes" && maxPos < fullLen - 1e-6 ? fullLen - maxPos : 0; // 弱起小節對齊到小節尾端
+      const compound = beatType === 8 && beats % 3 === 0;
+      const G = compound ? div * 1.5 : beatType === 16 && beats % 3 === 0 ? div * 0.75 : div;
+      const pairable = !compound && (beatType === 4 || beatType === 2) && (beats === 2 || beats === 4);
+      const gi = (x) => Math.floor((x + offset) / G + 1e-6);
+      for (const list of voices.values()) {
+        const runs = [];
+        let cur = null;
+        for (const e of list) {
+          const g = gi(e.start), ok = !e.rest && e.n > 0 && Math.ceil((e.start + e.dur + offset) / G - 1e-6) - 1 === g; // 結尾也要在同一組內
+          if (ok && cur && cur.g === g) cur.items.push(e);
+          else { if (cur) runs.push(cur); cur = ok ? { g, items: [e] } : null; }
+        }
+        if (cur) runs.push(cur);
+        const merged = [];
+        for (const r of runs) {
+          const prev = merged[merged.length - 1];
+          const twoEighths = (q) => q.items.length === 2 && q.items.every(e => e.n === 1 && !e.tup) &&
+            Math.abs(q.items[0].start + offset - q.g * G) < 1e-6 && Math.abs(q.items[1].start - q.items[0].start - G / 2) < 1e-6;
+          if (pairable && prev && prev.g % 2 === 0 && r.g === prev.g + 1 && !prev.merged && twoEighths(prev) && twoEighths(r) &&
+              list.indexOf(r.items[0]) === list.indexOf(prev.items[1]) + 1) { prev.items.push(...r.items); prev.merged = true; }
+          else merged.push(r);
+        }
+        for (const r of merged) {
+          const it = r.items;
+          if (it.length < 2) continue;
+          it.forEach((e, i) => {
+            const after = Array.from(e.el.children).find(c => ["notations", "lyric", "play", "listen"].includes(c.tagName)) || null;
+            for (let L = 1; L <= e.n; L++) {
+              const p = i > 0 && it[i - 1].n >= L, nx = i < it.length - 1 && it[i + 1].n >= L;
+              const v = p && nx ? "continue" : p ? "end" : nx ? "begin" : i === 0 ? "forward hook" : "backward hook";
+              const b = doc.createElement("beam");
+              b.setAttribute("number", String(L));
+              b.textContent = v;
+              e.el.insertBefore(b, after);
+            }
+          });
+          changed = true;
+        }
+      }
+    }
+  }
+  return changed ? new XMLSerializer().serializeToString(doc) : xmlText;
+}
+
 /* 連續整小節休止符一律拆開成各自獨立的一小節休止,不要合併顯示成一個多小節的休止記號。
    有些記譜軟體匯出時會用 <measure-style><multiple-rest> 把連續休止的小節標成一組
    (畫面上會變成一條粗線加數字的合併休止符),這裡直接把這種分組標記清掉,讓每個小節
@@ -2255,7 +2339,8 @@ async function renderScore(xmlText){
   osmd.EngravingRules.AutoGenerateMultipleRestMeasuresFromRestMeasures = mergeRests;
 
   const transposedXml = transposeSemitones ? transposeMusicXML(xmlText, transposeSemitones) : xmlText;
-  const finalXml = mergeRests ? mergeRestMeasures(transposedXml) : splitRestMeasures(transposedXml);
+  const beamedXml = autoBeamMusicXML(transposedXml);
+  const finalXml = mergeRests ? mergeRestMeasures(beamedXml) : splitRestMeasures(beamedXml);
   await osmd.load(finalXml);
   osmd.zoom = 0.9;
   osmd.render();
@@ -2747,7 +2832,7 @@ function buildTimeline(){
     const ves = it.CurrentVoiceEntries || [];
     for (const ve of ves) {
       for (const n of ve.Notes) {
-        if (!n.Pitch) continue;                      // 休止符
+        if (!n.Pitch || (n.isRest && n.isRest())) continue; // 休止符(有 display-step 定位的休止符 OSMD 也會給 Pitch,要用 isRest 判斷,否則會被當成音符播出來)
         if (n.NoteTie && n.NoteTie.StartNote !== n) continue; // 連結線後段不重發聲
         let durWhole = n.Length.RealValue;
         if (n.NoteTie && n.NoteTie.StartNote === n) {
@@ -2755,7 +2840,9 @@ function buildTimeline(){
         }
         const drumKey = isDrumScore ? getDrumKey(n, tWhole) : null;
         if (drumKey !== null) {
-          notes.push({ drum: true, key: drumKey, durWhole, ghost: isGhostDrumNote(n, tWhole) });
+          const ghost = isGhostDrumNote(n, tWhole);
+          if (ghost) drawGhostParens(n);
+          notes.push({ drum: true, key: drumKey, durWhole, ghost });
         } else {
           // 直接向 OSMD 拿這個音符實際所屬的譜表編號(左右手),跟 MusicXML <staff> 元素同一個數值來源,
           // 不用再靠音高+時間去猜配對,避免兩手同音高、琶音密集等情況配錯手
@@ -3152,6 +3239,35 @@ function computeDrumPerformance(){
     if (h.n.ghost && backbeats.some(t => Math.abs(t - h.t) < 0.13)) h.n.perf -= 0.03;
     if (h.ev.barIdx != null && h.ev.barIdx % 4 === 3) h.n.perf += 0.015;
   }
+}
+/* OSMD 不會畫 <notehead parentheses="yes"> 的括號,鬼音在譜上看起來跟一般音一樣。
+   這裡在符頭左右各補一個括號(依符頭大小縮放,跟符頭同色),同一個符頭只畫一次 */
+function drawGhostParens(n){
+  try {
+    const gn = osmd.rules.GNote(n);
+    const heads = gn && gn.getNoteheadSVGs ? gn.getNoteheadSVGs() : [];
+    if (!heads.length) return;
+    const idx = gn.vfnote && heads.length > 1 ? Math.min(heads.length - 1, Math.max(0, gn.vfnote[1] | 0)) : 0;
+    const head = heads[idx];
+    if (!head || head.dataset.ghostParens) return;
+    head.dataset.ghostParens = "1";
+    const bb = head.getBBox();
+    if (!bb.width || !bb.height) return;
+    const h = bb.height, cy = bb.y + h / 2, ry = h * 0.85, gap = h * 0.22, bow = h * 0.32;
+    const color = (head.querySelector("path") || head).getAttribute("fill") || "#000";
+    const mk = (x0, dir) => {
+      const el = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      el.setAttribute("d", `M${x0} ${cy - ry}Q${x0 - dir * bow * 2} ${cy} ${x0} ${cy + ry}`);
+      el.setAttribute("fill", "none");
+      el.setAttribute("stroke", color);
+      el.setAttribute("stroke-width", (h * 0.13).toFixed(2));
+      el.setAttribute("stroke-linecap", "round");
+      el.setAttribute("class", "ghost-paren");
+      head.appendChild(el);
+    };
+    mk(bb.x - gap, 1);
+    mk(bb.x + bb.width + gap, -1);
+  } catch (e) {}
 }
 function isGhostDrumNote(n, tWhole){
   const midi = n.Pitch.getHalfTone ? n.Pitch.getHalfTone() + 12 : (n.Pitch.halfTone + 12);
