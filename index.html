@@ -6979,7 +6979,7 @@ function measureStaffExtent(svg){
   const staffTop = top, staffBottom = bottom;
   svg.querySelectorAll(".vf-notehead").forEach(take);          // 譜表外的符頭(銅鈸在上方加線、大鼓在下方)
   if (!isFinite(top) || !isFinite(staffTop)) return null;
-  const pad = (staffBottom - staffTop) * 0.25;
+  const pad = (staffBottom - staffTop) * 0.5;
   return { top: Math.max(0, (top - pad - sr.top) / sr.height), bottom: Math.min(1, (bottom + pad - sr.top) / sr.height) };
 }
 async function rasterizeScore(targetH){
