@@ -1642,7 +1642,16 @@ let arpMap = {};
 let calibrating = false, calibStartPerf = 0, calibTapIndex = 0;
 let calibrationMap = []; // [{tWhole, realSec}] 已排序,由 tap-along 或自動偵測建立
 let endX = 0, totalWhole = 0;
-let audioCtx = null, masterGain = null, masterLimiter = null;
+let audioCtx = null, masterGain = null, masterLimiter = null, masterOut = null;
+const MASTER_CEIL_RANGE = 2, MASTER_CEIL_KNEE = 0.708, MASTER_CEIL = 0.85;   // 曲線涵蓋 ±2、−3dBFS 起彎、上限 −1.4dBFS
+function buildCeilingCurve(){
+  const n = 8193, c = new Float32Array(n), T = MASTER_CEIL_KNEE, C = MASTER_CEIL;
+  for (let i = 0; i < n; i++) {
+    const x = (i / (n - 1) * 2 - 1) * MASTER_CEIL_RANGE, a = Math.abs(x);
+    c[i] = a <= T ? x : Math.sign(x) * (T + (C - T) * Math.tanh((a - T) / (C - T)));
+  }
+  return c;
+}
 let playing = false, startCtxTime = 0, pausedAtSec = 0;
 let rafId = 0;
 let scheduled = [];     // 已排程的 audio nodes,停止時關閉
@@ -4301,7 +4310,14 @@ function ensureAudio(){
     masterGain.connect(loudnessComp);
     loudnessComp.connect(makeupGain);
     makeupGain.connect(masterLimiter);
-    masterLimiter.connect(audioCtx.destination);
+    /* 最後一道安全網(輸出上限):Web Audio 的 DynamicsCompressor 會「自動補增益」(makeup gain),
+       上面這個限幅器實際會把訊號再推高約 1.6dB,所以它擋不住峰值——實測真實曲子的真峰值到 +0.2dBTP、
+       有削波。這裡接一個 4 倍超取樣的軟削波:−3dBFS 以下完全不動(線性),以上平滑地壓向 −1.4dBFS,
+       保證真峰值 ≤ −1dBTP(手機 DAC、影片 AAC 編碼都不會破) */
+    const ceilPre = audioCtx.createGain(); ceilPre.gain.value = 1 / MASTER_CEIL_RANGE;
+    masterOut = audioCtx.createWaveShaper(); masterOut.curve = buildCeilingCurve(); masterOut.oversample = "4x";
+    masterLimiter.connect(ceilPre); ceilPre.connect(masterOut);
+    masterOut.connect(audioCtx.destination);
     buildReverbChain();
   }
   if (audioCtx.state === "suspended") audioCtx.resume();
@@ -4757,9 +4773,47 @@ function pianoLevelAt(t){
   }
   return levelAt(t);
 }
+/* 整首的段落起伏:很多 MusicXML(尤其網路上的古典曲譜)完全沒寫力度記號,只靠拍子輕重與小起伏的話,
+   整首的力度只在 62~78 之間(約 4dB),聽起來從頭平到尾。這裡套用演奏研究常用的規則(KTH performance rules):
+   - 織度:每小節音符越密、和弦越厚、旋律越高 → 越用力(跟前後小節比,平滑過)
+   - 樂句弧線:4 小節與 8 小節兩層「漸強再漸弱」
+   - 曲尾兩小節漸弱收尾
+   譜上有力度記號時只用四成,以譜為主 */
+function pianoAutoMacro(hasMarks){
+  const bars = []; let bar = -1, lastM = null, lastPos = -1;
+  for (const ev of events) {
+    if (ev.mIdx !== lastM || (ev.barPos != null && ev.barPos < lastPos - 1e-6)) bar++;
+    lastM = ev.mIdx; if (ev.barPos != null) lastPos = ev.barPos;
+    ev.pBar = bar;
+    const ps = ev.notes.filter(n => !n.drum && n.freq);
+    if (!ps.length) continue;
+    const b = bars[bar] || (bars[bar] = { n: 0, ev: 0, top: 0, len: ev.barLen > 0 ? ev.barLen : 1 });
+    b.n += ps.length; b.ev++; b.top += Math.max(...ps.map(n => freqToMidi(n.freq)));
+  }
+  const nb = bar + 1;
+  if (nb < 2) return { macro: new Array(Math.max(nb, 0)).fill(0), nb, scale: hasMarks ? 0.4 : 1 };
+  const feat = [];
+  for (let i = 0; i < nb; i++) {
+    const b = bars[i];
+    feat.push(b ? [b.n / b.len, b.n / b.ev, b.top / b.ev] : null);
+  }
+  for (let i = 0; i < nb; i++) if (!feat[i]) feat[i] = (feat[i - 1] || feat.find(f => f)).slice();   // 整小節休止:沿用前一小節
+  const z = feat[0].map((_, j) => {
+    const col = feat.map(f => f[j]), mean = col.reduce((a, x) => a + x, 0) / nb;
+    const sd = Math.sqrt(col.reduce((a, x) => a + (x - mean) * (x - mean), 0) / nb) || 1;
+    return col.map(x => (x - mean) / sd);
+  });
+  let inten = z[0].map((_, i) => 0.45 * z[0][i] + 0.25 * z[1][i] + 0.45 * z[2][i]);
+  for (let pass = 0; pass < 2; pass++) inten = inten.map((v, i) => 0.25 * (inten[i - 1] != null ? inten[i - 1] : v) + 0.5 * v + 0.25 * (inten[i + 1] != null ? inten[i + 1] : v));
+  // 平滑後重新標準化(三個特徵會互相抵消一部分、平滑又會再縮小),讓段落大小聲真的有約 ±10 的力度差
+  const im = inten.reduce((a, x) => a + x, 0) / nb, isd = Math.sqrt(inten.reduce((a, x) => a + (x - im) * (x - im), 0) / nb) || 1;
+  const macro = inten.map(v => 5 * Math.max(-2, Math.min(2, (v - im) / isd)));
+  return { macro, nb, scale: hasMarks ? 0.4 : 1 };
+}
 function computePianoDynamics(){
   const multiStaff = events.some(ev => ev.notes.some(n => !n.drum && n.freq && (n.staff || 1) > 1));
   const hasMarks = scoreDynMarks.length > 0;
+  const auto = pianoAutoMacro(hasMarks);
   const drift = { 1: 0, 2: 0 };
   const melodyHist = [];
   let k = 0, bar = -1, lastM = null, lastPos = -1;
@@ -4780,8 +4834,12 @@ function computePianoDynamics(){
       else if (frac < 0.02) base += Math.round(bf) % 2 === 0 ? 1.5 : 0.5;
       else if (Math.abs(frac - 0.5) < 0.02) base -= 1.5;
       else base -= 3;
-      const p = ((bar % 4) + (ev.barLen > 0 ? Math.min(1, ev.barPos / ev.barLen) : 0)) / 4;
-      base += (4 * Math.sin(Math.PI * p) - 2) * (hasMarks ? 0.5 : 1);
+      const pos = ev.barLen > 0 ? Math.min(1, ev.barPos / ev.barLen) : 0;
+      const arch = (n, amp) => amp * (Math.sin(Math.PI * (((bar % n) + pos) / n)) - 2 / Math.PI);   // 平均為 0 的弧線
+      let m = (auto.macro[bar] || 0) + arch(4, 4) + arch(8, 5);
+      const fromEnd = auto.nb - (bar + pos);
+      if (fromEnd < 2) m -= 6 * (1 - fromEnd / 2);                                                  // 曲尾漸弱
+      base += m * auto.scale;
     }
     for (const h of [1, 2]) drift[h] = 0.8 * drift[h] + 0.6 * (seededRand01(k * 3.17 + h * 11.3) - 0.5) * 10;
     const byStaff = {};
@@ -7372,7 +7430,7 @@ async function exportVideo(cfg){
       pushFrame = () => {};
     }
     aDest = audioCtx.createMediaStreamDestination();
-    masterLimiter.connect(aDest); // 從限幅器之後取音,匯出的影片才跟現場聽到的一樣不會破音
+    (masterOut || masterLimiter).connect(aDest); // 從輸出上限之後取音,匯出的影片才跟現場聽到的一樣不會破音
     const stream = new MediaStream([
       ...vStream.getVideoTracks(),
       ...aDest.stream.getAudioTracks()
@@ -7468,7 +7526,7 @@ async function exportVideo(cfg){
   } catch (err) {
     setStatus(T("exportFailed", { msg: err.message || err }));
   }
-  if (aDest) { try { masterLimiter.disconnect(aDest); } catch(e){} }
+  if (aDest) { try { (masterOut || masterLimiter).disconnect(aDest); } catch(e){} }
   stopAudioOnly();
   releaseWakeLock();
   $("exportOverlay").classList.remove("show");
