@@ -3,9 +3,10 @@ from scipy.signal import stft, istft
 def pan_gains(p):
     th = (p + 1) * np.pi / 4
     return np.cos(th) * np.sqrt(2), np.sin(th) * np.sqrt(2)
-def mono_safe(x, sr, pan=0.0, side=0.45, nper=2048, gmax=3.0):
+def mono_safe(x, sr, pan=0.0, side=0.8, nper=2048, gmax=3.0):
     """Energy-preserving mid (per STFT bin |M| := sqrt((|L|^2+|R|^2)/2), phase of L+R) so the mono sum never
-    comb-cancels; side narrowed to `side`; mid placed at `pan`."""
+    comb-cancels; side kept at `side` (0.8: the recording room's reverberation is mostly side signal, narrowing it
+    to 0.45 removed ~6 dB of the real room and left the piano dry); mid placed at `pan`."""
     L, R = x[:, 0], x[:, 1]; n = len(L)
     _, _, Lz = stft(L, sr, nperseg=nper, noverlap=nper * 3 // 4, boundary='even', padded=True)
     _, _, Rz = stft(R, sr, nperseg=nper, noverlap=nper * 3 // 4, boundary='even', padded=True)

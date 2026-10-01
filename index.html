@@ -4956,15 +4956,18 @@ function getPianoBus(){
   return mud;
 }
 /* ── 鋼琴專用殘響(取代共用的 buildImpulseResponse 大廳)────────────────
-   共用的那個殘響是給舊鋼琴配的,實測有三個不自然的地方:
-   1) 衰減曲線用 (1−t)^2.4:前段幾乎不衰減、後段突然掉(前段 RT60 3.1 秒、後段 1.6 秒),像被閘門切掉
-   2) 每個頻段衰減一樣久(8kHz 也響 2.6 秒),真實空間的高頻會先被空氣/牆面吸收 → 尾巴又亮又金屬、聽起來尖
-   3) 早期反射左右聲道正負相反,手機單聲道喇叭上會互相抵消、有相位怪聲
-   這裡改成真實音樂廳的特性:四個頻段各自指數衰減(低音 1.9s、中音 1.6s、2~5kHz 1.15s、5kHz 以上 0.65s,
-   量出來的各頻段 RT60:250Hz 1.95s → 8kHz 0.86s),高頻起始音量也較低;25ms 淡入,不放離散的早期反射;
-   送進殘響前先濾掉 180Hz 以下(低音進殘響只會糊)。亂數用固定種子,每次都一樣 */
-const PIANO_VERB = { seconds: 2.6, preDelay: 0.02, highpass: 180, wet: 0.33,
-  bands: [[0, 350, 1.9, 1.0], [350, 1500, 1.6, 0.9], [1500, 5000, 1.15, 0.6], [5000, 0, 0.65, 0.35]] };
+   跟真實房間量測(Surrey 大學 RealRoomBRIRs)與 Salamander 原始錄音比對後的設計:
+   1) 早期反射:真實房間在直達音後 3~12ms 就有第一個反射、80ms 內有 2~6 個明顯反射(牆、地板、琴蓋),
+      人耳靠這些判斷「琴在房間裡」;沒有的話殘響像飄在旁邊。這裡放 8 個同極性的反射,越晚越暗、越小
+   2) 左右相關性依頻率不同:真實殘響的低音左右幾乎一樣(250Hz 相關 0.7~0.9)、高音才互相獨立;
+      左右各用獨立雜訊的話低音會「飄」、像相位錯亂。每個頻段用共同雜訊 + 各自雜訊混出目標相關性
+   3) 各頻段各自指數衰減(高頻衰減較快),長度接近中型音樂空間(1k 約 1.3 秒),跟取樣本身的錄音房間不會差太遠
+   4) 預延遲 8ms(原本 20ms 太久,殘響跟琴聲脫節);送入前 180Hz 高通。亂數用固定種子,每次都一樣 */
+const PIANO_VERB = { seconds: 2.2, preDelay: 0.008, highpass: 180, wet: 0.33,
+  // [低頻邊界, 高頻邊界, RT60 秒, 起始音量, 左右相關性]
+  bands: [[0, 350, 1.5, 1.0, 0.75], [350, 1500, 1.3, 0.9, 0.35], [1500, 5000, 0.95, 0.6, 0.15], [5000, 0, 0.55, 0.35, 0.08]],
+  // 早期反射 [ms(左), ms(右), 音量]
+  early: [[3.1, 3.6, 0.55], [6.7, 7.9, 0.45], [9.8, 9.1, 0.42], [13.4, 14.6, 0.34], [17.9, 16.8, 0.3], [23.5, 25.2, 0.24], [31.0, 29.4, 0.2], [38.6, 40.3, 0.16]] };
 function buildPianoHallIR(){
   const rate = audioCtx.sampleRate, len = Math.floor(rate * PIANO_VERB.seconds);
   const ir = audioCtx.createBuffer(2, len, rate);
@@ -4976,22 +4979,31 @@ function buildPianoHallIR(){
   };
   const filt = (x, k) => { const y = new Float32Array(x.length); let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
     for (let i = 0; i < x.length; i++) { const v = k[0] * x[i] + k[1] * x1 + k[2] * x2 - k[3] * y1 - k[4] * y2; x2 = x1; x1 = x[i]; y2 = y1; y1 = v; y[i] = v; } return y; };
-  const fadeIn = Math.floor(0.025 * rate), fadeOut = Math.floor(0.3 * rate);
-  for (let ch = 0; ch < 2; ch++) {
-    const rnd = rand(ch ? 4321 : 1234), noise = new Float32Array(len);
-    for (let i = 0; i < len; i++) noise[i] = rnd() * 2 - 1;
-    const d = ir.getChannelData(ch);
-    for (const [lo, hi, rt, g] of PIANO_VERB.bands) {
-      let s = noise;
-      if (lo) { const k = coef("hp", lo); s = filt(filt(s, k), k); }
-      if (hi) { const k = coef("lp", hi); s = filt(filt(s, k), k); }
-      const dec = Math.pow(10, -3 / (rt * rate));
+  const noise = seed => { const r = rand(seed), n = new Float32Array(len); for (let i = 0; i < len; i++) n[i] = r() * 2 - 1; return n; };
+  const common = noise(1234), own = [noise(4321), noise(8765)];
+  const L = ir.getChannelData(0), R = ir.getChannelData(1), out = [L, R];
+  // 擴散殘響:5ms 開始、40ms 內密度長滿
+  const t0 = Math.floor(0.005 * rate), ramp = Math.floor(0.035 * rate);
+  for (const [lo, hi, rt, g, rho] of PIANO_VERB.bands) {
+    const shape = x => { let s = x; if (lo) { const k = coef("hp", lo); s = filt(filt(s, k), k); } if (hi) { const k = coef("lp", hi); s = filt(filt(s, k), k); } return s; };
+    const c = shape(common), dec = Math.pow(10, -3 / (rt * rate)), a = Math.sqrt(rho), bq = Math.sqrt(1 - rho);
+    for (let ch = 0; ch < 2; ch++) {
+      const u = shape(own[ch]), d = out[ch];
       let env = g;
-      for (let i = 0; i < len; i++) { d[i] += s[i] * env; env *= dec; }
+      for (let i = 0; i < len; i++) {
+        const on = i < t0 ? 0 : Math.min(1, (i - t0) / ramp);
+        d[i] += (a * c[i] + bq * u[i]) * env * on; env *= dec;
+      }
     }
-    for (let i = 0; i < fadeIn; i++) d[i] *= i / fadeIn;
-    for (let i = 0; i < fadeOut; i++) d[len - fadeOut + i] *= Math.pow(Math.cos(i / fadeOut * Math.PI / 2), 2);
   }
+  // 早期反射:相對擴散殘響起始的音量,越晚越暗(牆面吸收高頻)
+  let ref = 0; for (let i = t0 + ramp; i < t0 + ramp + Math.floor(0.01 * rate); i++) ref = Math.max(ref, Math.abs(L[i]));
+  PIANO_VERB.early.forEach(([ml, mr, lv], k) => {
+    const taps = 2 + 2 * k, amp = lv * ref * 2.2 / taps;   // 越晚的反射用越多點攤開 = 越暗
+    [[L, ml], [R, mr]].forEach(([d, ms]) => { const at = Math.floor(ms / 1000 * rate); for (let j = 0; j < taps; j++) if (at + j < len) d[at + j] += amp * (1 - j / taps) * 2; });
+  });
+  const fadeOut = Math.floor(0.3 * rate);
+  for (const d of out) for (let i = 0; i < fadeOut; i++) d[len - fadeOut + i] *= Math.pow(Math.cos(i / fadeOut * Math.PI / 2), 2);
   return ir;
 }
 let pianoVerbIn = null, pianoVerbWet = null, pianoVerbCtx = null;

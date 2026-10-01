@@ -46,9 +46,12 @@ def job_main(args):
     if sr != 48000: x = soxr.resample(x, sr, 48000, quality='VHQ'); sr = 48000   # tuning was applied as asetrate
     # spaced AB pair: some notes nearly cancel when summed to mono (C5 -10 dB); make every note mono-safe and
     # placed consistently by register, then restore the Accurate-Salamander loudness calibration
-    lu0 = mom(x[int(np.argmax(np.abs(x).max(1) > np.abs(x).max() * 0.05)):], sr)
+    a0 = int(np.argmax(np.abs(x).max(1) > np.abs(x).max() * 0.05))
+    lu0 = mom(x[a0:], sr)
     x = mono_safe(x, sr, PAN(m))
-    x *= 10 ** ((lu0 - mom(x[int(np.argmax(np.abs(x).max(1) > np.abs(x).max() * 0.05)):], sr)) / 20)
+    # loudness = mean of stereo and mono-sum loudness, so neither headphones nor a phone speaker hear note-to-note jumps
+    xm = x[a0:].mean(1, keepdims=True).repeat(2, 1)
+    x *= 10 ** ((lu0 - (mom(x[a0:], sr) + mom(xm, sr)) / 2) / 20)
     y, st = trim(x, sr, cap_for(m))
     write(y, f'{OUT}pf-{FN(note)}-v{v}.flac', m * 100 + v)
     return note, v, round(mom(y, sr), 2), len(y), round(st / sr, 4)
