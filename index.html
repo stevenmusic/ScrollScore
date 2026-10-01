@@ -6966,9 +6966,26 @@ function mimeLabel(mime){
   return box;
 }
 
+/* 鼓譜匯出時播放軸的上下範圍:量譜表五線與符頭實際的上下邊界(佔整張樂譜圖高度的比例)。
+   整張樂譜圖還包含上方的速度/表情文字、下方的力度記號與小節號,用整張圖的高度當播放軸範圍的話,
+   上面會穿過文字、下面會一路延伸到鼓組面板的黑底 */
+let exportStaffExtent = null;
+function measureStaffExtent(svg){
+  const sr = svg.getBoundingClientRect();
+  if (!sr.height) return null;
+  let top = Infinity, bottom = -Infinity;
+  const take = el => { const q = el.getBoundingClientRect(); if (q.width > 0 || q.height > 0) { top = Math.min(top, q.top); bottom = Math.max(bottom, q.bottom); } };
+  svg.querySelectorAll(".vf-measure > path").forEach(take);   // 五線譜的線
+  const staffTop = top, staffBottom = bottom;
+  svg.querySelectorAll(".vf-notehead").forEach(take);          // 譜表外的符頭(銅鈸在上方加線、大鼓在下方)
+  if (!isFinite(top) || !isFinite(staffTop)) return null;
+  const pad = (staffBottom - staffTop) * 0.25;
+  return { top: Math.max(0, (top - pad - sr.top) / sr.height), bottom: Math.min(1, (bottom + pad - sr.top) / sr.height) };
+}
 async function rasterizeScore(targetH){
   const svg = $("score").querySelector("svg");
   if (!svg) throw new Error(T("errScoreNotFound"));
+  exportStaffExtent = currentInstrument() === "drum" ? measureStaffExtent(svg) : null;
   const srcW = parseFloat(svg.getAttribute("width"))  || svg.clientWidth;
   const srcH = parseFloat(svg.getAttribute("height")) || svg.clientHeight;
   const clone = svg.cloneNode(true);
@@ -7241,7 +7258,8 @@ function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
   // 不再用整個畫面高度的固定比例──樂譜縮小後,原本固定13%~87%的播放軸會比樂譜本身
   // 長超多,看起來又粗又突兀;貼著樂譜量才會跟著樂譜大小自然縮放
   const plPad = SCORE_H * 0.1;
-  const plTop = topY - plPad, plBottom = topY + SCORE_H + plPad;
+  let plTop = topY - plPad, plBottom = topY + SCORE_H + plPad;
+  if (exportStaffExtent) { plTop = topY + SCORE_H * exportStaffExtent.top; plBottom = topY + SCORE_H * exportStaffExtent.bottom; } // 鼓譜:只貼著譜表與符頭
   const curCol = exportInkColor(hlCursorColor()); // 米色譜面上要換成深色版本,見函式上方說明
   ctx.save();
   ctx.globalAlpha = hlCursorOpacity();
