@@ -11,6 +11,7 @@
 - 鼓音量平衡用響度（LUFS）量，不是峰值；鼓約 −20 LUFS，比鋼琴小聲，是保留力度的取捨
 - MusicXML midi-unpitched 是 1 起算、OSMD 不會減 1，normalizeDrumKey 一律減 1
 - 鼓譜記譜：drumStemFixMusicXML()（送進 OSMD 前、autoBeam 之前）讓「同一拍有大鼓 + 手打 hi-hat（GM 42/46，或顯示位置 G5；大鼓 GM 35/36 或 E4/F4）」的和弦符桿一律朝上，這些音符的 articulations / technical 記號（開放 hi-hat 的「o」）設 placement="above"。OSMD 預設把演奏記號放在符頭那側，符桿朝上時「o」會跑到大鼓下面（使用者要求改）
+- 鼓譜符尾一律水平（renderScore 裡 osmd.EngravingRules.FlatBeams = 樂譜有 percussion 譜號）：符尾斜度應該看最靠近符尾的音（hi-hat 都在同一位置），VexFlow 卻照符桿頂端算、被大鼓/小鼓帶歪
 - 鋼琴音色放在本 repo 的 piano/：Accurate-Salamander Grand Piano V6.2（Salamander V3 by Alexander Holm，CC-BY 3.0），30 個取樣音 × 16 層力度 + 放鍵弦共鳴（harmL/harmS）+ 放鍵機械聲（rel）+ 踏板聲，48k/16-bit FLAC + piano/manifest.json;讀不到才退回 raw.githubusercontent，manifest 都讀不到才退回 Tone.js 單層鋼琴
 - 鋼琴取樣已做過「單聲道相容」處理（AB 立體聲對某些音加成單聲道會抵消 10dB）：逐 STFT 頻格保留能量的 mid、side×0.8（不要再縮：錄音房間的殘響幾乎都在 side，縮到 0.45 會把真實房間聲砍掉約 6dB、鋼琴變乾，再靠人工殘響補就不自然）、低音左高音右 ±0.25，每個取樣的響度用「立體聲與單聲道響度的平均」對齊原本校正；重建取樣要用同一套處理（piano/build/pf_build.py、stereo_fix.py）
 - 鋼琴力度照 Accurate-Salamander V6.2：各層錄音已校正成一樣大聲，依力度分區挑層（VEL_16），音量 = 0.015 + 0.985×（力度/127）²（amp_veltrack 98.5）;PIANO_GAIN 1.5（整首約 −11.5 LUFS、不削波）

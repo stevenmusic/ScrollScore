@@ -2401,6 +2401,9 @@ async function renderScore(xmlText){
   const finalXml = mergeRests ? mergeRestMeasures(beamedXml) : splitRestMeasures(beamedXml);
   await osmd.load(finalXml);
   osmd.zoom = 0.9;
+  // 鼓譜的符尾一律水平:符尾的斜度應該看最靠近符尾的音(手打的 hi-hat/銅鈸,通常都在同一個位置),
+  // VexFlow 卻照符桿頂端算,會被下面大鼓/小鼓的高低帶歪(三個同高的 hi-hat 符尾斜將近一格)。鼓譜教材多用水平符尾
+  if (osmd.EngravingRules) osmd.EngravingRules.FlatBeams = /sign>\s*percussion/.test(finalXml);
   osmd.render();
   extendLedgerLineStems(); // OSMD符桿長度是固定值,不會因為加線音符離譜表遠就自動加長,這裡渲染完手動補上
 
