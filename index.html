@@ -1649,7 +1649,9 @@ let audioCtx = null, masterGain = null, masterLimiter = null, masterOut = null, 
    masterGain(鋼琴/吉他)→ loudnessComp(響度壓縮)→ makeup → masterBus ← 鼓組匯流排
    masterBus → 母帶限幅器(AudioWorklet)→ masterOut → 喇叭/匯出影片 */
 const MASTER = {
-  compThreshold: -18, compKnee: 8, compRatio: 3, compAttack: 0.008, compRelease: 0.18, makeup: 1.6,
+  // 響度壓縮器維持原本的設定(試過慢起音壓縮,p→ff 被壓扁)。makeup 1.6 → 1.82:舊的限幅器(DynamicsCompressor)會自動
+  // 補約 +1.1dB 到整個訊號,換成真峰值限幅器後補回來,整體響度跟以前一樣(實測 11 首差 ≤ 0.3 LU)
+  compThreshold: -18, compKnee: 8, compRatio: 3, compAttack: 0.008, compRelease: 0.18, makeup: 1.82,
   ceilingDb: -1.3,      // 限幅器上限(dBFS,4 倍超取樣量):實測 16 倍超取樣的真峰值最壞(寬頻雜訊突波)−1.0dBTP,一般 ≤ −1.1
   lookahead: 0.005,     // 預讀 5ms:峰值到之前就先把音量降好
   release: 0.09,        // 放開:單一尖峰很快回復(60ms 會在 40Hz 低音的一個週期內起伏,低音失真)
@@ -7175,7 +7177,7 @@ function pickDrumLayer(name, s){
    整條路徑繞過主輸出的響度壓縮器(那是給鋼琴的),只有主限幅器當安全網。
    參數由自動量測挑出來:小鼓餘韻長度、殘響/直接音比、立體聲寬度、力度傳遞、響度與峰值 */
 const DRUM_BUS = {
-  makeup: 0.62,
+  makeup: 0.70,   // 0.62 → 0.70:補回舊限幅器自動加的 +1.1dB。試過再大 3dB:響度只多 1.5~2dB、LRA 少 1.5LU(力度被限幅器吃掉),不划算
   parallel: 0.35, compThreshold: -32, compRatio: 8, compAttack: 0.003, compRelease: 0.12,
   verb: 3.5, verbSeconds: 2.6, verbRT60: 2.2, verbPreDelay: 0.012, verbHighpass: 250,
   eqBoxFreq: 350, eqBoxGain: -1.5, eqAirGain: 1.5
