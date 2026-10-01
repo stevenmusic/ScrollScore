@@ -1,0 +1,360 @@
+{
+ "kit": "Naked Drums (Wilkinson Audio, CC-BY 4.0)",
+ "pieces": {
+  "kick": {
+   "prefix": "nk-kick",
+   "layers": [
+    {
+     "rr": 10,
+     "lufs": -25.97,
+     "frames": 576000
+    },
+    {
+     "rr": 10,
+     "lufs": -24.75,
+     "frames": 576000
+    },
+    {
+     "rr": 10,
+     "lufs": -22.44,
+     "frames": 576000
+    },
+    {
+     "rr": 10,
+     "lufs": -23.25,
+     "frames": 576000
+    },
+    {
+     "rr": 10,
+     "lufs": -22.32,
+     "frames": 576000
+    }
+   ]
+  },
+  "snare": {
+   "prefix": "nk-snare",
+   "layers": [
+    {
+     "rr": 10,
+     "lufs": -25.38,
+     "frames": 613688
+    },
+    {
+     "rr": 10,
+     "lufs": -23.93,
+     "frames": 672000
+    },
+    {
+     "rr": 10,
+     "lufs": -23.08,
+     "frames": 672000
+    },
+    {
+     "rr": 10,
+     "lufs": -23.36,
+     "frames": 646407
+    },
+    {
+     "rr": 10,
+     "lufs": -24.53,
+     "frames": 613352
+    }
+   ]
+  },
+  "snare2": {
+   "prefix": "nk-snare2",
+   "layers": [
+    {
+     "rr": 10,
+     "lufs": -23.65,
+     "frames": 496266
+    },
+    {
+     "rr": 10,
+     "lufs": -24.77,
+     "frames": 553092
+    },
+    {
+     "rr": 10,
+     "lufs": -22.46,
+     "frames": 672000
+    },
+    {
+     "rr": 10,
+     "lufs": -22.03,
+     "frames": 671839
+    },
+    {
+     "rr": 10,
+     "lufs": -23.11,
+     "frames": 656784
+    }
+   ]
+  },
+  "xstick": {
+   "prefix": "nk-xstick",
+   "layers": [
+    {
+     "rr": 10,
+     "lufs": -27.17,
+     "frames": 288000
+    }
+   ]
+  },
+  "tom1": {
+   "prefix": "nk-tom1",
+   "layers": [
+    {
+     "rr": 10,
+     "lufs": -27.54,
+     "frames": 814613
+    },
+    {
+     "rr": 10,
+     "lufs": -25.6,
+     "frames": 725021
+    },
+    {
+     "rr": 10,
+     "lufs": -25.23,
+     "frames": 750758
+    }
+   ]
+  },
+  "tom2": {
+   "prefix": "nk-tom2",
+   "layers": [
+    {
+     "rr": 10,
+     "lufs": -28.55,
+     "frames": 960000
+    },
+    {
+     "rr": 10,
+     "lufs": -26.68,
+     "frames": 1017585
+    },
+    {
+     "rr": 10,
+     "lufs": -25.27,
+     "frames": 999000
+    }
+   ]
+  },
+  "tom3": {
+   "prefix": "nk-tom3",
+   "layers": [
+    {
+     "rr": 10,
+     "lufs": -29.02,
+     "frames": 960000
+    },
+    {
+     "rr": 10,
+     "lufs": -27.28,
+     "frames": 1072200
+    },
+    {
+     "rr": 10,
+     "lufs": -23.86,
+     "frames": 1152000
+    }
+   ]
+  },
+  "tom4": {
+   "prefix": "nk-tom4",
+   "layers": [
+    {
+     "rr": 10,
+     "lufs": -24.85,
+     "frames": 960000
+    },
+    {
+     "rr": 10,
+     "lufs": -24.67,
+     "frames": 1072200
+    },
+    {
+     "rr": 10,
+     "lufs": -24.36,
+     "frames": 1248000
+    }
+   ]
+  },
+  "tom5": {
+   "prefix": "nk-tom5",
+   "layers": [
+    {
+     "rr": 10,
+     "lufs": -26.87,
+     "frames": 932831
+    },
+    {
+     "rr": 10,
+     "lufs": -24.44,
+     "frames": 1072200
+    },
+    {
+     "rr": 10,
+     "lufs": -25.09,
+     "frames": 1183243
+    }
+   ]
+  },
+  "hhPedal": {
+   "prefix": "nk-hhPedal",
+   "layers": [
+    {
+     "rr": 10,
+     "lufs": -24.69,
+     "frames": 240000
+    }
+   ]
+  },
+  "hhClosed": {
+   "prefix": "nk-hhClosed",
+   "layers": [
+    {
+     "rr": 10,
+     "lufs": -19.87,
+     "frames": 288000
+    },
+    {
+     "rr": 10,
+     "lufs": -20.81,
+     "frames": 288000
+    },
+    {
+     "rr": 10,
+     "lufs": -19.87,
+     "frames": 288000
+    }
+   ]
+  },
+  "hhOpen": {
+   "prefix": "nk-hhOpen",
+   "layers": [
+    {
+     "rr": 10,
+     "lufs": -17.35,
+     "frames": 768000
+    },
+    {
+     "rr": 10,
+     "lufs": -17.44,
+     "frames": 768000
+    },
+    {
+     "rr": 10,
+     "lufs": -17.67,
+     "frames": 768000
+    }
+   ]
+  },
+  "ride": {
+   "prefix": "nk-ride",
+   "layers": [
+    {
+     "rr": 10,
+     "lufs": -28.92,
+     "frames": 1248000
+    },
+    {
+     "rr": 10,
+     "lufs": -26.46,
+     "frames": 1248000
+    },
+    {
+     "rr": 10,
+     "lufs": -27.17,
+     "frames": 1248000
+    }
+   ]
+  },
+  "rideBell": {
+   "prefix": "nk-rideBell",
+   "layers": [
+    {
+     "rr": 10,
+     "lufs": -20.29,
+     "frames": 1152000
+    }
+   ]
+  },
+  "crashL": {
+   "prefix": "nk-crashL",
+   "layers": [
+    {
+     "rr": 10,
+     "lufs": -18.24,
+     "frames": 1440000
+    },
+    {
+     "rr": 10,
+     "lufs": -18.31,
+     "frames": 1440000
+    },
+    {
+     "rr": 10,
+     "lufs": -16.83,
+     "frames": 1440000
+    }
+   ]
+  },
+  "crashR": {
+   "prefix": "nk-crashR",
+   "layers": [
+    {
+     "rr": 10,
+     "lufs": -15.85,
+     "frames": 1440000
+    },
+    {
+     "rr": 10,
+     "lufs": -18.42,
+     "frames": 1440000
+    },
+    {
+     "rr": 10,
+     "lufs": -16.17,
+     "frames": 1440000
+    }
+   ]
+  },
+  "splash": {
+   "prefix": "nk-splash",
+   "layers": [
+    {
+     "rr": 10,
+     "lufs": -20.31,
+     "frames": 864000
+    },
+    {
+     "rr": 10,
+     "lufs": -20.08,
+     "frames": 864000
+    }
+   ]
+  },
+  "china": {
+   "prefix": "nk-china",
+   "layers": [
+    {
+     "rr": 10,
+     "lufs": -21.93,
+     "frames": 1248000
+    },
+    {
+     "rr": 10,
+     "lufs": -19.05,
+     "frames": 1248000
+    },
+    {
+     "rr": 10,
+     "lufs": -17.04,
+     "frames": 1248000
+    }
+   ]
+  }
+ }
+}
