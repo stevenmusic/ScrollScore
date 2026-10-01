@@ -5605,7 +5605,8 @@ function computeGuitarDynamics(){
     lastT = ev.tWhole;
     drift = 0.8 * drift + 0.6 * (seededRand01(k * 3.17 + 5.1) - 0.5) * 9;
     base += drift;
-    const strum = ns.length >= 4 && ns.every(n => n.rollIndex == null);
+    // 刷弦只認 5 個音以上(4 個音的和弦在指彈/古典是四指同時撥,當成刷弦會被逐弦掃開、上刷時低音還會不見)
+    const strum = ns.length >= 5 && ns.every(n => n.rollIndex == null);
     const up = strum && offBeat;
     const gap = Math.max(0.006, Math.min(0.016, 0.014 - (base - 70) * 0.00012));
     ns.forEach((n, i) => {
@@ -5626,7 +5627,7 @@ function computeGuitarDynamics(){
         n.gdt = j * gap * (0.85 + 0.3 * seededRand01(k * 9.13 + i));
       } else if (ns.length > 1) {
         v += i === ns.length - 1 ? 5 : i === 0 ? 1 : -5;
-        n.gdt = n.rollIndex == null ? seededRand01(k * 5.71 + m * 0.291) * 0.004 : 0;
+        n.gdt = n.rollIndex == null ? seededRand01(k * 5.71 + m * 0.291) * (ns.length >= 4 ? 0.006 : 0.004) : 0;
       } else {
         v += 3;
         if (melodyHist.length) v += Math.max(-4, Math.min(4, (m - melodyHist.reduce((s, x) => s + x, 0) / melodyHist.length) * 0.35));
