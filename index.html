@@ -1310,6 +1310,8 @@ const I18N = {
     statusBgRemoved: "已移除背景圖片",
     statusLoadingDrumKit: "載入鼓音色中…",
     statusDrumKitReady: "鼓音色就緒",
+    statusLoadingPiano: "載入鋼琴音色中…{pct}%",
+    statusPianoReady: "鋼琴音色就緒(16 層力度,{n} 個取樣)",
     statusExportRangeInvalid: "匯出區間不正確,請確認開始/結束時間(結束需晚於開始至少0.5秒)",
     errScoreNotFound: "找不到樂譜",
     errRasterizeFailed: "樂譜點陣化失敗",
@@ -1514,6 +1516,8 @@ const I18N = {
     statusBgRemoved: "Background image removed",
     statusLoadingDrumKit: "Loading drum sounds…",
     statusDrumKitReady: "Drum sounds ready",
+    statusLoadingPiano: "Loading piano sounds… {pct}%",
+    statusPianoReady: "Piano ready (16 velocity layers, {n} samples)",
     statusExportRangeInvalid: "Invalid export range — check start/end times (end must be at least 0.5s after start)",
     errScoreNotFound: "Score not found",
     errRasterizeFailed: "Failed to rasterize score",
@@ -2258,6 +2262,8 @@ async function renderScore(xmlText){
 
   buildTimeline();
   computeDrumSongDynamics();
+  computePianoDynamics();
+  if (currentInstrument() === "piano" && pianoManPromise && !pianoFallback) loadPianoSamples(); // 移調/改速度記號後用到的音可能不同
   rebuildKeyboardRange();
   resizeKeyboardCanvas(); // 可見白鍵數量隨這首曲子的音域改變,鍵盤高度要跟著重新算才會維持真實比例
   drawKeyboardLive(0); // resize會清空canvas畫面,不補畫的話鍵盤要等到按下播放才會出現,載入完成後應該馬上看到鍵盤
@@ -4562,6 +4568,8 @@ function startAudioFrom(fromSec){
   }
   const calib = useCalib();
   computeDrumPerformance(); // 依目前的速度重算(速度會影響「越快越輕」)
+  pianoResetVoices();
+  if (currentInstrument() === "piano" && $("legatoPedal").checked) pianoSchedulePedalNoise(fromSec, Infinity, sec => startCtxTime + sec);
   let errCount = 0, lastErr = null;
   for (const ev of events) {
     const t = posToSec(ev.tWhole, calib);
@@ -4582,7 +4590,7 @@ function startAudioFrom(fromSec){
           : harmonyEndSec;
         const noteTech = (isGuitar && n.glissTargetFreq != null) ? Object.assign({}, tech, { glissTargetFreq: n.glissTargetFreq }) : tech;
         if (n.drum) { const h = humanizeDrumHit(ev, n); scheduleDrum(n.key, startCtxTime + t + rollT + h.dt, h); }
-        else scheduleNote(n.freq, startCtxTime + t + rollT, durSec, ev.legato, ev.pedalOn, chordAnchors, noteHarmonyEndSec, ev.artic, noteTech, n.staff);
+        else scheduleNote(n.freq, startCtxTime + t + rollT + (n.pdt || 0), durSec, ev.legato, ev.pedalOn, chordAnchors, noteHarmonyEndSec, ev.artic, noteTech, n.staff, n.pvel);
       } catch (e) {
         errCount++; lastErr = e;
         console.error("排程音符失敗:", e);
@@ -4659,6 +4667,7 @@ const instrumentLoading = {};   // instKey -> Promise
 
 const INSTRUMENT_I18N_KEY = { piano: "instPiano", guitar: "instGuitar", guitarnylon: "instGuitarNylon", drum: "instDrum" };
 function loadInstrumentSamples(instKey){
+  if (instKey === "piano" && !pianoFallback) return loadPianoSamples();   // 16 層力度的鋼琴;讀不到才退回下面的 Tone.js 版本
   const cfg = REAL_INSTRUMENTS[instKey];
   if (!cfg) return Promise.resolve();
   if (instrumentBuffers[instKey] || instrumentLoading[instKey]) return instrumentLoading[instKey] || Promise.resolve();
@@ -4685,6 +4694,343 @@ function loadInstrumentSamples(instKey){
   });
   return instrumentLoading[instKey];
 }
+
+/* ── 鋼琴:Accurate-Salamander Grand Piano V6.2(Yamaha C5,16 層力度)──────────────
+   原本用的是 Tone.js 託管的 Salamander:每 3 個半音一個取樣、只有 1 個力度層、MP3,
+   輕彈重彈都是同一份錄音只是大小聲不同,只能靠低通濾波器假裝「輕彈比較暗」。
+   這裡換成同一台鋼琴完整的 16 層力度版本,用 Accurate-Salamander 專案重新整理過的版本
+   (專業調音師逐音重新調音、每個取樣的音量與音色連續性重新校正;實測相鄰音的音量落差
+   從原版平均 1.7dB、最大 14.6dB 降到 0.14dB / 0.5dB),另外還有:
+   - 制音器落下時的弦共鳴(harmL/harmS)與琴鍵放開的機械聲(rel),依按住多久衰減(原廠 rt_decay)
+   - 踏板踩下/放開的機械聲
+   - F#6 以上沒有制音器,放開後會繼續響
+   取樣放在本 repo 的 piano/(48k/16-bit FLAC + manifest.json),讀不到才退回 raw.githubusercontent。
+   全部載入解碼後約 1.5GB,所以只載入「這首曲子用得到的音 × 力度層」,超過裝置記憶體預算時
+   依序:截短到曲子實際需要的長度 → 改單聲道 → 合併最少用到的力度層(找最近的層代替)。 */
+const PIANO_BASES = ["piano/", "https://raw.githubusercontent.com/stevenmusic/ScrollScore/main/piano/"];
+let PIANO_GAIN = 1.4;          // 實測:整首約 -11 LUFS、完全不削波,p→ff 仍有約 8dB 差(再大聲限幅器就開始削波、力度被壓平)
+const PIANO_VERB_SEND = 0.5;     // 殘響送出量(踩踏板時 ×1.7,琴弦全部放開共鳴、空間感變大)
+let PIANO_RELEASE_TRIM = 0;    // 放鍵弦共鳴的額外增減(dB)
+const PIANO_NOTE_NAMES = ["C","Cs","D","Ds","E","F","Fs","G","Gs","A","As","B"];
+let pianoMan = null, pianoBase = null, pianoManPromise = null, pianoLoading = null, pianoGen = 0, pianoFallback = false;
+const pianoBuf = {};      // "C4-v8" -> { buf, len, ch }
+const pianoAux = {};      // "harmLC4" / "rel40" / "pedalD1" -> AudioBuffer
+function pianoNoteName(m){ return PIANO_NOTE_NAMES[((m % 12) + 12) % 12] + (Math.floor(m / 12) - 1); }
+function pianoCenterFor(m){ return Math.max(21, Math.min(108, 21 + 3 * Math.round((m - 21) / 3))); }
+function pianoLayerFor(vel){
+  const r = pianoMan ? pianoMan.velRanges : [[1, 127]];
+  for (let i = 0; i < r.length; i++) if (vel <= r[i][1] + 0.5) return i + 1;
+  return r.length;
+}
+/* 原廠(Accurate-Salamander V6.2)的力度曲線:各層錄音已校正成一樣大聲,大小聲完全由
+   amp_veltrack 98.5 決定:音量 = 0.015 + 0.985 × (力度/127)²。輕重的「音色」則由 16 層錄音提供 */
+function pianoVelGain(vel){ const v = Math.max(1, Math.min(127, vel)) / 127; return 0.015 + 0.985 * v * v; }
+/* 制音器落下後的衰減時間常數:低音弦粗重、制音器壓不太住,尾巴約 1 秒;高音 0.3 秒內就停 */
+function pianoDamperTau(m){ return m <= 48 ? 0.16 - (m - 21) / 27 * 0.06 : m <= 72 ? 0.10 - (m - 48) / 24 * 0.04 : Math.max(0.045, 0.06 - (m - 72) / 16 * 0.015); }
+function isIOSDevice(){ return /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1); }
+function pianoMemoryBudgetBytes(){
+  const dm = navigator.deviceMemory;
+  if (isIOSDevice()) return 220e6;
+  if (dm && dm <= 2) return 120e6;
+  if (dm && dm <= 4) return 280e6;
+  return 1200e6;
+}
+const PIANO_MAX_VOICES = (isIOSDevice() || (navigator.deviceMemory && navigator.deviceMemory <= 4)) ? 64 : 128;
+
+/* ── 鋼琴的力度:模擬鋼琴家實際彈奏的輕重 ──────────────────
+   1) 譜上的力度記號(pp~fff)與漸強/漸弱髮夾;sf/sfz/fz 這類只強調當下那個音,不改變之後的力度
+   2) 聲部層次:右手最高音是旋律(較重)、右手和弦內聲部較輕、左手伴奏較輕、左手最低音(低音線)稍重
+   3) 拍子的輕重:小節第一拍最重、正拍次之、反拍與十六分音符較輕
+   4) 旋律起伏:旋律往高處走時自然加重,往下走放輕
+   5) 樂句:以 4 小節為一句,中段稍微推上去、句首句尾收一點
+   6) 重音/強音記號、長音稍重、很短的音稍輕
+   7) 左右手各自緩慢的起伏(AR(1))+ 每個音一點點隨機,和弦的音不會完全同時(最多晚 7ms)
+   所有隨機都以位置為種子,同一首曲子每次播放/匯出都一樣 */
+const PIANO_MOMENTARY = { sf: 14, sfz: 16, sffz: 20, fz: 14, rf: 8, rfz: 10, sfp: 16, fp: 14 };
+function pianoLevelAt(t){
+  if (!scoreDynMarks.length || t == null) return 0;
+  const isLevel = d => d.mark in DYN_MARK_LEVEL && !(d.mark in PIANO_MOMENTARY) || d.mark === "fp" || d.mark === "sfp";
+  const lvOf = d => (d.mark === "fp" || d.mark === "sfp") ? DYN_MARK_LEVEL.p : DYN_MARK_LEVEL[d.mark];
+  const levelAt = x => { let lv = 0; for (const d of scoreDynMarks) if (d.t <= x + 1e-6 && isLevel(d)) lv = lvOf(d); return lv; };
+  for (const w of scoreWedges) {
+    if (t >= w.start && t < w.end && w.end > w.start) {
+      const a = levelAt(w.start);
+      const next = scoreDynMarks.find(d => d.t >= w.end - 1e-6 && isLevel(d));
+      const b = next ? lvOf(next) : a + (w.dir === "cresc" ? 0.1 : -0.1);
+      return a + (b - a) * (t - w.start) / (w.end - w.start);
+    }
+  }
+  return levelAt(t);
+}
+function computePianoDynamics(){
+  const multiStaff = events.some(ev => ev.notes.some(n => !n.drum && n.freq && (n.staff || 1) > 1));
+  const hasMarks = scoreDynMarks.length > 0;
+  const drift = { 1: 0, 2: 0 };
+  const melodyHist = [];
+  let k = 0, bar = -1, lastM = null, lastPos = -1;
+  for (const ev of events) {
+    if (ev.mIdx !== lastM || (ev.barPos != null && ev.barPos < lastPos - 1e-6)) bar++;
+    lastM = ev.mIdx; if (ev.barPos != null) lastPos = ev.barPos;
+    const pitched = ev.notes.filter(n => !n.drum && n.freq);
+    if (!pitched.length) continue;
+    k++;
+    let base = 70 + 150 * pianoLevelAt(ev.srcT);
+    const mom = ev.srcT != null && scoreDynMarks.find(d => d.mark in PIANO_MOMENTARY && Math.abs(d.t - ev.srcT) < 1e-4);
+    if (mom) base += PIANO_MOMENTARY[mom.mark];
+    const a = ev.artic;
+    if (a) base += a.strongAccent ? 16 : a.accent ? 11 : a.softAccent ? 5 : 0;
+    if (ev.barPos != null && ev.beatLen > 0) {
+      const bf = ev.barPos / ev.beatLen, frac = Math.abs(bf - Math.round(bf));
+      if (ev.barPos < 1e-4) base += 3;
+      else if (frac < 0.02) base += Math.round(bf) % 2 === 0 ? 1.5 : 0.5;
+      else if (Math.abs(frac - 0.5) < 0.02) base -= 1.5;
+      else base -= 3;
+      const p = ((bar % 4) + (ev.barLen > 0 ? Math.min(1, ev.barPos / ev.barLen) : 0)) / 4;
+      base += (4 * Math.sin(Math.PI * p) - 2) * (hasMarks ? 0.5 : 1);
+    }
+    for (const h of [1, 2]) drift[h] = 0.8 * drift[h] + 0.6 * (seededRand01(k * 3.17 + h * 11.3) - 0.5) * 10;
+    const byStaff = {};
+    for (const n of pitched) (byStaff[n.staff || 1] = byStaff[n.staff || 1] || []).push(n);
+    const chord = pitched.length > 1;
+    for (const st of Object.keys(byStaff).map(Number)) {
+      const ns = byStaff[st].sort((x, y) => x.freq - y.freq);
+      const top = ns[ns.length - 1], bottom = ns[0];
+      const rh = st === 1 || !multiStaff;
+      for (const n of ns) {
+        const m = freqToMidi(n.freq);
+        let v = base + drift[rh ? 1 : 2];
+        if (rh) {
+          if (n === top) {
+            v += ns.length > 1 ? 6 : 4;
+            if (melodyHist.length) v += Math.max(-4, Math.min(4, (m - melodyHist.reduce((s, x) => s + x, 0) / melodyHist.length) * 0.35));
+            melodyHist.push(m); if (melodyHist.length > 8) melodyHist.shift();
+          } else v -= 5;
+        } else {
+          v -= 4;
+          if (ns.length > 1) v += n === bottom ? 3 : -3;
+        }
+        if (n.durWhole >= 0.5) v += 2; else if (n.durWhole <= 1 / 16 + 1e-6) v -= 2;
+        v += (seededRand01(k * 7.31 + m * 0.137) - 0.5) * 5;
+        n.pvel = Math.max(8, Math.min(124, v));
+        n.pdt = chord && !(rh && n === top) && n.rollIndex == null ? seededRand01(k * 5.71 + m * 0.291) * 0.007 : 0;
+      }
+    }
+  }
+}
+
+/* 這首曲子需要哪些(音 × 力度層),以及每個最長要響多久(截短時用) */
+function pianoComputeNeeds(){
+  const calib = useCalib();
+  const need = new Map();
+  for (const ev of events) {
+    const t = posToSec(ev.tWhole, calib);
+    const hEnd = ev.harmonyEndWhole != null ? posToSec(ev.harmonyEndWhole, calib) : null;
+    for (const n of ev.notes) {
+      if (n.drum || !n.freq) continue;
+      const c = pianoCenterFor(Math.round(freqToMidi(n.freq))), L = pianoLayerFor(n.pvel || 70);
+      const key = pianoNoteName(c) + "-v" + L;
+      const sound = Math.max(wholeToSec(n.durWhole), hEnd != null ? hEnd - t : 0);
+      const e = need.get(key) || { key, c, L, uses: 0, sec: 0 };
+      e.uses++; e.sec = Math.max(e.sec, sound); need.set(key, e);
+    }
+  }
+  return need;
+}
+function pianoPlan(need, auxBytes){
+  const budget = pianoMemoryBudgetBytes() - (auxBytes || 0), sr = audioCtx.sampleRate;
+  const full = p => pianoMan.samples[p.key].frames / 48000;
+  let plan = [...need.values()].filter(p => pianoMan.samples[p.key]).map(p => Object.assign({}, p, { len: full(p), ch: 2 }));
+  const bytes = () => plan.reduce((a, p) => a + p.len * sr * 4 * p.ch, 0);
+  if (bytes() > budget) plan.forEach(p => { p.len = Math.min(full(p), Math.max(2.5, p.sec * 1.6 + 1.5)); });
+  if (bytes() > budget) plan.forEach(p => { p.ch = 1; });
+  while (bytes() > budget) {
+    const per = {}; for (const p of plan) per[p.c] = (per[p.c] || 0) + 1;
+    const cand = plan.filter(p => per[p.c] > 1);
+    if (!cand.length) {
+      if (plan.every(p => p.len <= 1.5)) break;
+      plan.forEach(p => { p.len = Math.max(1.5, p.len * 0.8); });
+      continue;
+    }
+    cand.sort((x, y) => x.uses - y.uses);
+    plan = plan.filter(p => p !== cand[0]);
+  }
+  return plan;
+}
+async function fetchPianoBuffer(file, lenSec, ch){
+  const res = await fetch(pianoBase + file);
+  if (!res.ok) throw new Error("HTTP " + res.status);
+  const buf = await audioCtx.decodeAudioData(await res.arrayBuffer());
+  const n = Math.min(buf.length, Math.round((lenSec || 1e9) * buf.sampleRate));
+  if (n === buf.length && (!ch || ch === buf.numberOfChannels)) return buf;
+  const nc = ch || buf.numberOfChannels;
+  const out = audioCtx.createBuffer(nc, n, buf.sampleRate);
+  const fade = Math.min(n >> 2, Math.round(0.8 * buf.sampleRate));
+  for (let c = 0; c < nc; c++) {
+    const d = out.getChannelData(c);
+    if (nc === buf.numberOfChannels) d.set(buf.getChannelData(c).subarray(0, n));
+    else { const l = buf.getChannelData(0), r = buf.getChannelData(Math.min(1, buf.numberOfChannels - 1)); for (let i = 0; i < n; i++) d[i] = 0.5 * (l[i] + r[i]); }
+    if (n < buf.length) for (let i = 0; i < fade; i++) d[n - fade + i] *= Math.pow(Math.cos(i / fade * Math.PI / 2), 2);
+  }
+  return out;
+}
+let pianoLoadingFor = null;
+function loadPianoSamples(){
+  ensureAudio();
+  if (pianoLoading && pianoLoadingFor === events) return pianoLoading;   // 同一份樂譜已經在載/載好了
+  pianoLoadingFor = events;
+  if (!pianoManPromise) pianoManPromise = (async () => {
+    for (const base of PIANO_BASES) {
+      try { const r = await fetch(base + "manifest.json"); if (r.ok) { pianoMan = await r.json(); pianoBase = base; return true; } } catch (e) {}
+    }
+    return false;
+  })();
+  const gen = ++pianoGen;
+  pianoLoading = (async () => {
+    if (!await pianoManPromise) { pianoFallback = true; return loadInstrumentSamples("piano"); }
+    if (gen !== pianoGen) return;
+    computePianoDynamics();
+    const need = pianoComputeNeeds();
+    // 放鍵共鳴/機械聲/踏板聲也算進記憶體預算;預算有限的裝置這些改單聲道
+    const auxMono = pianoMemoryBudgetBytes() < 1e9;
+    const aux = new Set(["pedalD1", "pedalD2", "pedalU1", "pedalU2"]);
+    for (const p of need.values()) aux.add((p.L >= pianoLayerFor(45) ? "harmL" : "harmS") + pianoNoteName(p.c));
+    for (const ev of events) for (const n of ev.notes) if (!n.drum && n.freq) {
+      const m = Math.max(21, Math.min(108, Math.round(freqToMidi(n.freq)))); aux.add("rel" + (m - 20));
+    }
+    const auxList = [...aux].filter(a => pianoMan.aux[a]);
+    const auxBytes = auxList.reduce((t, a) => t + pianoMan.aux[a].frames / 48000 * audioCtx.sampleRate * 4 * (auxMono ? 1 : 2), 0);
+    const plan = pianoPlan(need, auxBytes);
+    const want = new Set(plan.map(p => p.key));
+    for (const k of Object.keys(pianoBuf)) if (!want.has(k)) delete pianoBuf[k];   // 換曲/移調後用不到的釋放掉
+    // 先每個音各載一層(用最多次的那層),馬上可以播;再補其餘的層
+    const seen = new Set(), first = [], rest = [];
+    for (const p of [...plan].sort((x, y) => y.uses - x.uses)) {
+      const have = pianoBuf[p.key];
+      if (have && have.len >= p.len - 0.01 && have.ch >= p.ch) { seen.add(p.c); continue; }
+      (seen.has(p.c) ? rest : first).push(p); seen.add(p.c);
+    }
+    for (const a of Object.keys(pianoAux)) if (!aux.has(a)) delete pianoAux[a];
+    const auxJobs = auxList.filter(a => !pianoAux[a]).map(a => async () => {
+      try { const b = await fetchPianoBuffer(a + ".flac", null, auxMono ? 1 : null); if (gen === pianoGen) pianoAux[a] = b; } catch (e) {}
+    });
+    const total = first.length + rest.length + auxJobs.length;
+    let done = 0;
+    const tick = () => { done++; if (gen === pianoGen && done % 8 === 0) setStatus(T("statusLoadingPiano", { pct: Math.round(done / total * 100) })); };
+    const job = p => async () => {
+      try { const b = await fetchPianoBuffer(pianoFileFor(p.c, p.L) + ".flac", p.len, p.ch); if (gen === pianoGen) pianoBuf[p.key] = { buf: b, len: p.len, ch: p.ch, c: p.c, L: p.L }; } catch (e) {}
+      tick();
+    };
+    if (total) setStatus(T("statusLoadingPiano", { pct: 0 }));
+    await runLimited(first.map(job), 6);
+    await runLimited([...auxJobs.map(j => async () => { await j(); tick(); }), ...rest.map(job)], 6);
+    if (gen === pianoGen) setStatus(T("statusPianoReady", { n: Object.keys(pianoBuf).length }));
+  })();
+  return pianoLoading;
+}
+function pianoFileFor(c, L){ return "pf-" + pianoNoteName(c) + "-v" + L; }
+/* 找這個音、這個力度層的取樣;還沒載到/預算不夠沒載的就用最近的層,整個音都沒有就用隔壁的音 */
+function pianoSampleFor(m, L){
+  const c0 = pianoCenterFor(m);
+  for (const c of [c0, c0 + (m >= c0 ? 3 : -3), c0 - (m >= c0 ? 3 : -3)]) {
+    for (let d = 0; d < 16; d++) for (const l of d ? [L - d, L + d] : [L]) {
+      const s = l >= 1 && l <= 16 && pianoBuf[pianoNoteName(c) + "-v" + l];
+      if (s) return s;
+    }
+  }
+  return null;
+}
+let pianoVoices = [], pianoLastByKey = {};
+function pianoResetVoices(){ pianoVoices = []; pianoLastByKey = {}; }
+function pianoConnect(node, sendAmt){
+  node.connect(masterGain);
+  if (reverbBus && sendAmt) { const s = audioCtx.createGain(); s.gain.value = sendAmt; node.connect(s); s.connect(reverbBus); }
+}
+function pianoOneShot(buf, when, gain, rate, sendAmt){
+  const src = audioCtx.createBufferSource(); src.buffer = buf; src.playbackRate.value = rate || 1;
+  const g = audioCtx.createGain(); g.gain.value = gain;
+  src.connect(g); pianoConnect(g, sendAmt);
+  src.start(when); scheduled.push(src);
+  return g;
+}
+function pianoKill(v, at){
+  v.g.gain.cancelScheduledValues(at);
+  v.g.gain.setTargetAtTime(0, at, 0.04);
+  v.end = at + 0.3;
+  try { v.src.stop(at + 0.35); } catch (e) {}
+  for (const g of v.rel) { g.gain.cancelScheduledValues(0); g.gain.setValueAtTime(0, 0); }
+}
+function playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel){
+  if (!pianoMan) return false;
+  const tm = freqToMidi(freq), m = Math.round(tm);
+  if (vel == null) vel = 70;
+  const s = pianoSampleFor(m, pianoLayerFor(vel));
+  if (!s) return false;
+  const rate = Math.pow(2, (tm - s.c + ((pianoMan.tune[m] || 0) / 100)) / 12);
+  const gain = PIANO_GAIN * pianoVelGain(vel);
+  let keyUp = Math.max(dur, 0.05);
+  if (artic) {
+    if (artic.staccatissimo) keyUp = dur * 0.25;
+    else if (artic.spiccato) keyUp = dur * 0.3;
+    else if (artic.staccato) keyUp = dur * 0.5;
+    else if (artic.detachedLegato) keyUp = dur * 0.75;
+    if (artic.tenuto) keyUp = Math.max(keyUp, dur * 0.98);
+    if (artic.fermata) keyUp *= 1.8;
+  }
+  keyUp = when + Math.max(0.04, keyUp) + (legato && !pedal ? 0.03 : 0);
+  const damperAt = harmonyEndSec != null ? Math.max(harmonyEndSec, keyUp) : keyUp;
+  const noDamper = m >= 89;
+  const tau = noDamper ? 3.0 : pianoDamperTau(m);   // 沒有制音器的高音:放開也繼續自然衰減(原廠 ampeg_release=3)
+  const bufEnd = when + s.buf.duration / rate;
+  const end = Math.min(bufEnd, damperAt + tau * 7);
+  // 同一個鍵再彈一次:前一個音被琴槌重新敲下去打斷(原廠 note_polyphony=1)
+  const prev = pianoLastByKey[m];
+  if (prev && prev.end > when) pianoKill(prev, when);
+  // 同時發聲數上限:超過就讓最早的音收掉
+  pianoVoices = pianoVoices.filter(v => v.end > when);
+  while (pianoVoices.length >= PIANO_MAX_VOICES) pianoKill(pianoVoices.shift(), when);
+  const src = audioCtx.createBufferSource();
+  src.buffer = s.buf; src.playbackRate.value = rate;
+  const g = audioCtx.createGain();
+  g.gain.setValueAtTime(gain, when);
+  if (damperAt < end) g.gain.setTargetAtTime(0, damperAt, tau);
+  src.connect(g);
+  const sustained = !!pedal || harmonyEndSec != null;
+  pianoConnect(g, PIANO_VERB_SEND * (sustained ? 1.7 : 1));
+  src.start(when); src.stop(end + 0.05);
+  scheduled.push(src);
+  const v = { src, g, end, rel: [] };
+  // 制音器落下:弦共鳴(harm)+ 放鍵機械聲(rel),原廠音量是相對原版錄音,用 d 換算到這套校正後的音量;
+  // 按得越久共鳴越小(rt_decay dB/秒)。音已經自然消失或沒有制音器的高音就不加
+  if (!noDamper && damperAt < bufEnd - 0.05) {
+    const held = damperAt - when, info = pianoMan.samples[pianoNoteName(s.c) + "-v" + s.L], d = info ? info.d : 0;
+    const big = vel >= 45, hb = pianoAux[(big ? "harmL" : "harmS") + pianoNoteName(s.c)];
+    const rt = big ? (m <= 28 ? 6 : m <= 37 ? 7 : m <= 49 ? 8 : 9) : 7;
+    if (hb) v.rel.push(pianoOneShot(hb, damperAt, gain * Math.pow(10, (d + (big ? -4 : 0) - rt * held + PIANO_RELEASE_TRIM) / 20), rate, PIANO_VERB_SEND));
+    const rb = pianoAux["rel" + (Math.max(21, Math.min(108, m)) - 20)];
+    if (rb) v.rel.push(pianoOneShot(rb, damperAt, gain * Math.pow(10, (d - 37 - 2 * held) / 20), 1, PIANO_VERB_SEND));
+  }
+  pianoLastByKey[m] = v; pianoVoices.push(v);
+  return true;
+}
+/* 踏板機械聲:踩下(pedalD)、放開(pedalU),只有譜上真的寫了踏板才加 */
+function pianoSchedulePedalNoise(fromSec, toSec, timeToCtx){
+  if (!pianoMan || !pianoRanges().length) return;
+  const calib = useCalib(), d16 = -1.5;
+  const g = PIANO_GAIN * Math.pow(10, (-20 - d16) / 20) * 0.6;
+  let cur = null, k = 0;
+  const fire = (name, sec, gg) => { if (sec < fromSec - 0.01 || sec > toSec) return; const b = pianoAux[name]; if (b) pianoOneShot(b, timeToCtx(sec), gg, 1, PIANO_VERB_SEND); };
+  for (const ev of events) {
+    const r = ev.pedalOn ? pedalRanges.find(r => ev.tWhole >= r.start && ev.tWhole < r.end) : null;
+    if (r !== cur) {
+      const t = posToSec(ev.tWhole, calib);
+      if (cur) fire("pedalU" + (1 + (k & 1)), r ? t - 0.06 : posToSec(cur.end, calib), g);
+      if (r) fire("pedalD" + (1 + (k & 1)), t + 0.05, g * 0.8);
+      cur = r; k++;
+    }
+  }
+  if (cur) fire("pedalU" + (1 + (k & 1)), posToSec(cur.end, calib), g);
+}
+function pianoRanges(){ return pedalRanges || []; }
 
 function freqToMidi(freq){ return 69 + 12 * Math.log2(freq / 440); }
 
@@ -5430,7 +5776,7 @@ function scheduleTremolo(freq, when, dur, marks, legato, pedal, chordAnchors, ha
     scheduleNote(freq, pulseWhen, actualPulseSec, legato, pedal, chordAnchors, isLast ? harmonyEndSec : null, isLast ? artic : null, null, staff);
   }
 }
-function scheduleNote(freq, when, dur, legato, pedal, chordAnchors, harmonyEndSec, artic, tech, staff){
+function scheduleNote(freq, when, dur, legato, pedal, chordAnchors, harmonyEndSec, artic, tech, staff, vel){
   if (!$("legatoPedal").checked) { legato = false; pedal = false; harmonyEndSec = null; tech = null; }
   const inst = currentInstrument();
   const isGuitarInst = inst === "guitar" || inst === "guitarnylon";
@@ -5439,6 +5785,7 @@ function scheduleNote(freq, when, dur, legato, pedal, chordAnchors, harmonyEndSe
     scheduleTremolo(freq, when, dur, tech.tremolo, legato, pedal, chordAnchors, harmonyEndSec, artic, staff);
     return;
   }
+  if (inst === "piano" && !pianoFallback && playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel)) return;
   if (REAL_INSTRUMENTS[inst] && playSampledInstrument(inst, freq, when, dur, legato, pedal, chordAnchors, harmonyEndSec, artic, isGuitarInst ? tech : null, staff)) return;
   // 真實取樣尚未載入完成或缺失時,退回合成音色,絕不會沒有聲音
   switch (inst) {
@@ -6899,6 +7246,7 @@ async function exportVideo(cfg){
   stopPlayback();
   ensureAudio();
   if (kitLoading) await kitLoading;
+  if (pianoLoading && currentInstrument() === "piano") await pianoLoading;
   await ensureTitleFontsLoaded(cfg); // 保險:萬一使用者看到預覽秒按確認,字型下載可能還沒跑完
   $("exportOverlayTitle").textContent = T("exportRenderingPct", { pct: 0 });
   $("exportOverlay").classList.add("show");
@@ -6942,6 +7290,7 @@ async function exportVideo(cfg){
 
     const calib = useCalib();
     computeDrumPerformance();
+    pianoResetVoices();
     // 匯出區間(手動輸入的開始/結束時間);沒指定就是整首曲子,跟以前行為一樣
     const rangeStart = cfg.startSec != null ? Math.max(0, cfg.startSec) : 0;
     const rangeEnd = cfg.endSec != null ? Math.min(totalSec(), cfg.endSec) : totalSec();
@@ -6953,6 +7302,7 @@ async function exportVideo(cfg){
     if (importedAudioBuffer) {
       scheduleImportedAudio(startCtxTime, rangeStart); // 有匯入音檔就整段用它,不逐音符排程合成/取樣音色
     } else {
+      if (currentInstrument() === "piano" && $("legatoPedal").checked) pianoSchedulePedalNoise(rangeStart, rangeEnd, sec => startCtxTime + sec - rangeStart);
       const isGuitar = currentInstrument() === "guitar" || currentInstrument() === "guitarnylon";
       for (const ev of events) {
         const t = posToSec(ev.tWhole, calib);
@@ -6970,7 +7320,7 @@ async function exportVideo(cfg){
             : harmonyEndSec;
           const noteTech = (isGuitar && n.glissTargetFreq != null) ? Object.assign({}, tech, { glissTargetFreq: n.glissTargetFreq }) : tech;
           if (n.drum) { const h = humanizeDrumHit(ev, n); scheduleDrum(n.key, startCtxTime + (t - rangeStart) + rollT + h.dt, h); }
-          else scheduleNote(n.freq, startCtxTime + (t - rangeStart) + rollT, durSec, ev.legato, ev.pedalOn, chordAnchors, noteHarmonyEndSec, ev.artic, noteTech, n.staff);
+          else scheduleNote(n.freq, startCtxTime + (t - rangeStart) + rollT + (n.pdt || 0), durSec, ev.legato, ev.pedalOn, chordAnchors, noteHarmonyEndSec, ev.artic, noteTech, n.staff, n.pvel);
         }
       }
     }
