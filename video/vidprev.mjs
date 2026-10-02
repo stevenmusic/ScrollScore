@@ -23,5 +23,5 @@ async function make(score, inst, out, dims, title, subtitle, sec, kb) {
 }
 await make('mozart_k545_movement1_exposition.mxl', 'piano', 'vid_export_16x9.png', { W: 1920, H: 1080, scoreH: 440 }, 'Sonata in C, K.545', 'W. A. Mozart', 7, true);
 await make('groove_dyn2.musicxml', 'drum', 'vid_export_9x16.png', { W: 1080, H: 1920, scoreH: 380 }, 'Groove Study', 'Drum Set', 3, true);
-await make('bach_bwv846.mxl', 'piano', 'vid_export_1x1.png', { W: 1080, H: 1080, scoreH: 400 }, 'Prelude in C, BWV 846', 'J. S. Bach', 10, false);
+await make('bach_bwv846.mxl', 'piano', 'vid_export_1x1.png', { W: 1080, H: 1080, scoreH: 400 }, 'Prelude in C, BWV 846', 'J. S. Bach', 77, false);
 await b.close();
