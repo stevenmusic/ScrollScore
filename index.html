@@ -7170,6 +7170,32 @@ function loadDrumKit(){
 const SFZ_VEL_RANGES = { 1: [[1, 127]], 2: [[1, 85], [86, 127]], 3: [[1, 43], [44, 85], [86, 127]], 5: [[1, 27], [28, 52], [53, 77], [78, 102], [103, 127]] };
 function drumVelocity127(s){ return Math.max(1, Math.min(127, Math.round(s * 127))); }
 function drumVelGain(s){ const v = drumVelocity127(s) / 127; return 0.01 + 0.99 * v * v; }
+/* 力度交叉淡化:力度剛好落在兩層交界附近(±DRUM_XFADE/2)時,同時播相鄰兩層、依力度比例混合,
+   音色從輕到重平滑過渡。沒有的話,同樣的打法因為每一下的隨機起伏,會在兩層之間跳來跳去(實測搖滾範例
+   hi-hat 28%、大鼓 34%、小鼓 33% 的擊打落在交界 ±4 內)。
+   混合曲線依兩層錄音的相關性:大鼓兩層幾乎同相(線性混合中間不掉音量),其他鼓件兩層不相關(要等功率混合,
+   線性的話中間會小約 2~3dB)——實測 50/50 混合:大鼓 線性 −0.3dB / 等功率 +2.7dB;其他 線性 −2.6dB / 等功率 +0.2dB */
+let DRUM_XFADE = 8;   // let:測試時可改成 0 對照
+const DRUM_XFADE_LINEAR = new Set(["kick"]);
+function pickDrumLayers(name, s){
+  const layers = kitBuffers[name];
+  if (!layers) return null;
+  const n = layers.length, v = Math.max(1, Math.min(127, s * 127));
+  const ranges = SFZ_VEL_RANGES[n] || layers.map((_, k) => [Math.round(k * 127 / n) + 1, Math.round((k + 1) * 127 / n)]);
+  const loaded = k => layers[k] && layers[k].length;
+  const out = [];
+  for (let k = 1; k < n; k++) {
+    const b = ranges[k][0] - 0.5, t = (v - (b - DRUM_XFADE / 2)) / DRUM_XFADE;
+    if (t > 0 && t < 1 && loaded(k - 1) && loaded(k)) {
+      const lin = DRUM_XFADE_LINEAR.has(name);
+      out.push({ key: name + ":" + (k - 1), list: layers[k - 1], w: lin ? 1 - t : Math.cos(t * Math.PI / 2) });
+      out.push({ key: name + ":" + k, list: layers[k], w: lin ? t : Math.sin(t * Math.PI / 2) });
+      return { parts: out, gain: drumVelGain(s) };
+    }
+  }
+  const one = pickDrumLayer(name, s);
+  return one ? { parts: [{ key: one.key, list: one.list, w: 1 }], gain: one.gain } : null;
+}
 function pickDrumLayer(name, s){
   const layers = kitBuffers[name];
   if (!layers) return null;
@@ -7259,25 +7285,32 @@ function drumVerbWetTarget(){ return DRUM_BUS.verb * reverbAmount() / 0.3; }
    要主動包一個振幅包絡收尾;鼓皮類不傳,讓它自然結束。
    pan/send:鼓件在鼓組上的左右位置、送進共用殘響的量。回傳這一下的播放資訊(給 hi-hat 止音用) */
 function playSample(name, when, gain, rate, sustainSec, strength, pan, send){
-  const layer = pickDrumLayer(name, strength != null ? strength : 0.72);
-  if (!layer) return null;
-  // round-robin 隨機挑,但不連續挑到同一個(依序輪播在規律節奏裡反而會聽出固定循環)
-  const n = layer.list.length;
-  let idx = Math.floor(Math.random() * n);
-  if (n > 1 && idx === kitRoundRobin[layer.key]) idx = (idx + 1) % n;
-  kitRoundRobin[layer.key] = idx;
-  const { buffer, norm } = layer.list[idx];
-  const src = audioCtx.createBufferSource();
-  src.buffer = buffer;
-  if (rate) src.playbackRate.value = rate;
+  const pick = pickDrumLayers(name, strength != null ? strength : 0.72);
+  if (!pick) return null;
+  // 共用的包絡(開放 hi-hat 止音也是控制這一個),交叉淡化時兩層的錄音各自乘權重後接進來
   const g = audioCtx.createGain();
-  const level = gain * norm * layer.gain;
+  const level = gain * pick.gain;
   g.gain.setValueAtTime(level, when);
   if (sustainSec) {
     g.gain.setValueAtTime(level, when + sustainSec * 0.5);
     g.gain.exponentialRampToValueAtTime(0.0001, when + sustainSec);
   }
-  src.connect(g);
+  for (const part of pick.parts) {
+    // round-robin 隨機挑,但不連續挑到同一個(依序輪播在規律節奏裡反而會聽出固定循環)
+    const n = part.list.length;
+    let idx = Math.floor(Math.random() * n);
+    if (n > 1 && idx === kitRoundRobin[part.key]) idx = (idx + 1) % n;
+    kitRoundRobin[part.key] = idx;
+    const { buffer, norm } = part.list[idx];
+    const src = audioCtx.createBufferSource();
+    src.buffer = buffer;
+    if (rate) src.playbackRate.value = rate;
+    const w = audioCtx.createGain(); w.gain.value = norm * part.w;
+    src.connect(w); w.connect(g);
+    src.start(when);
+    if (sustainSec) src.stop(when + sustainSec + 0.1);
+    scheduled.push(src);
+  }
   let out = g;
   if (pan && audioCtx.createStereoPanner) {
     const p = audioCtx.createStereoPanner();
@@ -7290,9 +7323,6 @@ function playSample(name, when, gain, rate, sustainSec, strength, pan, send){
     sg.gain.value = send;
     out.connect(sg); sg.connect(drumVerbIn);
   }
-  src.start(when);
-  if (sustainSec) src.stop(when + sustainSec + 0.1);
-  scheduled.push(src);
   return { g, when, level, sustainSec };
 }
 

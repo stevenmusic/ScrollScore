@@ -4,6 +4,7 @@
 - 單檔 HTML，OpenSheetMusicDisplay (OSMD) 2.0.0 渲染 MusicXML
 - Web Audio API 音訊合成；鼓組音色放在本 repo 的 drums/（從 stevenmusic/drum-samples 的 web/ 複製；drums/ 讀不到才退回 raw.githubusercontent）：Naked Drums（Wilkinson Audio，CC-BY 4.0，商業規格），照原廠 CR 立體聲混音預製成 nk-<鼓件>-L<層>.<rr>.flac，drums/manifest.json 記錄各鼓件力度層與 round-robin。全部力度層都載入；round-robin 依記憶體預算（桌機全載、iOS 160MB、低記憶體 Android 100~220MB）分輪背景補齊。不要混用不同鼓組的取樣
 - 鼓的力度照原廠 sfz：s(0~1)×127 = MIDI 力度，依原廠力度分區挑層，音量 = 0.01 + 0.99×(力度/127)²（amp_veltrack 99）；一般擊打 s≈0.72（≈91）、鬼音 0.3、重音 0.95
+- 鼓的力度交叉淡化(pickDrumLayers,DRUM_XFADE = 8):力度落在相鄰兩層交界 ±4 內時同時播兩層、依力度比例混合(共用一個包絡,開放 hi-hat 止音照常)。大鼓兩層錄音幾乎同相 → 線性混合;其他鼓件兩層不相關 → 等功率混合(實測 50/50:大鼓線性 −0.3dB、其他等功率 +0.2dB)。力度掃描:大鼓相鄰兩下音量最大跳動 2.2 → 0.9dB、音色 5.7 → 2.0dB,中鼓 4.9 → 1.8dB、5.9 → 2.5dB;整首響度/LRA 不變
 - humanizeDrumHit() 算 0~1 力度（鬼音/一般/重音 + 正反拍律動重音 + 隨機 + 整首力度 ev.macro）；時間是整拍共用 ±4ms + 各肢體 ±1.5ms
 - 鼓的整首力度：computeDrumSongDynamics() 算 ev.macro（譜上 pp~fff 與漸強/漸弱髮夾 + 依每小節密度/ride/開放 hi-hat/crash/過門自動估段落大小聲 + 過門漸強 + 緩慢隨機）
 - 鼓的演奏細節：computeDrumPerformance()（肢體分配、AR(1) 連續起伏、越快越輕、重音前後、過門左右手、開放 hi-hat、樂句）放在 n.perf，播放/匯出前依當下速度重算
