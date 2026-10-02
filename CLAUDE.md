@@ -41,6 +41,7 @@
 - 樂器只保留鋼琴、吉他（民謠、古典兩把）、鼓組
 - 民謠吉他、古典吉他目前標「開發中」並停用（使用者要求）：樂器選單的 <option disabled>，文字加「・開發中」；舊設定存了吉他時退回鋼琴。程式與取樣都保留，拿掉 disabled 即可恢復
 - 匯出影片用 canvas.captureStream + MediaRecorder
+- 播放軸長度(畫面與匯出影片、鋼琴與鼓同一條規則):最上/最下的符頭或譜線(measureStaffExtent,整首)再往外留幾個譜線間距——有樂器面板 3.2 格(PLAYLINE_PAD_SPACES_WITH_PANEL)、只有樂譜 2.2 格(使用者調過的鼓譜匯出比例,原本寫成譜表高度的 80%/55%)。畫面上 updatePlaylineExtent() 由 ResizeObserver 監看 #stage(舞台高度會在樂譜畫好之後才變,不重算播放軸會偏);舞台放不下樂譜(含留白)時(iPhone 橫放、譜表間距很大的長曲子)#scroller 縮小到放得下並讓音樂內容置中(scoreFit,捲動一律用 setScrollerX)。驗證:tools/audiotest/playline_probe.mjs(桌機/iPhone 直橫/iPad/Android × 鋼琴/鼓/長曲子 × 匯出 16:9、9:16 × 純樂譜/加樂器)全部 3.2 / 2.2 格
 - 播放軸半透明(使用者要求):畫面上 #playline 的 opacity = 游標濃度 × 0.5,匯出影片 EXPORT_PLAYLINE_ALPHA = 0.5,鋼琴、鼓都一樣
 - 匯出影片底色:鼓譜純白 #FFFFFF(使用者要求,只限匯出影片),鋼琴維持米色 #FFFDF6;鼓組面板維持深色
 - 時間軸(buildTimeline):OSMD 2.0 的 cursor 會照反覆記號/第一二結尾跳,但 currentTimeStamp(= CurrentSourceTimestamp)是記譜位置、跳回去會變小(以前重播段跟第一遍疊在同一時間、兩遍一起響,反覆根本沒播)。現在 ev.tWhole = 演奏位置(it.CurrentEnrolledTimestamp,OSMD 自己展開好的),ev.srcT = 記譜位置,ev.mIdx = 演奏小節編號;perfMeasures = 演奏順序的小節。查原始 XML 來的資料(articEntries、arpEntries、pedalRanges、slurRanges、repeatChordRanges、vibratoRanges、guitarTechEntries、鬼音/邊擊符頭、力度記號/髮夾、measureRanges、measurePixels)一律用 srcT;排程、捲動、計時用 tWhole。範圍結尾換回演奏位置:ev.tWhole + (r.end − srcT)

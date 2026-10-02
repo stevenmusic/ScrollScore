@@ -466,7 +466,7 @@ input[type=range]::-webkit-slider-thumb{
   color:var(--gold-bright);font-size:var(--fs-lg);font-weight:600;letter-spacing:.05em;
 }
 #scoreBg{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none;z-index:1}
-#scroller{will-change:transform;padding:0 0 0 0;position:relative;z-index:2}
+#scroller{will-change:transform;padding:0 0 0 0;position:relative;z-index:2;transform-origin:0 0}
 #score{filter:invert(92%) sepia(18%) saturate(180%) hue-rotate(10deg) brightness(1.02)}
 /* OSMD 產出 SVG 為黑底白紙,用濾鏡翻成象牙色譜面 */
 /* 游標顏色/濃度可自訂:--cursor-col 由設定面板的色票寫入,--cursor-op 是不透明度 */
@@ -4256,7 +4256,7 @@ $("calibTapBtn").addEventListener("click", () => {
   const realSec = nowRealSec();
   const ev = events[calibTapIndex];
   calibrationMap.push({ tWhole: ev.tWhole, realSec });
-  $("scroller").style.transform = "translateX(" + (playlineX() - ev.x) + "px)";
+  setScrollerX(ev.x);
   calibTapIndex++;
   updateCalibStatus();
   if (calibTapIndex >= events.length) finishCalibration();
@@ -4268,7 +4268,7 @@ $("calibUndoBtn").addEventListener("click", () => {
   calibTapIndex = Math.max(0, calibTapIndex - 1);
   updateCalibStatus();
   const ev = events[calibTapIndex];
-  if (ev) $("scroller").style.transform = "translateX(" + (playlineX() - ev.x) + "px)";
+  if (ev) setScrollerX(ev.x);
 });
 
 $("calibFinishBtn").addEventListener("click", finishCalibration);
@@ -4295,7 +4295,7 @@ $("calibRetapBtn").addEventListener("click", () => {
   $("calibFinishBtn").disabled = false;
   updateCalibStatus();
   const ev = events[idx];
-  $("scroller").style.transform = "translateX(" + (playlineX() - ev.x) + "px)";
+  setScrollerX(ev.x);
   setStatus(T("calibResumeFrom", { idx: idx }));
 });
 
@@ -6643,17 +6643,35 @@ function resizeKeyboardCanvas(){
 /* 播放軸原本用固定的「#stage高度的6%~94%」,樂譜實際渲染高度(#scroller)通常遠小於
    #stage(尤其手機直向、樂譜置中時上下留白很多),導致播放軸看起來又長又突兀,跟匯出影片
    原本的問題一樣。改成量測樂譜實際的上下邊界,貼著樂譜本身,不管樂譜大小、視窗尺寸都自然縮放 */
+/* 畫面上的樂譜:#scroller 用 translate + scale 捲動。scoreFit 平常是 { s: 1, ty: 0 }(照原本的排法);
+   舞台太矮、樂譜(含播放軸上下留白)放不下時(例如 iPhone 橫放、譜表間距很大的長曲子),縮小到放得下並讓音樂內容置中 */
+let scoreFit = { s: 1, ty: 0 }, lastScrollX = 0;
+function setScrollerX(x){
+  lastScrollX = x;
+  $("scroller").style.transform = "translate(" + (playlineX() - x * scoreFit.s) + "px," + scoreFit.ty + "px) scale(" + scoreFit.s + ")";
+}
+/* 播放軸貼著樂譜:最上/最下的符頭(或譜線)再往外留 PLAYLINE_PAD_SPACES_WITH_PANEL 個譜線間距,跟匯出影片同一條規則 */
 function updatePlaylineExtent(){
   const stage = $("stage"), scroller = $("scroller"), pl = $("playline");
-  if (!stage || !scroller || !pl) return;
-  const stageRect = stage.getBoundingClientRect();
-  const scrollerRect = scroller.getBoundingClientRect();
-  if (!scrollerRect.height || !stageRect.height) return;
-  const pad = scrollerRect.height * 0.12;
-  const top = Math.max(0, scrollerRect.top - stageRect.top - pad);
-  const bottom = Math.max(0, stageRect.bottom - scrollerRect.bottom - pad);
-  pl.style.top = top + "px";
-  pl.style.bottom = bottom + "px";
+  const svg = scroller && scroller.querySelector("svg");
+  if (!stage || !scroller || !pl || !svg) return;
+  const Hs = stage.clientHeight;
+  const e = measureStaffExtent(svg);
+  if (!Hs || !e) return;
+  const sr = svg.getBoundingClientRect(), cr = scroller.getBoundingClientRect(), s0 = scoreFit.s || 1;
+  const svgTop = (sr.top - cr.top) / s0, svgH = sr.height / s0;          // scroller 內、未縮放的座標
+  const pad = e.sp * svgH * PLAYLINE_PAD_SPACES_WITH_PANEL;
+  const cTop = svgTop + e.top * svgH - pad, cBot = svgTop + e.bottom * svgH + pad;
+  const boxTop = scroller.offsetTop, margin = Hs * 0.03;
+  if (boxTop + cTop >= margin && boxTop + cBot <= Hs - margin) scoreFit = { s: 1, ty: 0 };
+  else {
+    const s = Math.min(1, (Hs - 2 * margin) / (cBot - cTop));
+    scoreFit = { s, ty: Hs / 2 - boxTop - s * (cTop + cBot) / 2 };
+  }
+  const top = boxTop + scoreFit.ty + scoreFit.s * cTop, bot = boxTop + scoreFit.ty + scoreFit.s * cBot;
+  pl.style.top = Math.max(0, top) + "px";
+  pl.style.bottom = Math.max(0, Hs - bot) + "px";
+  setScrollerX(lastScrollX);
 }
 const KB_LOOKAHEAD_SEC = 0.06; // 鍵盤提前量,補償視覺感知上的延遲感
 function drawKeyboardLive(sec){
@@ -6670,6 +6688,11 @@ function drawKeyboardLive(sec){
   }
 }
 window.addEventListener("resize", () => { resizeKeyboardCanvas(); drawKeyboardLive(playing ? currentSec() : pausedAtSec); updatePlaylineExtent(); });
+// 舞台高度不只視窗大小會改(標頭換行、狀態列、鍵盤高度跟著曲子音域變…),樂譜會跟著重新置中,播放軸要一起重算
+if (typeof ResizeObserver !== "undefined") {
+  let plRaf = 0;
+  new ResizeObserver(() => { cancelAnimationFrame(plRaf); plRaf = requestAnimationFrame(updatePlaylineExtent); }).observe($("stage"));
+}
 
 /* 找最接近的取樣,用 playbackRate 補足音高差(標準取樣器做法) */
 function nearestSample(list, targetMidi){
@@ -7618,7 +7641,7 @@ function tick(){
   const sec = currentSec();
   if (sec >= totalSec()) { stopPlayback(); return; }
   const x = xAtSec(sec);
-  $("scroller").style.transform = "translateX(" + (playlineX() - x) + "px)";
+  setScrollerX(x);
   $("progressfill").style.transform = "scaleX(" + (sec / totalSec()) + ")";
   updateTimeLabel(sec);
   drawKeyboardLive(sec);
@@ -7628,7 +7651,7 @@ function tick(){
 
 function resetScroll(){
   if (!events.length) return;
-  $("scroller").style.transform = "translateX(" + (playlineX() - events[0].x) + "px)";
+  setScrollerX(events[0].x);
   updateMeasureHighlight(playing ? currentSec() : pausedAtSec);
 }
 
@@ -7642,7 +7665,7 @@ function seekTo(sec){
   if (playing) { stopAudioOnly(); startAudioFrom(sec); }
   else pausedAtSec = sec;
   const x = xAtSec(sec);
-  $("scroller").style.transform = "translateX(" + (playlineX() - x) + "px)";
+  setScrollerX(x);
   $("progressfill").style.transform = "scaleX(" + (sec / totalSec()) + ")";
   updateTimeLabel(sec);
   drawKeyboardLive(sec);
@@ -8033,12 +8056,19 @@ function measureStaffExtent(svg){
   const staffTop = top, staffBottom = bottom;
   svg.querySelectorAll(".vf-notehead").forEach(take);          // 譜表外的符頭(銅鈸在上方加線、大鼓在下方)
   if (!isFinite(top) || !isFinite(staffTop)) return null;
-  return { top: (top - sr.top) / sr.height, bottom: (bottom - sr.top) / sr.height, staffH: (staffBottom - staffTop) / sr.height };
+  // 譜線間距(播放軸上下留白的單位):五線譜的橫線 y 座標,相鄰差值取偏小的那一段(避開兩個譜表之間的大間隔)
+  const ys = [...new Set([...svg.querySelectorAll(".vf-measure > path")].map(e => e.getBoundingClientRect()).filter(q => q.width > 20 && q.height < 3).map(q => Math.round(q.top * 4) / 4))].sort((a, b) => a - b);
+  const diffs = ys.slice(1).map((y, i) => y - ys[i]).filter(d => d > 1).sort((a, b) => a - b);
+  const sp = diffs.length ? diffs[Math.floor(diffs.length / 4)] : (staffBottom - staffTop) / 4;
+  return { top: (top - sr.top) / sr.height, bottom: (bottom - sr.top) / sr.height, staffH: (staffBottom - staffTop) / sr.height, sp: sp / sr.height };
 }
+/* 播放軸上下端 = 最上/最下的符頭(或譜線)再往外留幾個譜線間距。使用者調過鼓譜匯出:含樂器面板 3.2 格、只有樂譜 2.2 格
+   (原本寫成譜表高度的 80% / 55%,一個譜表 = 4 格)。鋼琴、鼓、畫面、匯出影片都用同一條規則,不管裝置大小看起來都一樣 */
+const PLAYLINE_PAD_SPACES_WITH_PANEL = 3.2, PLAYLINE_PAD_SPACES_SCORE_ONLY = 2.2;
 async function rasterizeScore(targetH){
   const svg = $("score").querySelector("svg");
   if (!svg) throw new Error(T("errScoreNotFound"));
-  exportStaffExtent = currentInstrument() === "drum" ? measureStaffExtent(svg) : null;
+  exportStaffExtent = measureStaffExtent(svg);
   const srcW = parseFloat(svg.getAttribute("width"))  || svg.clientWidth;
   const srcH = parseFloat(svg.getAttribute("height")) || svg.clientHeight;
   const clone = svg.cloneNode(true);
@@ -8313,8 +8343,8 @@ function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
   // 長超多,看起來又粗又突兀;貼著樂譜量才會跟著樂譜大小自然縮放
   const plPad = SCORE_H * 0.1;
   let plTop = topY - plPad, plBottom = topY + SCORE_H + plPad;
-  if (exportStaffExtent) {   // 鼓譜:只貼著譜表與符頭,上下各留一段(使用者調過:含鼓組 80%、只有樂譜 55% 的譜表高度)
-    const e = exportStaffExtent, pad = e.staffH * (cfg.includeKeyboard ? 0.8 : 0.55);
+  if (exportStaffExtent) {   // 只貼著譜表與符頭,上下各留幾個譜線間距(見 PLAYLINE_PAD_SPACES_*)
+    const e = exportStaffExtent, pad = e.sp * (cfg.includeKeyboard ? PLAYLINE_PAD_SPACES_WITH_PANEL : PLAYLINE_PAD_SPACES_SCORE_ONLY);
     plTop = topY + SCORE_H * Math.max(0, e.top - pad); plBottom = topY + SCORE_H * Math.min(1, e.bottom + pad);
   }
   const curCol = exportInkColor(hlCursorColor()); // 米色譜面上要換成深色版本,見函式上方說明
