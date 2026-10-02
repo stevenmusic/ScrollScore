@@ -7225,9 +7225,16 @@ function drumVelGain(s){ const v = drumVelocity127(s) / 127; return 0.01 + 0.99 
    線性的話中間會小約 2~3dB)——實測 50/50 混合:大鼓 線性 −0.3dB / 等功率 +2.7dB;其他 線性 −2.6dB / 等功率 +0.2dB */
 let DRUM_XFADE = 8;   // let:測試時可改成 0 對照
 const DRUM_XFADE_LINEAR = new Set(["kick"]);
+// 只用在鼓皮。鈸類(crash、ride、china、splash、hi-hat)每一下的泛音都不一樣,兩個不同的鈸聲疊在一起
+// 會像兩片鈸同時響、有相位怪聲(使用者反映 crash 變怪);hi-hat 實測也沒有改善,所以鈸類一律只播一層
+const DRUM_XFADE_PIECES = new Set(["kick", "snare", "snare2", "tom1", "tom2", "tom3", "tom4", "tom5"]);
 function pickDrumLayers(name, s){
   const layers = kitBuffers[name];
   if (!layers) return null;
+  if (!DRUM_XFADE_PIECES.has(name)) {
+    const one = pickDrumLayer(name, s);
+    return one ? { parts: [{ key: one.key, list: one.list, w: 1 }], gain: one.gain } : null;
+  }
   const n = layers.length, v = Math.max(1, Math.min(127, s * 127));
   const ranges = SFZ_VEL_RANGES[n] || layers.map((_, k) => [Math.round(k * 127 / n) + 1, Math.round((k + 1) * 127 / n)]);
   const loaded = k => layers[k] && layers[k].length;
