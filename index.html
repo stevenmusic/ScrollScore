@@ -475,7 +475,7 @@ input[type=range]::-webkit-slider-thumb{
   left:var(--playx,25%);
   background:linear-gradient(to bottom,transparent,var(--cursor-col,var(--gold-bright)) 12%,var(--cursor-col,var(--gold-bright)) 88%,transparent);
   box-shadow:0 0 14px 2px color-mix(in srgb, var(--cursor-col,var(--gold-bright)) 45%, transparent);
-  opacity:var(--cursor-op,1);
+  opacity:calc(var(--cursor-op,1) * .5);   /* 播放軸半透明(使用者要求,鋼琴與鼓、畫面與匯出影片都一樣):看得到位置但不遮住音符 */
   pointer-events:none;z-index:5;
   display:none; /* 樂譜載入前先不亮這條播放線,避免跟中間的說明文字疊在一起 */
 }
@@ -8278,9 +8278,10 @@ function drawImageCover(ctx, img, x, y, w, h){
 }
 /* 畫單一影格:背景圖片/樂譜/播放線/鍵盤或鼓組/標題浮水印,匯出的每一幀跟預覽都呼叫這個函式,
    確保兩邊畫面完全一致 */
+const EXPORT_PLAYLINE_ALPHA = 0.5;   // 播放軸半透明,跟畫面上的 #playline 一致
 function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
   const { W, H, SCORE_H, kbH, topY, plX } = layout;
-  ctx.fillStyle = "#FFFDF6";
+  ctx.fillStyle = currentInstrument() === "drum" ? "#FFFFFF" : "#FFFDF6";   // 鼓譜匯出用純白底(使用者要求),鋼琴維持米色
   ctx.fillRect(0, 0, W, H);
   if (customBgImage) {
     const bgOpacity = $("scoreBgOpacity").value / 100;
@@ -8318,7 +8319,7 @@ function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
   }
   const curCol = exportInkColor(hlCursorColor()); // 米色譜面上要換成深色版本,見函式上方說明
   ctx.save();
-  ctx.globalAlpha = hlCursorOpacity();
+  ctx.globalAlpha = hlCursorOpacity() * EXPORT_PLAYLINE_ALPHA;
   ctx.strokeStyle = curCol; ctx.lineWidth = 4;
   ctx.beginPath(); ctx.moveTo(plX, plTop); ctx.lineTo(plX, plBottom); ctx.stroke();
   ctx.fillStyle = curCol;
