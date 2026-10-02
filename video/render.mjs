@@ -4,8 +4,8 @@
 import { chromium } from '/opt/node22/lib/node_modules/playwright/index.mjs';
 import { spawn } from 'child_process';
 import fs from 'fs';
-const SP = '/tmp/claude-0/-home-user-ScrollScore/a858f8bd-7d7a-58c3-a5fa-1f0f8dc246d8/scratchpad';
-const FF = '/usr/local/lib/python3.11/dist-packages/imageio_ffmpeg/binaries/ffmpeg-linux-x86_64-v7.0.2';
+const SP = process.env.SP || '/tmp/claude-0/-home-user-ScrollScore/a858f8bd-7d7a-58c3-a5fa-1f0f8dc246d8/scratchpad';   // 暫存資料夾(放 npm/、樂譜、stills/),可用環境變數 SP 指定
+const FF = process.env.FF || 'ffmpeg';   // ffmpeg 路徑,可用環境變數 FF 指定
 const FPS = 30;
 const [mode, a1, a2, a3] = process.argv.slice(2);
 const dsf = mode === 'still' ? +(a2 || 1) : 2;

@@ -160,11 +160,9 @@ scene(12, (el, s) => {
 
 /* 4. Real instruments */
 scene(12, (el, s) => {
-  const tb = titleBlock(el, 0, 70, '03 · 真實樂器音色', '真實錄音取樣，不是電子合成音', 'Piano · Steel-string guitar · Nylon guitar · Drum kit', { w: 1920, align: 'center' });
+  const tb = titleBlock(el, 0, 70, '03 · 真實樂器音色', '真實錄音取樣，不是電子合成音', 'Piano · Drum kit', { w: 1920, align: 'center' });
   const items = [
     [ICON.piano, '鋼琴', 'Yamaha C5 平台鋼琴', '16 層力度・弦共鳴・踏板聲'],
-    [ICON.guitar, '民謠吉他', '鋼弦木吉他', '真實錄音取樣'],
-    [ICON.guitar, '古典吉他', '尼龍弦', '真實錄音取樣'],
     [ICON.drum, '鼓組', 'Naked Drums', '全部力度層・輪替取樣'],
   ];
   const cards = items.map(([ic, n, a, b], i) => {
@@ -179,11 +177,12 @@ scene(12, (el, s) => {
     const shrink = eIO(seg(lt, 5.6, 6.6));
     cards.forEach((c, i) => {
       const p = seg(lt, 0.5 + i * 0.18, 1.2 + i * 0.18);
-      const x0 = 120 + i * 430, y0 = 380, x1 = 60 + (i % 2) * 0 + (i < 2 ? 0 : 1520), y1 = 330 + (i % 2) * 330;
+      // 兩張卡(鋼琴、鼓組;吉他找不到夠好的音色已拿掉):先置中並排,筆電出現時分到左右兩側
+      const x0 = 555 + i * 430, y0 = 380, x1 = i === 0 ? 60 : 1520, y1 = 560;
       const sc = lerp(1, 0.86, shrink);
       css(c, { left: lerp(x0, x1, shrink) + 'px', top: lerp(y0, y1, shrink) + 'px', opacity: eOut(p), transform: `translateY(${(1 - eOut(p)) * 60}px) scale(${sc})`, transformOrigin: '0 0' });
       // glow pulse on the drum card while the drum kit plays
-      c.style.borderColor = (i === 3 && lt > 6.6) ? `rgba(214,178,94,${0.4 + 0.4 * Math.abs(Math.sin(lt * 3.4))})` : '';
+      c.style.borderColor = (i === 1 && lt > 6.6) ? `rgba(214,178,94,${0.4 + 0.4 * Math.abs(Math.sin(lt * 3.4))})` : '';
     });
     const lp = eOut(seg(lt, 6.2, 7.0)); css(lap.wrap, { opacity: lp, transform: `translateY(${(1 - lp) * 80}px)` });
     appAt('drum', 0.5 + Math.max(0, lt - 6.2));
