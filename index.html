@@ -1698,7 +1698,13 @@ class SSMasterLimiter extends AudioWorkletProcessor {
     this.ma = new Float64Array(this.L).fill(1); this.maSum = this.L; this.mi = 0;
     this.env = 1; this.press = 0; this.n = 0;
     this.grMax = 0; this.grSamples = 0; this.total = 0;
-    this.port.onmessage = e => { if (e.data === "stats") this.port.postMessage({ grMaxDb: -20 * Math.log10(Math.max(1e-9, 1 - this.grMax)), grPct: 100 * this.grSamples / Math.max(1, this.total) }); };
+    this.port.onmessage = e => {
+      if (e.data === "stats") this.port.postMessage({ grMaxDb: -20 * Math.log10(Math.max(1e-9, 1 - this.grMax)), grPct: 100 * this.grSamples / Math.max(1, this.total) });
+      else if (e.data && e.data.release) {   // 匯出含鼓的曲子時改快放開(只削尖峰),匯出完再改回來
+        this.relFast = Math.exp(-1 / (sampleRate * e.data.release));
+        this.relSlow = Math.exp(-1 / (sampleRate * (e.data.releaseSlow || e.data.release)));
+      }
+    };
   }
   process(inputs, outputs) {
     const inp = inputs[0] || [], out = outputs[0], N = out[0].length;
@@ -1754,11 +1760,11 @@ class SSMasterLimiter extends AudioWorkletProcessor {
   }
 }
 registerProcessor("ss-master-limiter", SSMasterLimiter);
-// 響度分析用:每 10ms 記錄一次 K 加權能量(BS.1770,左右聲道相加)與取樣峰值,記憶體只要幾百 KB
+// 響度分析用:每 2ms 記錄一次 K 加權能量(BS.1770,左右聲道相加)與取樣峰值,記憶體只要幾百 KB
 class SSLoudnessTap extends AudioWorkletProcessor {
   constructor() {
     super();
-    this.B = Math.max(1, Math.round(sampleRate * 0.01));
+    this.B = Math.max(1, Math.round(sampleRate * 0.002));   // 2ms 一格:鼓的尖峰只有幾 ms,太粗會高估限幅器壓掉的量
     const bq = (b, a) => ({ b, a, s: [[0, 0, 0, 0], [0, 0, 0, 0]] });
     // BS.1770 K 加權:高頻架(+4dB @1.68kHz)+ 高通(38Hz),係數依取樣率用雙線性轉換算
     const K = Math.tan(Math.PI * 1681.974450955533 / sampleRate), Vh = Math.pow(10, 3.999843853973347 / 20), Vb = Math.pow(Vh, 0.4996667741545416), Q = 0.7071752369554196;
@@ -8384,32 +8390,52 @@ function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
    再用限幅器的簡化模型(每 10ms 一格:需要的增益 = 上限/峰值、放開時間常數 0.15s)二分搜尋出讓成品剛好 −14 LUFS
    的增益,匯出時乘在 masterBus 上(限幅器之前,真峰值照樣 ≤ −1dBTP)。只影響匯出的影片,App 裡播放不變 */
 const EXPORT_TARGET_LUFS = -14;
+const EXPORT_MAX_LOUD_SQUASH = 3;      // 最大聲的段落(3 秒短期響度的前 5%)最多被限幅器壓掉 2dB:等於大小聲範圍(LRA)最多少約 2 LU。動態平的曲子到得了 −14,起伏大的停在稍小聲,保住段落大小聲
+const EXPORT_DRUM_RELEASE = 0.04;       // 含鼓的曲子匯出時限幅器用 40ms 快放開:只削打擊瞬間的尖峰,尖峰之間不被壓著
+const lkfs = e => -0.691 + 10 * Math.log10(e + 1e-20);
 function gatedLoudness(E, gainSq, block){   // BS.1770 門檻:400ms 視窗、75% 重疊、絕對 −70、相對 −10
   const W = Math.max(1, Math.round(0.4 / block)), H = Math.max(1, Math.round(0.1 / block)), win = [];
   for (let i = 0; i + W <= E.length; i += H) { let e = 0; for (let j = i; j < i + W; j++) e += E[j] * gainSq[j]; win.push(e / W); }
-  const lk = e => -0.691 + 10 * Math.log10(e + 1e-20);
-  let a = win.filter(e => lk(e) > -70);
+  let a = win.filter(e => lkfs(e) > -70);
   if (!a.length) return -70;
-  const rel = lk(a.reduce((x, y) => x + y, 0) / a.length) - 10;
-  a = a.filter(e => lk(e) > rel);
-  return lk(a.reduce((x, y) => x + y, 0) / a.length);
+  const rel = lkfs(a.reduce((x, y) => x + y, 0) / a.length) - 10;
+  a = a.filter(e => lkfs(e) > rel);
+  return lkfs(a.reduce((x, y) => x + y, 0) / a.length);
 }
-function solveExportGain(E, P, block){
-  const ceil = Math.pow(10, MASTER.ceilingDb / 20), rel = Math.exp(-block / 0.15), gsq = new Float32Array(E.length);
-  const loudAt = g => {
+function loudPartLoudness(E, gainSq, block){   // 3 秒短期響度(依 EBU 門檻:絕對 −70、相對 −20)的第 95 百分位 = 最大聲段落的響度
+  const W = Math.max(1, Math.round(3 / block)), H = Math.max(1, Math.round(0.1 / block)), st = [];
+  for (let i = 0; i + W <= E.length; i += H) { let e = 0; for (let j = i; j < i + W; j++) e += E[j] * gainSq[j]; st.push(e / W); }
+  let a = st.filter(e => lkfs(e) > -70);
+  if (!a.length) return -70;
+  const rel = lkfs(a.reduce((x, y) => x + y, 0) / a.length) - 20;
+  a = a.filter(e => lkfs(e) > rel).map(lkfs).sort((x, y) => x - y);
+  return a[Math.min(a.length - 1, Math.floor(a.length * 0.95))];
+}
+function solveExportGain(E, P, block, releaseSec){
+  const ceil = Math.pow(10, MASTER.ceilingDb / 20), rel = Math.exp(-block / releaseSec), gsq = new Float32Array(E.length);
+  const shape = g => {   // 限幅器簡化模型:每格需要的增益 = 上限/峰值,往下立刻跟、往上依放開時間回復
     let env = 1;
+    const LA = Math.max(1, Math.round(MASTER.lookahead / block));   // 預讀:尖峰前 5ms 就開始降
     for (let i = 0; i < E.length; i++) {
-      const req = P[i] * g > ceil ? ceil / (P[i] * g) : 1;
+      let pk = 0; for (let j = i; j <= i + LA && j < E.length; j++) if (P[j] > pk) pk = P[j];
+      const req = pk * g > ceil ? ceil / (pk * g) : 1;
       env = Math.min(req, 1 - (1 - env) * rel);
       gsq[i] = g * g * env * env;
     }
-    return gatedLoudness(E, gsq, block);
   };
-  if (loudAt(1) <= -69) return 1;   // 幾乎無聲,不動
-  let lo = Math.pow(10, -24 / 20), hi = Math.pow(10, 24 / 20);
-  for (let k = 0; k < 30; k++) { const mid = Math.sqrt(lo * hi); if (loudAt(mid) < EXPORT_TARGET_LUFS) lo = mid; else hi = mid; }
-  return Math.sqrt(lo * hi);
+  gsq.fill(1);   // 原始訊號(不調整、限幅器不動)
+  if (gatedLoudness(E, gsq, block) <= -69) return 1;   // 幾乎無聲,不動
+  const top0 = loudPartLoudness(E, gsq, block);   // 原始(限幅器不動)最大聲段落的響度
+  const loud = g => { shape(g); return gatedLoudness(E, gsq, block); };
+  // 調大 g 倍後,最大聲段落「應該」是 top0 + 20log(g),實際被限幅器壓掉的部分不能超過保護線
+  const lraOk = g => { shape(g); return loudPartLoudness(E, gsq, block) >= top0 + 20 * Math.log10(g) - EXPORT_MAX_LOUD_SQUASH; };
+  const bisect = (ok, lo, hi) => { for (let k = 0; k < 30; k++) { const mid = Math.sqrt(lo * hi); if (ok(mid)) lo = mid; else hi = mid; } return lo; };
+  const lo = Math.pow(10, -24 / 20), hi = Math.pow(10, 24 / 20);
+  let g = bisect(m => loud(m) < EXPORT_TARGET_LUFS, lo, hi);   // 剛好 −14 的增益
+  if (g > 1 && !lraOk(g)) g = Math.max(1, bisect(lraOk, 1, g));   // 要調大才到得了 −14,但會把大小聲壓掉太多 → 停在保護線
+  return g;
 }
+function exportHasDrums(){ return !importedAudioBuffer && events.some(ev => ev.notes.some(n => n.drum)); }
 async function measureExportGain(rangeStart, rangeEnd, onProgress){
   if (typeof OfflineAudioContext === "undefined" || typeof AudioWorkletNode === "undefined") return null;
   const KEEP = ["audioCtx", "masterGain", "masterLimiter", "masterOut", "masterBus", "masterLimiterNode", "masterReady", "reverbBus", "reverbConvolver", "reverbWet", "reverbPreDelay",
@@ -8439,7 +8465,7 @@ async function measureExportGain(rangeStart, rangeEnd, onProgress){
     await ctx.startRendering();
     const data = await new Promise(res => { tap.port.onmessage = e => res(e.data); tap.port.postMessage("dump"); });
     restore();
-    return solveExportGain(data.E, data.P, data.block);
+    return solveExportGain(data.E, data.P, data.block, exportHasDrums() ? EXPORT_DRUM_RELEASE : 0.15);
   } catch (e) {
     console.warn("匯出響度分析失敗,照原本音量匯出:", e);
     restore();
@@ -8501,6 +8527,7 @@ async function exportVideo(cfg){
         $("exportFill").style.width = pct + "%";
       });
       masterBus.gain.value = g || 1;
+      if (g && exportHasDrums() && masterLimiterNode) masterLimiterNode.port.postMessage({ release: EXPORT_DRUM_RELEASE });
     }
     if (exportCancelled) throw new Error("cancelled");
     $("exportOverlayTitle").textContent = T("exportRenderingPct", { pct: 0 });
@@ -8603,6 +8630,7 @@ async function exportVideo(cfg){
   }
   if (aDest) { try { masterOut.disconnect(aDest); } catch(e){} }
   if (masterBus) masterBus.gain.value = 1;   // 響度標準化只用在匯出,App 裡播放恢復原本音量
+  if (masterLimiterNode) masterLimiterNode.port.postMessage({ release: MASTER.release, releaseSlow: MASTER.releaseSlow });
   stopAudioOnly();
   releaseWakeLock();
   $("exportOverlay").classList.remove("show");
