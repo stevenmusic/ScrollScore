@@ -51,6 +51,7 @@ await page.waitForFunction(() => typeof loadScoreFile === "function");
 const inst = opt("inst", null);
 // --set '{"MASTER.makeup":1.4,"DRUM_BUS.makeup":0.8}':在樂譜載入前改全域設定物件的欄位
 const sets = JSON.parse(opt("set", "{}"));
+if (opt("busgain", null)) await page.evaluate(g => { window.__busGain = g; }, +opt("busgain"));
 await page.evaluate(sets => { for (const [k, v] of Object.entries(sets)) { const [o, f] = k.split("."); eval(o)[f] = v; } }, sets);
 await page.evaluate(i => { try { localStorage.clear(); } catch (e) {} if (i) $("instrument").value = i; }, inst);
 await page.setInputFiles("#fileInput", path.resolve(scorePath));
@@ -67,6 +68,7 @@ const info = await page.evaluate(async () => {
   if (hasPitched) await loadInstrumentSamples(currentInstrument());
   if (hasDrum) await loadDrumKit();
   ensureAudio();
+  if (window.__busGain) masterBus.gain.value = window.__busGain;   // --busgain:模擬匯出時的響度標準化增益
   const worklet = typeof masterReady !== "undefined" ? await masterReady : null;
   return { worklet, hasDrum, hasPitched, total: totalSec(), inst: currentInstrument(), len: __ctx.length / 48000, tempo: bpm() };
 });

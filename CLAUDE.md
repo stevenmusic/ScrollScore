@@ -46,6 +46,7 @@
 - 單行排版的版面保護(renderScore):SheetMaximumWidth = 1e7(OSMD 預設 32767 是 canvas 限制,長曲子會被折成第二行);SlurPlacementUseSkyBottomLine = true(長圓滑線舊算法會往下彎很深,撐開譜表間距);tameFarDirectionsMusicXML() 把掛在上譜表、放在下方的踏板記號改掛最後一個譜表、拿掉 |default-y| > 120 的位置;排完如果譜表間距 > 45 或最下方輪廓 > 40(scoreLayoutTooTall)就不畫踏板記號再排一次(OSMD 某些檔案的踏板記號會一層層往下疊,播放照樣依原檔踏板)
 - 鼓譜顯示轉換(drumStemFixCore,只限有 <unpitched> 的鼓譜音):MuseScore 4 的開放 hi-hat「o」是 <technical><open/>,OSMD 只認得 <open-string/>,要換;邊擊 slashed 符頭 OSMD 不會畫(變一般小鼓符頭),改成 x
 - 取樣檔快取:fetchSample() 用 Cache Storage(SAMPLE_CACHE = "scrollscore-samples-v1"),鋼琴/鼓/吉他第一次下載後存在裝置上,之後直接讀本機(30Mbps 實測拉赫曼尼諾夫 Op.23-4:完整載入 22s → 3.3s)。取樣檔重新產生時一定要把版本號加一(舊版快取會自動刪),manifest 不快取。同時下載/解碼數 SAMPLE_FETCH_CONCURRENCY:桌機 12、iPhone/低記憶體 6
+- 匯出影片響度標準化(YouTube −14 LUFS,EXPORT_TARGET_LUFS):匯出前 measureExportGain() 用 OfflineAudioContext 把匯出區間在背景算一遍(暫時換掉 audioCtx 與所有快取的匯流排,完成後還原;scheduleExportRange 與即時匯出共用),母帶限幅器前接 ss-loudness-tap(每 10ms 的 K 加權能量與峰值),solveExportGain() 用限幅器簡化模型(放開 0.15s)二分搜尋增益,匯出時乘在 masterBus 上,匯出完恢復 1。只影響匯出的影片。實測預測準度:搖滾鼓 −14.4、巴哈 −14.1。代價:鼓要加約 11dB,限幅器壓很多,搖滾範例 LRA 8.4 → 3.2;鋼琴是調小,LRA 不變
 - 排程時間不早於 audioCtx.currentTime(鼓的人性化時間偏移可能是負的,第一拍會變成過去時間被整個丟掉)
 - 測試工具在 tools/audiotest/(見該目錄 README):離線渲染(OfflineAudioContext)量響度/真峰值/LRA、力度階梯、限幅器單元測試、測試鼓譜產生與記譜檢查、截圖。鋼琴測試曲用 ASAP dataset 的 MusicXML(只測試,不放 repo)
 - 測試鼓譜的記譜規則(使用者強調,寫錯過好幾次):照 Weinberg/PAS 與 MuseScore 4 預設鼓組(drumset.cpp)——音符與休止符不跨拍、休止符對齊拍子(空兩拍且從第 1 或 3 拍開始才用二分休止)、手(符桿上)腳(符桿下)兩個聲部各自寫滿、符尾以拍為單位、搖擺用三連音記、開放 hi-hat 是 x 符頭 + 上方「o」、中鼓 48 E5 / 47 D5 / 45 B4、落地鼓 43 A4 / 41 G4。MuseScore 網站上使用者上傳的譜品質參差,不能拿來當記譜依據

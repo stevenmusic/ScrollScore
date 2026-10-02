@@ -1232,6 +1232,7 @@ const I18N = {
     fmtSquareSub: "Instagram 貼文 / Facebook",
 
     exportRenderingPct: "合成中 {pct}%",
+    exportAnalyzingPct: "調整音量(YouTube −14 LUFS)中 {pct}%",
     exportWarnTitle: "⚠ 請讓這個畫面保持在最前面",
     exportWarnBody: "切到其他 App 或讓螢幕熄滅,錄出來會一格一格卡住,只能重新匯出。",
     exportInfoP: "輸出時間 = 樂曲長度,完成後自動下載。",
@@ -1437,6 +1438,7 @@ const I18N = {
     fmtSquareSub: "Instagram post / Facebook",
 
     exportRenderingPct: "Rendering {pct}%",
+    exportAnalyzingPct: "Normalizing loudness (YouTube −14 LUFS) {pct}%",
     exportWarnTitle: "⚠ Keep this window in the foreground",
     exportWarnBody: "Switching apps or letting the screen sleep will cause stuttering frames — you'll have to export again.",
     exportInfoP: "Export time equals the piece's length; the file downloads automatically when done.",
@@ -1752,6 +1754,40 @@ class SSMasterLimiter extends AudioWorkletProcessor {
   }
 }
 registerProcessor("ss-master-limiter", SSMasterLimiter);
+// 響度分析用:每 10ms 記錄一次 K 加權能量(BS.1770,左右聲道相加)與取樣峰值,記憶體只要幾百 KB
+class SSLoudnessTap extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.B = Math.max(1, Math.round(sampleRate * 0.01));
+    const bq = (b, a) => ({ b, a, s: [[0, 0, 0, 0], [0, 0, 0, 0]] });
+    // BS.1770 K 加權:高頻架(+4dB @1.68kHz)+ 高通(38Hz),係數依取樣率用雙線性轉換算
+    const K = Math.tan(Math.PI * 1681.974450955533 / sampleRate), Vh = Math.pow(10, 3.999843853973347 / 20), Vb = Math.pow(Vh, 0.4996667741545416), Q = 0.7071752369554196;
+    const a0 = 1 + K / Q + K * K;
+    this.f1 = bq([(Vh + Vb * K / Q + K * K) / a0, 2 * (K * K - Vh) / a0, (Vh - Vb * K / Q + K * K) / a0], [2 * (K * K - 1) / a0, (1 - K / Q + K * K) / a0]);
+    const K2 = Math.tan(Math.PI * 38.13547087602444 / sampleRate), Q2 = 0.5003270373238773, a2 = 1 + K2 / Q2 + K2 * K2;
+    this.f2 = bq([1, -2, 1], [2 * (K2 * K2 - 1) / a2, (1 - K2 / Q2 + K2 * K2) / a2]);
+    this.E = []; this.P = []; this.e = 0; this.p = 0; this.k = 0;
+    this.port.onmessage = () => { if (this.k) { this.E.push(this.e / this.k); this.P.push(this.p); }
+      this.port.postMessage({ E: Float32Array.from(this.E), P: Float32Array.from(this.P), block: this.B / sampleRate }); };
+  }
+  run(f, ch, x) { const s = f.s[ch], y = f.b[0] * x + f.b[1] * s[0] + f.b[2] * s[1] - f.a[0] * s[2] - f.a[1] * s[3]; s[1] = s[0]; s[0] = x; s[3] = s[2]; s[2] = y; return y; }
+  process(inputs) {
+    const inp = inputs[0] || [], L = inp[0], R = inp[1] || inp[0];
+    if (!L) return true;
+    for (let i = 0; i < L.length; i++) {
+      let e = 0, pk = 0;
+      for (let ch = 0; ch < 2; ch++) {
+        const x = ch ? (R ? R[i] : 0) : L[i];
+        const y = this.run(this.f2, ch, this.run(this.f1, ch, x));
+        e += y * y; const a = Math.abs(x); if (a > pk) pk = a;
+      }
+      this.e += e; if (pk > this.p) this.p = pk;
+      if (++this.k === this.B) { this.E.push(this.e / this.B); this.P.push(this.p); this.e = 0; this.p = 0; this.k = 0; }
+    }
+    return true;
+  }
+}
+registerProcessor("ss-loudness-tap", SSLoudnessTap);
 `;
 const MASTER_CEIL_RANGE = 2, MASTER_CEIL_KNEE = 0.708, MASTER_CEIL = 0.85;   // 曲線涵蓋 ±2、−3dBFS 起彎、上限 −1.4dBFS
 function buildCeilingCurve(){
@@ -4825,6 +4861,13 @@ $("stage").addEventListener("pointerup", (e) => {
 function ensureAudio(){
   if (!audioCtx) {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    initAudioGraph();
+  }
+  if (audioCtx.state === "suspended") audioCtx.resume();
+}
+/* 在目前的 audioCtx 上建立總輸出鏈路(ensureAudio 與匯出前的離線響度分析共用) */
+function initAudioGraph(){
+  {
     masterGain = audioCtx.createGain();
     /* 0.9 對這個合成器來說太燙了:每個聲部各自的峰值就有 0.32(合成)~0.66(取樣),
        Web Audio 又是直接把波形相加,實測連稀疏的琶音都會衝到 1.392、踏板段落到 2.451,
@@ -4889,7 +4932,6 @@ function ensureAudio(){
     })();
     buildReverbChain();
   }
-  if (audioCtx.state === "suspended") audioCtx.resume();
 }
 
 /* ── 空間感(殘響)────────────────────────────────────────────────
@@ -8335,6 +8377,105 @@ function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
   }
 }
 
+/* ── 匯出影片的響度標準化(YouTube −14 LUFS)──────────────────────
+   YouTube 會把比 −14 LUFS 大聲的影片調小、比較小聲的不會調大:鋼琴(約 −11)上傳後會被調小沒關係,
+   鼓(約 −20)會比別人的影片小 6dB。所以匯出前先把要匯出的區間用 OfflineAudioContext 在背景算一遍
+   (跟即時匯出排一樣的音、一樣的效果鏈),在母帶限幅器前面接 ss-loudness-tap 記錄每 10ms 的 K 加權能量與峰值,
+   再用限幅器的簡化模型(每 10ms 一格:需要的增益 = 上限/峰值、放開時間常數 0.15s)二分搜尋出讓成品剛好 −14 LUFS
+   的增益,匯出時乘在 masterBus 上(限幅器之前,真峰值照樣 ≤ −1dBTP)。只影響匯出的影片,App 裡播放不變 */
+const EXPORT_TARGET_LUFS = -14;
+function gatedLoudness(E, gainSq, block){   // BS.1770 門檻:400ms 視窗、75% 重疊、絕對 −70、相對 −10
+  const W = Math.max(1, Math.round(0.4 / block)), H = Math.max(1, Math.round(0.1 / block)), win = [];
+  for (let i = 0; i + W <= E.length; i += H) { let e = 0; for (let j = i; j < i + W; j++) e += E[j] * gainSq[j]; win.push(e / W); }
+  const lk = e => -0.691 + 10 * Math.log10(e + 1e-20);
+  let a = win.filter(e => lk(e) > -70);
+  if (!a.length) return -70;
+  const rel = lk(a.reduce((x, y) => x + y, 0) / a.length) - 10;
+  a = a.filter(e => lk(e) > rel);
+  return lk(a.reduce((x, y) => x + y, 0) / a.length);
+}
+function solveExportGain(E, P, block){
+  const ceil = Math.pow(10, MASTER.ceilingDb / 20), rel = Math.exp(-block / 0.15), gsq = new Float32Array(E.length);
+  const loudAt = g => {
+    let env = 1;
+    for (let i = 0; i < E.length; i++) {
+      const req = P[i] * g > ceil ? ceil / (P[i] * g) : 1;
+      env = Math.min(req, 1 - (1 - env) * rel);
+      gsq[i] = g * g * env * env;
+    }
+    return gatedLoudness(E, gsq, block);
+  };
+  if (loudAt(1) <= -69) return 1;   // 幾乎無聲,不動
+  let lo = Math.pow(10, -24 / 20), hi = Math.pow(10, 24 / 20);
+  for (let k = 0; k < 30; k++) { const mid = Math.sqrt(lo * hi); if (loudAt(mid) < EXPORT_TARGET_LUFS) lo = mid; else hi = mid; }
+  return Math.sqrt(lo * hi);
+}
+async function measureExportGain(rangeStart, rangeEnd, onProgress){
+  if (typeof OfflineAudioContext === "undefined" || typeof AudioWorkletNode === "undefined") return null;
+  const KEEP = ["audioCtx", "masterGain", "masterLimiter", "masterOut", "masterBus", "masterLimiterNode", "masterReady", "reverbBus", "reverbConvolver", "reverbWet", "reverbPreDelay",
+    "pianoRoomBus", "pianoBusIn", "pianoBusCtx", "pianoVerbIn", "pianoVerbWet", "pianoVerbCtx", "gtrVerbIn", "gtrVerbWet", "gtrVerbCtx", "drumBus", "drumVerbIn", "drumVerbWet",
+    "scheduled", "startCtxTime", "ringingOpenHat", "pianoVoices", "pianoLastByKey", "gtrRR"];
+  const saved = {};
+  for (const k of KEEP) saved[k] = eval(k);
+  const restore = () => { for (const k of KEEP) eval(k + " = saved['" + k + "']"); };
+  try {
+    const sr = saved.audioCtx ? saved.audioCtx.sampleRate : 48000, LEAD = 0.1, TAIL = 3;
+    const len = Math.ceil((rangeEnd - rangeStart + LEAD + TAIL) * sr);
+    audioCtx = new OfflineAudioContext(1, len, sr);
+    initAudioGraph();
+    if (!await masterReady) { restore(); return null; }
+    const tap = new AudioWorkletNode(audioCtx, "ss-loudness-tap", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1], channelCount: 2, channelCountMode: "explicit" });
+    masterOut.disconnect();
+    masterBus.connect(tap); tap.connect(audioCtx.destination);
+    scheduled = []; ringingOpenHat = null; pianoResetVoices();
+    startCtxTime = LEAD;
+    computeDrumPerformance();
+    scheduleExportRange(rangeStart, rangeEnd, useCalib());
+    const ctx = audioCtx, total = len / sr;
+    for (let k = 1; k < 20; k++) {   // 進度:每 5% 暫停一下更新畫面
+      const at = Math.floor(total * k / 20 * 128 / 128 * sr / 128) * 128 / sr;
+      ctx.suspend(at).then(() => { if (onProgress) onProgress(k * 5); ctx.resume(); }).catch(() => {});
+    }
+    await ctx.startRendering();
+    const data = await new Promise(res => { tap.port.onmessage = e => res(e.data); tap.port.postMessage("dump"); });
+    restore();
+    return solveExportGain(data.E, data.P, data.block);
+  } catch (e) {
+    console.warn("匯出響度分析失敗,照原本音量匯出:", e);
+    restore();
+    return null;
+  }
+}
+/* 匯出區間的所有音符排程到目前的 audioCtx(以 startCtxTime 為曲子 rangeStart 的時間點)。
+   即時匯出與匯出前的離線響度分析共用,兩邊排的音完全一樣 */
+function scheduleExportRange(rangeStart, rangeEnd, calib){
+  if (importedAudioBuffer) {
+    scheduleImportedAudio(startCtxTime, rangeStart); // 有匯入音檔就整段用它,不逐音符排程合成/取樣音色
+  } else {
+    gtrRR = {};
+    if (currentInstrument() === "piano") pianoSchedulePedalNoise(rangeStart, rangeEnd, sec => startCtxTime + sec - rangeStart);
+    const isGuitar = currentInstrument() === "guitar" || currentInstrument() === "guitarnylon";
+    for (const ev of events) {
+      const t = posToSec(ev.tWhole, calib);
+      if (t < rangeStart - 0.02 || t >= rangeEnd + 0.02) continue; // 只排程落在匯出區間內的音符
+      const chordAnchors = {};
+      const harmonyEndSec = ev.harmonyEndWhole != null
+        ? startCtxTime + ((posToSec(ev.harmonyEndWhole, calib)) - rangeStart)
+        : null;
+      const tech = (isGuitar && ev.guitarTech) ? Object.assign({}, ev.guitarTech, { vibrato: ev.vibrato }) : (isGuitar && ev.vibrato ? { vibrato: true } : null);
+      for (const n of ev.notes) {
+        const rollT = computeArpNoteOffsetSec(ev, n, t, calib);
+        const durSec = calib ? Math.max(calibToSec(ev.tWhole + n.durWhole) - t, 0.05) : spanSec(ev.tWhole, n.durWhole);
+        const noteHarmonyEndSec = (isGuitar && n.guitarRingEndWhole != null)
+          ? startCtxTime + ((posToSec(n.guitarRingEndWhole, calib)) - rangeStart)
+          : harmonyEndSec;
+        const noteTech = (isGuitar && n.glissTargetFreq != null) ? Object.assign({}, tech, { glissTargetFreq: n.glissTargetFreq }) : tech;
+        if (n.drum) { const h = humanizeDrumHit(ev, n); scheduleDrum(n.key, startCtxTime + (t - rangeStart) + rollT + h.dt, h); }
+        else scheduleNote(n.freq, startCtxTime + (t - rangeStart) + rollT + ((isGuitar ? n.gdt : n.pdt) || 0), durSec, ev.legato, ev.pedalOn, chordAnchors, noteHarmonyEndSec, ev.artic, noteTech, n.staff, isGuitar ? n.gvel : n.pvel, n);
+      }
+    }
+  }
+}
 async function exportVideo(cfg){
   if (!events.length || exporting) return;
   exporting = true; exportCancelled = false;
@@ -8347,10 +8488,23 @@ async function exportVideo(cfg){
   if (pianoLoading && currentInstrument() === "piano") await pianoLoading;
   if (GTR_INSTS[currentInstrument()] && GTR_INSTS[currentInstrument()].loading) await GTR_INSTS[currentInstrument()].loading;
   await ensureTitleFontsLoaded(cfg); // 保險:萬一使用者看到預覽秒按確認,字型下載可能還沒跑完
-  $("exportOverlayTitle").textContent = T("exportRenderingPct", { pct: 0 });
   $("exportOverlay").classList.add("show");
   let aDest = null;
   try {
+    // 響度標準化:先在背景算一遍要匯出的區間,求出讓成品 −14 LUFS 的增益(只影響匯出的影片)
+    {
+      const rs = cfg.startSec != null ? Math.max(0, cfg.startSec) : 0, re = cfg.endSec != null ? Math.min(totalSec(), cfg.endSec) : totalSec();
+      $("exportOverlayTitle").textContent = T("exportAnalyzingPct", { pct: 0 });
+      $("exportFill").style.width = "0%";
+      const g = importedAudioBuffer ? null : await measureExportGain(rs, re, pct => {
+        $("exportOverlayTitle").textContent = T("exportAnalyzingPct", { pct });
+        $("exportFill").style.width = pct + "%";
+      });
+      masterBus.gain.value = g || 1;
+    }
+    if (exportCancelled) throw new Error("cancelled");
+    $("exportOverlayTitle").textContent = T("exportRenderingPct", { pct: 0 });
+    $("exportFill").style.width = "0%";
     const layout = computeExportLayout(cfg);
     const { W, H, SCORE_H, kbH, topY, plX } = layout;
     const { tiles, scale } = await rasterizeScore(SCORE_H);
@@ -8398,32 +8552,7 @@ async function exportVideo(cfg){
     const t0 = audioCtx.currentTime + 0.1;
     startCtxTime = t0 + LEAD;
     scheduled = [];
-    if (importedAudioBuffer) {
-      scheduleImportedAudio(startCtxTime, rangeStart); // 有匯入音檔就整段用它,不逐音符排程合成/取樣音色
-    } else {
-      gtrRR = {};
-      if (currentInstrument() === "piano") pianoSchedulePedalNoise(rangeStart, rangeEnd, sec => startCtxTime + sec - rangeStart);
-      const isGuitar = currentInstrument() === "guitar" || currentInstrument() === "guitarnylon";
-      for (const ev of events) {
-        const t = posToSec(ev.tWhole, calib);
-        if (t < rangeStart - 0.02 || t >= rangeEnd + 0.02) continue; // 只排程落在匯出區間內的音符
-        const chordAnchors = {};
-        const harmonyEndSec = ev.harmonyEndWhole != null
-          ? startCtxTime + ((posToSec(ev.harmonyEndWhole, calib)) - rangeStart)
-          : null;
-        const tech = (isGuitar && ev.guitarTech) ? Object.assign({}, ev.guitarTech, { vibrato: ev.vibrato }) : (isGuitar && ev.vibrato ? { vibrato: true } : null);
-        for (const n of ev.notes) {
-          const rollT = computeArpNoteOffsetSec(ev, n, t, calib);
-          const durSec = calib ? Math.max(calibToSec(ev.tWhole + n.durWhole) - t, 0.05) : spanSec(ev.tWhole, n.durWhole);
-          const noteHarmonyEndSec = (isGuitar && n.guitarRingEndWhole != null)
-            ? startCtxTime + ((posToSec(n.guitarRingEndWhole, calib)) - rangeStart)
-            : harmonyEndSec;
-          const noteTech = (isGuitar && n.glissTargetFreq != null) ? Object.assign({}, tech, { glissTargetFreq: n.glissTargetFreq }) : tech;
-          if (n.drum) { const h = humanizeDrumHit(ev, n); scheduleDrum(n.key, startCtxTime + (t - rangeStart) + rollT + h.dt, h); }
-          else scheduleNote(n.freq, startCtxTime + (t - rangeStart) + rollT + ((isGuitar ? n.gdt : n.pdt) || 0), durSec, ev.legato, ev.pedalOn, chordAnchors, noteHarmonyEndSec, ev.artic, noteTech, n.staff, isGuitar ? n.gvel : n.pvel, n);
-        }
-      }
-    }
+    scheduleExportRange(rangeStart, rangeEnd, calib);
     const total = rangeEnd - rangeStart;
 
     // 進度文字與進度條每秒只會真的變化一兩次,但繪製迴圈是每秒 60 次。原本每一格都寫這三個
@@ -8470,9 +8599,10 @@ async function exportVideo(cfg){
       setStatus(T("exportCancelledStatus"));
     }
   } catch (err) {
-    setStatus(T("exportFailed", { msg: err.message || err }));
+    setStatus(exportCancelled ? T("exportCancelledStatus") : T("exportFailed", { msg: err.message || err }));
   }
   if (aDest) { try { masterOut.disconnect(aDest); } catch(e){} }
+  if (masterBus) masterBus.gain.value = 1;   // 響度標準化只用在匯出,App 裡播放恢復原本音量
   stopAudioOnly();
   releaseWakeLock();
   $("exportOverlay").classList.remove("show");
