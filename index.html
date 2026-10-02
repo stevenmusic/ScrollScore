@@ -8054,7 +8054,9 @@ function measureStaffExtent(svg){
   const take = el => { const q = el.getBoundingClientRect(); if (q.width > 0 || q.height > 0) { top = Math.min(top, q.top); bottom = Math.max(bottom, q.bottom); } };
   svg.querySelectorAll(".vf-measure > path").forEach(take);   // 五線譜的線
   const staffTop = top, staffBottom = bottom;
-  svg.querySelectorAll(".vf-notehead").forEach(take);          // 譜表外的符頭(銅鈸在上方加線、大鼓在下方)
+  // 音符實際畫出來的範圍:符頭、符桿、符尾、連桁、加線、休止符、音符上的記號(重音、開放 hi-hat 的「o」)。
+  // 只算符頭的話,符尾朝上那一側(例如 hi-hat 的連桁)看起來很擠、另一側很空,上下不平衡。速度/力度文字不算
+  svg.querySelectorAll(".vf-stavenote, .vf-stem, .vf-beam, .vf-flag, .vf-ledgers").forEach(take);
   if (!isFinite(top) || !isFinite(staffTop)) return null;
   // 譜線間距(播放軸上下留白的單位):五線譜的橫線 y 座標,相鄰差值取偏小的那一段(避開兩個譜表之間的大間隔)
   const ys = [...new Set([...svg.querySelectorAll(".vf-measure > path")].map(e => e.getBoundingClientRect()).filter(q => q.width > 20 && q.height < 3).map(q => Math.round(q.top * 4) / 4))].sort((a, b) => a - b);
@@ -8062,9 +8064,10 @@ function measureStaffExtent(svg){
   const sp = diffs.length ? diffs[Math.floor(diffs.length / 4)] : (staffBottom - staffTop) / 4;
   return { top: (top - sr.top) / sr.height, bottom: (bottom - sr.top) / sr.height, staffH: (staffBottom - staffTop) / sr.height, sp: sp / sr.height };
 }
-/* 播放軸上下端 = 最上/最下的符頭(或譜線)再往外留幾個譜線間距。使用者調過鼓譜匯出:含樂器面板 3.2 格、只有樂譜 2.2 格
-   (原本寫成譜表高度的 80% / 55%,一個譜表 = 4 格)。鋼琴、鼓、畫面、匯出影片都用同一條規則,不管裝置大小看起來都一樣 */
-const PLAYLINE_PAD_SPACES_WITH_PANEL = 3.2, PLAYLINE_PAD_SPACES_SCORE_ONLY = 2.2;
+/* 播放軸上下端 = 整首最高/最低的音符(含符桿、連桁)再往外留幾個譜線間距,上下一樣多。
+   有樂器面板 1.8 格、只有樂譜 1.2 格(比例沿用使用者調過的鼓譜匯出 80% : 55%;以前從符頭算留 3.2 / 2.2 格,
+   但符桿約 3.5 格長,符尾朝上那側會很擠)。鋼琴、鼓、畫面、匯出影片都用同一條規則 */
+const PLAYLINE_PAD_SPACES_WITH_PANEL = 1.8, PLAYLINE_PAD_SPACES_SCORE_ONLY = 1.2;
 async function rasterizeScore(targetH){
   const svg = $("score").querySelector("svg");
   if (!svg) throw new Error(T("errScoreNotFound"));
@@ -8243,7 +8246,7 @@ function computeExportLayout(cfg){
   const minTopY = titleBlockBottom > 0 ? titleBlockBottom + Math.round(H * 0.02) : 0;
   const topY = Math.max(rawTopY, minTopY);
   const plX = W * PLAYLINE_RATIO;
-  return { W, H, SCORE_H, margin, kbH, scoreAreaH, topY, plX };
+  return { W, H, SCORE_H, margin, kbH, scoreAreaH, topY, plX, minTopY };
 }
 /* 匯出畫面的樂譜底色是亮米色(#FFFDF6),使用者挑的游標顏色如果偏亮(預設的淡金色就是),
    直接畫上去會幾乎看不見。這裡在亮度過高時等比壓暗到安全範圍,色相維持不變 */
@@ -8345,7 +8348,9 @@ function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
   let plTop = topY - plPad, plBottom = topY + SCORE_H + plPad;
   if (exportStaffExtent) {   // 只貼著譜表與符頭,上下各留幾個譜線間距(見 PLAYLINE_PAD_SPACES_*)
     const e = exportStaffExtent, pad = e.sp * (cfg.includeKeyboard ? PLAYLINE_PAD_SPACES_WITH_PANEL : PLAYLINE_PAD_SPACES_SCORE_ONLY);
-    plTop = topY + SCORE_H * Math.max(0, e.top - pad); plBottom = topY + SCORE_H * Math.min(1, e.bottom + pad);
+    // 可以超出樂譜圖的上下邊(上下才會一樣多),但不碰到標題、不壓到下方的樂器面板
+    plTop = Math.max(layout.minTopY || 0, topY + SCORE_H * (e.top - pad));
+    plBottom = Math.min(cfg.includeKeyboard ? H - kbH - H * 0.01 : H, topY + SCORE_H * (e.bottom + pad));
   }
   const curCol = exportInkColor(hlCursorColor()); // 米色譜面上要換成深色版本,見函式上方說明
   ctx.save();

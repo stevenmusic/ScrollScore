@@ -16,7 +16,7 @@ const measureJS = () => {
   const diffs = ys.slice(1).map((y, i) => y - ys[i]).filter(d => d > 1).sort((a, b) => a - b);
   const sp = diffs[Math.floor(diffs.length / 4)] || 8;
   let top = Infinity, bot = -Infinity;
-  for (const e of [...svg.querySelectorAll(".vf-measure > path"), ...svg.querySelectorAll(".vf-notehead")]) { const q = e.getBoundingClientRect(); if (q.width || q.height) { top = Math.min(top, q.top); bot = Math.max(bot, q.bottom); } }
+  for (const e of [...svg.querySelectorAll(".vf-measure > path"), ...svg.querySelectorAll(".vf-stavenote, .vf-stem, .vf-beam, .vf-flag, .vf-ledgers")]) { const q = e.getBoundingClientRect(); if (q.width || q.height) { top = Math.min(top, q.top); bot = Math.max(bot, q.bottom); } }
   const st = $("stage").getBoundingClientRect();
   return { sp: +sp.toFixed(1), topPad: +((top - pl.top) / sp).toFixed(1), botPad: +((pl.bottom - bot) / sp).toFixed(1), plLen: Math.round(pl.height), contentH: Math.round(bot - top), plInStage: pl.top >= st.top - 1 && pl.bottom <= st.bottom + 1 };
 };
@@ -51,7 +51,7 @@ for (const score of scores) {
           const diffs = ys.slice(1).map((y, i) => y - ys[i]).filter(d => d > 1).sort((a, b) => a - b);
           const sp = (diffs[Math.floor(diffs.length / 4)] || 8) * k;
           let top = Infinity, bot = -Infinity;
-          for (const e of [...svg.querySelectorAll(".vf-measure > path"), ...svg.querySelectorAll(".vf-notehead")]) { const q = e.getBoundingClientRect(); if (q.width || q.height) { top = Math.min(top, q.top); bot = Math.max(bot, q.bottom); } }
+          for (const e of [...svg.querySelectorAll(".vf-measure > path"), ...svg.querySelectorAll(".vf-stavenote, .vf-stem, .vf-beam, .vf-flag, .vf-ledgers")]) { const q = e.getBoundingClientRect(); if (q.width || q.height) { top = Math.min(top, q.top); bot = Math.max(bot, q.bottom); } }
           top = layout.topY + (top - sr.top) * k; bot = layout.topY + (bot - sr.top) * k;
           const kbTop = kb ? H - layout.kbH : H;
           return { sp: +sp.toFixed(1), topPad: +((top - rec.top) / sp).toFixed(1), botPad: +((rec.bottom - bot) / sp).toFixed(1), plTop: Math.round(rec.top), plBot: Math.round(rec.bottom), kbTop: Math.round(kbTop), overlapsKb: rec.bottom > kbTop, url: cv.toDataURL("image/jpeg", 0.7) };
