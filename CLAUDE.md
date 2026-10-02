@@ -19,8 +19,8 @@
 - 鋼琴力度照 Accurate-Salamander V6.2：各層錄音已校正成一樣大聲，依力度分區挑層（VEL_16），音量 = 0.015 + 0.985×（力度/127）²（amp_veltrack 98.5）;PIANO_GAIN 1.5（整首約 −11.5 LUFS、不削波）
 - computePianoDynamics() 算每個音的 n.pvel(1~127)與 n.pdt(和弦內聲部最多晚 7ms):力度記號/髮夾(sf/sfz 只影響當下)、旋律較重、內聲部與左手較輕、拍子輕重、旋律起伏、4 小節樂句、重音、左右手 AR(1) 起伏 + 隨機；pianoAutoMacro() 依每小節織度（音符密度、和弦厚度、旋律高度，平滑後標準化）給 ±10 力度的段落大小聲 + 4/8 小節兩層樂句弧線 + 曲尾兩小節漸弱，譜上沒力度記號時全用、有記號時只用四成（網路上很多古典 MusicXML 完全沒力度記號，不加的話整首只有約 4dB 起伏）
 - 鋼琴只載入樂譜用到的（音 × 力度層）;記憶體預算（桌機 1.2GB、iOS 220MB、4GB Android 280MB、2GB Android 120MB，共鳴/機械聲也算在內）不夠時依序：截短到需要的長度 → 單聲道 → 合併最少用到的層。制音器落下時加 harm/rel（音量用 manifest 的 d 換算成原廠 V3 的相對音量，依按住時間 rt_decay 衰減）;F#6（MIDI 89）以上沒有制音器
-- 鋼琴混音：voice → getPianoBus()（PIANO_EQ：450Hz −2dB、2.8kHz −3.5dB（手機喇叭共振峰，避免尖）、9kHz 高頻架式 +1.5dB）→ masterGain → loudnessComp → 限幅器。試過鋼琴專用慢起音壓縮器，p→ff 被壓扁、清晰度沒變好，不要再換。注意 Web Audio 的 DynamicsCompressor 會自動補增益（makeup），loudnessComp 實際約 +7dB、masterLimiter 約 +1.6dB，所以限幅器擋不住峰值
-- 總輸出：masterLimiter → masterOut（4 倍超取樣軟削波：−3dBFS 以下線性、平滑壓向 −1.4dBFS，真峰值 ≤ −1dBTP），喇叭與匯出影片都從 masterOut 取；所有樂器共用。不要拿掉，否則真實曲子會到 +0.2dBTP 削波
+- 鋼琴混音：voice → getPianoBus()（PIANO_EQ：450Hz −2dB、2.8kHz −3.5dB（手機喇叭共振峰，避免尖）、9kHz 高頻架式 +1.5dB）→ masterGain → loudnessComp → 限幅器。試過鋼琴專用慢起音壓縮器，p→ff 被壓扁、清晰度沒變好，不要再換。注意 Web Audio 的 DynamicsCompressor 會自動補增益（makeup），loudnessComp 實際約 +7dB
+- 總輸出（MASTER 設定）：masterGain → loudnessComp → makeup 1.82 → masterBus ← 鼓組匯流排；masterBus → 母帶限幅器（AudioWorklet，MASTER_LIMITER_SRC：預讀 5ms、16 點 Kaiser 內插 4 倍超取樣真峰值、立體聲連動、快 90ms/慢 0.7s 依壓的時間自動切換，上限 −1.3dBFS，實測 ≤ −1.0dBTP）→ masterOut → 喇叭與匯出影片。不支援 AudioWorklet 時才用備援（DynamicsCompressor + 4 倍超取樣軟削波，前面先扣 1.6dB 對齊音量）；播放/匯出前最多等 0.5 秒讓限幅器載好。舊的 DynamicsCompressor 限幅器會自動把整個訊號加約 1.1dB，所以 makeup 從 1.6 改 1.82、鼓 0.62 改 0.70，整體響度跟以前一樣（11 首 A/B 差 ≤ 0.3 LU、LRA 相同、−3dBFS 以上的時間少 2~13 倍）
 - 鋼琴用自己的殘響 getPianoVerb()（buildPianoHallIR，參數跟 Surrey 大學真實房間量測比對過）：8 個同極性早期反射（3~40ms，越晚越暗）、四頻段各自指數衰減（RT60 1.5/1.3/0.95/0.55s）、各頻段左右相關性（低音 0.75 → 高音 0.08，真實殘響低音左右幾乎一樣）、預延遲 8ms、送入前 180Hz 高通、固定種子、wet 0.33×殘響滑桿。不用共用的 buildImpulseResponse（(1−t)^2.4 衰減不自然、高頻不衰減、早期反射左右反相、左右完全不相關）；吉他也不用（見下面吉他的殘響）
 - 鋼琴殘響送出：一般 0.5、譜上有踏板 ×1.7。harmonyEndSec 一定有值（至少是同時最長音的結尾），不能拿來判斷踏板
 - 譜上沒踏板、由和聲自動延長的音用「半踏板」：放鍵後依 pianoHalfPedalTau（PIANO_HALF_PEDAL 0.7）較快衰減，避免級進旋律全部疊在一起變糊；譜上有踏板才完全延音
@@ -36,7 +36,7 @@
 - computeGuitarDynamics() 算 n.gvel / n.gdt / n.gseed：力度記號/髮夾/段落起伏（共用 pianoLevelAt / pianoAutoMacro）、拍子輕重、力度記號幅度 74 + 170×level（比鋼琴的 150 寬：ff ≈ 106、pp ≈ 33）、5 音以上才當刷弦（4 音和弦在指彈/古典是四指同時撥，當刷弦會被逐弦掃開，使用者覺得很不自然；正拍下刷低→高、反拍上刷高→低，上刷最低兩條 −16 幾乎刷不到，弦距 6~16ms 越大聲越快）、2~4 音手指同時撥（2~3 音 ≤4ms、4 音 ≤6ms）、單音旋律起伏、AR(1) + 隨機
 - 吉他混音：getGuitarBus(inst)，兩把各自的 GTR_EQ：鋼弦 75Hz 高通、220Hz −2dB、2.8kHz −1.5dB（FSS 本身就亮，不加高頻）；尼龍 70Hz 高通、130Hz −4dB（MF 麥克風近音孔，基音比第 2 諧波大 19dB、琴身 102Hz 共振）、3.5kHz 高頻架 +2dB → masterGain。殘響 getGuitarVerb() 用 buildPianoHallIR(GTR_VERB)（較小房間，RT60 1.15/1.0/0.75/0.45s、早期反射 2.4~29ms），送出 0.45。增益兩把都 1.6：FSS 巴哈 BWV846 −11.1、刷弦 −10.7、pp→ff 12.8dB；（以下是 Ella 時的量測）巴哈 BWV846 鋼弦 −12.1、尼龍 −11.6 LUFS（鋼琴同曲 −10.8），刷弦 −10.9 / −11.1；pp/p/mf/f/ff 各一小節的 G 和弦：鋼弦 −20.7/−15.2/−9.6/−8.4/−7.8、尼龍 −20.0/−15.7/−10.4/−9.3/−8.3（p→ff 約 7.4dB，跟鋼琴差不多）
 - 試過吉他繞過 loudnessComp、改用自己的母帶段（慢起音壓縮 + 補增益，像鼓那樣）：mf→ff 還是只有約 3dB（瓶頸是最後的限幅器上限，不是壓縮器），整體要小聲 2.5dB 才換到 pp→ff 多 2dB，不划算，維持走 masterGain → loudnessComp。也不要把門檻設在音量之下（−26dB、2:1 會把所有大小聲差砍半）
-- 測試：headless Chromium 錄 masterOut（ScriptProcessor），jsdelivr 在雲端環境被擋，要從 npm 拿 OSMD/JSZip 再用 page.route 攔截
+- 測試：tools/audiotest/render.mjs 用 OfflineAudioContext 離線渲染（比即時錄 masterOut 快、結果固定），jsdelivr 在雲端環境被擋，要從 npm 拿 OSMD/JSZip 再用 page.route 攔截
 - 樂器只保留鋼琴、吉他（民謠、古典兩把）、鼓組
 - 民謠吉他、古典吉他目前標「開發中」並停用（使用者要求）：樂器選單的 <option disabled>，文字加「・開發中」；舊設定存了吉他時退回鋼琴。程式與取樣都保留，拿掉 disabled 即可恢復
 - 匯出影片用 canvas.captureStream + MediaRecorder
