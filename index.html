@@ -5486,8 +5486,28 @@ function pianoPlan(need, auxBytes){
   }
   return plan;
 }
+/* 取樣檔快取(Cache Storage):第一次下載後存在裝置上,之後開 App / 換曲子直接從本機讀,不用再下載
+   (鋼琴 16 層全部約 156MB,手機網路下載是載入最慢的部分)。取樣檔重新產生時要把 SAMPLE_CACHE 的版本號加一,
+   不然使用者會繼續用到舊檔。不支援 Cache Storage(非 https、無痕模式、儲存空間不足)時照原本直接下載 */
+const SAMPLE_CACHE = "scrollscore-samples-v1";
+let sampleCachePromise = null;
+function sampleCache(){
+  if (!sampleCachePromise) sampleCachePromise = (typeof caches !== "undefined" && window.isSecureContext)
+    ? caches.open(SAMPLE_CACHE).then(async c => { for (const k of await caches.keys()) if (k.startsWith("scrollscore-samples-") && k !== SAMPLE_CACHE) caches.delete(k); return c; }).catch(() => null)
+    : Promise.resolve(null);
+  return sampleCachePromise;
+}
+async function fetchSample(url){
+  const cache = await sampleCache();
+  if (cache) { try { const hit = await cache.match(url); if (hit) return hit; } catch (e) {} }
+  const res = await fetch(url);
+  if (res.ok && cache) { try { await cache.put(url, res.clone()); } catch (e) {} }   // 空間不足就算了,這次照樣能播
+  return res;
+}
+// 同時下載/解碼的檔案數:GitHub Pages 是 HTTP/2,桌機 6 個太保守;iPhone/低記憶體裝置維持 6(同時解碼的暫存記憶體會疊加)
+const SAMPLE_FETCH_CONCURRENCY = (/iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1) || (navigator.deviceMemory && navigator.deviceMemory <= 4)) ? 6 : 12;
 async function fetchPianoBuffer(file, lenSec, ch){
-  const res = await fetch(pianoBase + file);
+  const res = await fetchSample(pianoBase + file);
   if (!res.ok) throw new Error("HTTP " + res.status);
   const buf = await audioCtx.decodeAudioData(await res.arrayBuffer());
   const n = Math.min(buf.length, Math.round((lenSec || 1e9) * buf.sampleRate));
@@ -5551,8 +5571,8 @@ function loadPianoSamples(){
       tick();
     };
     if (total) setStatus(T("statusLoadingPiano", { pct: 0 }));
-    await runLimited(first.map(job), 6);
-    await runLimited([...auxJobs.map(j => async () => { await j(); tick(); }), ...rest.map(job)], 6);
+    await runLimited(first.map(job), SAMPLE_FETCH_CONCURRENCY);
+    await runLimited([...auxJobs.map(j => async () => { await j(); tick(); }), ...rest.map(job)], SAMPLE_FETCH_CONCURRENCY);
     if (gen === pianoGen) setStatus(T("statusPianoReady", { n: Object.keys(pianoBuf).length }));
   })();
   return pianoLoading;
@@ -5784,7 +5804,7 @@ function loadGuitarSamples(inst){
     setStatus(T("statusLoadingInstrument", { inst: T(G.i18n) }));
     await runLimited(names.map(name => async () => {
       try {
-        const res = await fetch(G.base + name + ".flac");
+        const res = await fetchSample(G.base + name + ".flac");
         if (res.ok) G.buf[name] = await audioCtx.decodeAudioData(await res.arrayBuffer());
       } catch (e) {}
     }), 6);
@@ -7064,7 +7084,7 @@ let kitLoading = null;
 
 /* fixedNorm 沒給時(只有 Tone.js 備援鼓組會走到),量峰值正規化;有給就照給的倍率,保留原本的力度差異 */
 async function fetchDrumBuffer(url, fixedNorm){
-  const res = await fetch(url);
+  const res = await fetchSample(url);
   if (!res.ok) throw new Error("HTTP " + res.status);
   const buffer = await audioCtx.decodeAudioData(await res.arrayBuffer());
   if (fixedNorm) return { buffer, norm: fixedNorm };
@@ -7128,7 +7148,7 @@ function loadDrumKit(){
           const file = p.prefix + "-L" + (li + 1) + "." + String(rr).padStart(2, "0") + ".flac";
           jobs.push(async () => { try { kitBuffers[name][li].push(await fetchDrumBuffer(base + file, OWN_KIT_GAIN)); } catch (e) {} });
         });
-        await runLimited(jobs, 6);
+        await runLimited(jobs, SAMPLE_FETCH_CONCURRENCY);
         if (rr === 1) setStatus(T("statusDrumKitReady"));   // 第一輪載完就能播,其餘在背景補
       }
     }
