@@ -40,7 +40,6 @@
 - 測試：tools/audiotest/render.mjs 用 OfflineAudioContext 離線渲染（比即時錄 masterOut 快、結果固定），jsdelivr 在雲端環境被擋，要從 npm 拿 OSMD/JSZip 再用 page.route 攔截
 - 樂器只保留鋼琴、吉他（民謠、古典兩把）、鼓組
 - 民謠吉他、古典吉他目前標「開發中」並停用（使用者要求）：樂器選單的 <option disabled>，文字加「・開發中」；舊設定存了吉他時退回鋼琴。程式與取樣都保留，拿掉 disabled 即可恢復
-- 和弦伴奏練習產生器(首頁第二張卡片、設定面板按鈕,accGenerate()):選風格(流行/卡農/王道/抒情/民謠/搖滾/小調/爵士/R&B/藍調)→ 常用進行(羅馬數字字串,如 "I V/3 vi vi/b7",/3 /5 /b7 = 低音是和弦的第幾音)→ 產生 MusicXML 交給 loadScoreFile(File 物件掛 accGuide),畫譜/播放/匯出全部共用。最後補一小節主和弦。鋼琴:右手 accVoiceRH() 在所有密集轉位裡挑離上一個和弦最近的(共同音保留),譜上右手下方用 lyric 標「原位/一轉/二轉/三轉」;爵士右手只用無根音 A 型 3-5-7-9 / B 型 7-9-3-5;左手型態 block/broken(1-5-8-5)/pop(3+3+2)/alberti/jazz(殼音 + Charleston)/boogie。吉他:右手用 T123(使用者要求,台灣民謠吉他慣例;T=拇指彈低音弦、1/2/3 = 第 3/2/1 弦,等於 p/i/m/a),寫在音符下方的 lyric;指型優先開放和弦,不夠時 accGtrPlan() 建議移調夾,轉位和弦把低音放到第 6/5/4 弦(C/E、G/B、D/F#)。吉他寫實際音高 + 8vb 高音譜號(OSMD 會自己畫高八度、播放照寫的音,不看 <transpose>,加了會高八度)。吉他伴奏直接切到民謠吉他(FSS,每個音都有取樣)即使選單上停用;載入其他樂譜時若還停在停用的樂器就退回鋼琴。「指法說明」視窗:吉他和弦圖(SVG,左手手指、封閉和弦橫槓、T 彈第幾弦)、鋼琴每個和弦的左右手音
 - 匯出影片用 canvas.captureStream + MediaRecorder
 - 播放軸長度(畫面與匯出影片、鋼琴與鼓同一條規則):整首最高/最低的音符實際畫出來的範圍(measureStaffExtent:譜線 + .vf-stavenote/.vf-stem/.vf-beam/.vf-flag/.vf-ledgers,含符桿、連桁、休止符,不含速度/力度文字)再往外留幾個譜線間距,上下一樣多——有樂器面板 1.8 格、只有樂譜 1.2 格(PLAYLINE_PAD_SPACES_*)。只算符頭的話,符尾朝上那側很擠、另一側很空(使用者反映不平衡)。匯出時播放軸可以超出樂譜圖,但不碰標題(minTopY)、不壓樂器面板。畫面上 updatePlaylineExtent() 由 ResizeObserver 監看 #stage;舞台放不下樂譜(含留白)時 #scroller 縮小並置中(scoreFit,捲動一律用 setScrollerX)。用的是整首的最高最低音,所以只看開頭幾小節時可能一邊比較長(後面才出現的極端音)。檢查:tools/audiotest/playline_probe.mjs
 - 播放軸半透明(使用者要求):畫面上 #playline 的 opacity = 游標濃度 × 0.5,匯出影片 EXPORT_PLAYLINE_ALPHA = 0.5,鋼琴、鼓都一樣
