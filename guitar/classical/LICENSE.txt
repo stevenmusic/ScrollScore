@@ -1,0 +1,14 @@
+Classical (nylon-string) guitar samples
+Source: Philharmonia Orchestra Sound Samples — https://philharmonia.co.uk/resources/sound-samples/
+Copyright © Philharmonia Orchestra.
+License: Creative Commons Attribution-ShareAlike 3.0 Unported (CC BY-SA 3.0)
+https://creativecommons.org/licenses/by-sa/3.0/
+
+Modified for ScrollScore by guitar/build/philharmonia_build.py:
+65 Hz high-pass, onset alignment, pitch measured into manifest.json "tune" (cents, corrected at
+playback), loudness aligned to -20 LUFS, fade-out, re-encoded as 16-bit FLAC.
+The modified files in this folder are distributed under the same license (CC BY-SA 3.0).
+Used by ScrollScore, HarmonyHands and HarmonyMap (stevenmusic).
+
+Files: ph-<note>-L<layer>.flac, layer 1 = piano (soft), layer 2 = forte (loud).
+Recorded pitches: E2–B4 every semitone, D5, D#5, E5, G5, G#5, C6 (C4/C#4/G5/G#5 forte only, C6 piano only).
