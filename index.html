@@ -2442,12 +2442,13 @@ function gpToMusicXML(AT, score, trackIndex){
   const DIR_TEXT = { JumpDaCapo: "D.C.", JumpDaCapoAlCoda: "D.C. al Coda", JumpDaCapoAlDoubleCoda: "D.C. al Double Coda", JumpDaCapoAlFine: "D.C. al Fine", JumpDalSegno: "D.S.", JumpDalSegnoAlCoda: "D.S. al Coda", JumpDalSegnoAlDoubleCoda: "D.S. al Double Coda", JumpDalSegnoAlFine: "D.S. al Fine", JumpDalSegnoSegno: "D.S.S.", JumpDalSegnoSegnoAlCoda: "D.S.S. al Coda", JumpDalSegnoSegnoAlDoubleCoda: "D.S.S. al Double Coda", JumpDalSegnoSegnoAlFine: "D.S.S. al Fine", JumpDaCoda: "To Coda", JumpDaDoubleCoda: "To Double Coda", TargetFine: "Fine" };
   const DYN = ["ppp", "pp", "p", "mp", "mf", "f", "ff", "fff", "pppp", "ppppp", "pppppp", "ffff", "fffff", "ffffff", "sf", "sfp", "sfpp", "fp", "rf", "rfz", "sfz", "sffz", "fz", "n", "pf", "sfzp"];
   const TF = M.TripletFeel;
-  const TF_TEXT = { [TF.Triplet8th]: "Triplet Feel ♪♪ = ♪³♪", [TF.Triplet16th]: "Triplet Feel (16th)", [TF.Dotted8th]: "♪♪ = ♪. ♬", [TF.Dotted16th]: "Dotted Feel (16th)", [TF.Scottish8th]: "Scottish Feel", [TF.Scottish16th]: "Scottish Feel (16th)" };
+  const TF_TEXT = { [TF.Triplet8th]: "(♫ = ♪³♪)", [TF.Triplet16th]: "Triplet Feel (16th)", [TF.Dotted8th]: "♪♪ = ♪. ♬", [TF.Dotted16th]: "Dotted Feel (16th)", [TF.Scottish8th]: "Scottish Feel", [TF.Scottish16th]: "Scottish Feel (16th)" };
 
   let prevTime = null, prevKey = null, prevClefs = [], prevTF = TF.NoTripletFeel, prevStaffLines = null;
   const lastDyn = staves.map(() => null);
   const slurNum = new Map(); let slurNext = 1;
   const wedgeOpen = staves.map(() => 0);
+  const letRingOpen = staves.map(() => false);
   const nMb = score.masterBars.length;
   for (let mi = 0; mi < nMb; mi++) {
     const mb = score.masterBars[mi];
@@ -2484,13 +2485,17 @@ function gpToMusicXML(AT, score, trackIndex){
       else {
         const C = M.Clef, O = M.Ottavia;
         const [sign, line] = bar.clef === C.F4 ? ["F", 4] : bar.clef === C.C3 ? ["C", 3] : bar.clef === C.C4 ? ["C", 4] : bar.clef === C.Neutral ? ["percussion", 0] : ["G", 2];
-        const oc = bar.clefOttava === O._8va ? 1 : bar.clefOttava === O._15ma ? 2 : bar.clefOttava === O._8vb ? -1 : bar.clefOttava === O._15mb ? -2 : 0;
-        c = `${sign}/${line}/${oc}`;
+        // Guitar Pro 把音畫在 displayValue(吉他記譜比實際高八度:displayTranspositionPitch = −12),譜號旁的小 8 只看 clefOttava。
+        // OSMD 的顯示位置 = <pitch> − clef-octave-change 個八度,所以 pitch 寫實際音高(播放才對)、clef-octave-change 寫兩者差幾個八度;
+        // GP 沒畫小 8 的話標 id="gp-hide-clef-octave",renderScore 畫完把譜號下的小 8 拿掉
+        const shown = bar.clefOttava === O._8va ? 1 : bar.clefOttava === O._15ma ? 2 : bar.clefOttava === O._8vb ? -1 : bar.clefOttava === O._15mb ? -2 : 0;
+        const oc = Math.round((st.displayTranspositionPitch || 0) / 12);
+        c = `${sign}/${line}/${oc}/${shown !== oc ? 1 : 0}`;
       }
       if (c !== prevClefs[si]) {
         const num = staves.length > 1 ? ` number="${si + 1}"` : "";
         if (c === "percussion") attrs.push(`<clef${num}><sign>percussion</sign></clef>`);
-        else { const [sign, line, oc] = c.split("/"); attrs.push(`<clef${num}><sign>${sign}</sign>${sign !== "percussion" ? `<line>${line}</line>` : ""}${+oc ? `<clef-octave-change>${oc}</clef-octave-change>` : ""}</clef>`); }
+        else { const [sign, line, oc, hide] = c.split("/"); attrs.push(`<clef${num}${+oc && +hide ? ' id="gp-hide-clef-octave"' : ""}><sign>${sign}</sign>${sign !== "percussion" ? `<line>${line}</line>` : ""}${+oc ? `<clef-octave-change>${oc}</clef-octave-change>` : ""}</clef>`); }
         prevClefs[si] = c;
       }
     });
@@ -2570,6 +2575,15 @@ function gpToMusicXML(AT, score, trackIndex){
           const h = b.__h;
           const stemDir = h ? (h.dir === BD.Up ? "up" : "down") : "up";
           // 拍上的文字、力度、漸強漸弱(只看每個譜表的第一聲部)
+          // 和弦名稱:寫成 <harmony><numeral-root text="…">,OSMD 會一字不差照原檔顯示(用 root/kind 的話 OSMD 會自己改寫,A6 變 Amaj6);
+          // 寫成 <words> 的話會跟同一拍的 LetRing 併成同一行
+          if (!grace && b.chordId != null && b.chord && b.chord.name && b.chord.showName !== false) o(`<harmony print-frame="no"><numeral><numeral-root text="${xmlEsc(b.chord.name)}">1</numeral-root></numeral><kind>none</kind>${sNum}</harmony>`);
+          // Let Ring:連續有 let ring 的拍子畫「LetRing - - -」(每個譜表的第一聲部)
+          if (vi === 0 && !grace) {
+            const ring = !b.isRest && b.notes.some(n => n.isLetRing);
+            if (!ring && letRingOpen[si]) { o(`<direction placement="above"><direction-type><dashes type="stop" number="${si + 2}"/></direction-type>${sNum}</direction>`); letRingOpen[si] = false; }
+            if (ring && !letRingOpen[si]) { o(`<direction placement="above"><direction-type><words font-style="italic" font-size="8">LetRing</words></direction-type><direction-type><dashes type="start" number="${si + 2}"/></direction-type>${sNum}</direction>`); letRingOpen[si] = true; }
+          }
           if (b.text) o(`<direction placement="above"><direction-type><words>${xmlEsc(b.text)}</words></direction-type>${sNum}</direction>`);
           if (vi === 0 && !b.isRest && !grace && !(score.stylesheet && score.stylesheet.hideDynamics)) {
             // Guitar Pro 在第一個音與力度改變處畫力度記號。GP 每個音都有力度(預設 f),第一個如果是預設的 f
@@ -2653,7 +2667,10 @@ function gpToMusicXML(AT, score, trackIndex){
               const slurTo = n.slurDestination || n.hammerPullDestination;
               const slurFrom = n.slurOrigin || n.hammerPullOrigin;
               if (slurFrom && slurNum.has(slurFrom.id)) { slurXml += `<slur type="stop" number="${slurNum.get(slurFrom.id)}"/>`; slurNum.delete(slurFrom.id); }
-              if (slurTo) { const k = slurNext; slurNext = slurNext % 6 + 1; slurNum.set(n.id, k); slurXml += `<slur type="start" number="${k}"${stemDir === "up" ? ' placement="below"' : ' placement="above"'}/>`; }
+              // 搥弦/勾弦:Guitar Pro 在圓滑線上標 H / P(下一個音比較高 = H)
+              if (slurTo) { const k = slurNext; slurNext = slurNext % 6 + 1; slurNum.set(n.id, k); slurXml += `<slur type="start" number="${k}"${n.hammerPullDestination || stemDir !== "up" ? ' placement="above"' : ' placement="below"'}/>`; }
+              if (n.hammerPullDestination) techXml += n.hammerPullDestination.realValue >= n.realValue ? '<hammer-on type="start">H</hammer-on>' : '<pull-off type="start">P</pull-off>';
+              if (n.hammerPullOrigin) techXml += n.realValue >= n.hammerPullOrigin.realValue ? '<hammer-on type="stop"/>' : '<pull-off type="stop"/>';
               let orn = "";
               if (ni === 0 && b.tremoloSpeed) { const k = beamsOf(b.tremoloSpeed); if (k > 0) orn = `<ornaments><tremolo type="single">${k}</tremolo></ornaments>`; }
               const nt = (ni === 0 ? (tupStart ? '<tuplet type="start" bracket="yes"/>' : "") + (tupStop ? '<tuplet type="stop"/>' : "") + (fermata ? "<fermata/>" : "") : "")
@@ -2676,6 +2693,7 @@ function gpToMusicXML(AT, score, trackIndex){
       });
     });
     // 右邊:跳躍文字、反覆結束、第幾次結尾結束、雙縱線/終止線
+    if (mi === nMb - 1) staves.forEach((_, si) => { if (letRingOpen[si]) o(`<direction placement="above"><direction-type><dashes type="stop" number="${si + 2}"/></direction-type>${staves.length > 1 ? `<staff>${si + 1}</staff>` : ""}</direction>`); });
     for (const x of jumpDirs) o(x);
     const endStops = endNums.length && nextEnd !== mb.alternateEndings;
     const isLast = mi === nMb - 1;
@@ -3204,6 +3222,16 @@ function mergeRestMeasures(xmlText){
    這裡在OSMD渲染完之後,直接修改輸出的SVG:只處理「單音、沒有被歸在同一組符尾(beam)裡」
    的音符(和弦、符尾group的符桿邏輯更複雜,故意跳過避免弄亂原本的排版),
    逐一算出每個音符所在譜表的中線位置,加線音符就把符桿的自由端接到中線上。 */
+/* Guitar Pro 匯入的吉他:為了播放音高正確,譜號寫成「低八度的高音譜號」(clef-octave-change −1),但 Guitar Pro 原本的
+   畫面沒有譜號下的小 8(見 gpToMusicXML)。OSMD 把小 8 畫成譜號群組裡的第二個 path,拿掉它 */
+function hideClefOctaveMarks(){
+  const svg = $("score").querySelector("svg");
+  if (!svg) return;
+  for (const g of svg.querySelectorAll(".vf-clef")) {
+    const paths = g.querySelectorAll("path");
+    for (let i = 1; i < paths.length; i++) paths[i].remove();
+  }
+}
 function extendLedgerLineStems(){
   const svg = $("score").querySelector("svg");
   if (!svg) return;
@@ -3295,6 +3323,7 @@ async function renderScore(xmlText){
   // (蕭邦第一號敘事曲 465 個踏板記號,疊到譜表下方 140 格,畫面上看不到譜表)。排出來太誇張時改成不畫踏板記號
   // (踏板的播放照樣依原檔),一般曲子不受影響
   if (scoreLayoutTooTall()) { osmd.EngravingRules.RenderPedals = false; osmd.render(); }
+  if (finalXml.includes('id="gp-hide-clef-octave"')) hideClefOctaveMarks();
   extendLedgerLineStems(); // OSMD符桿長度是固定值,不會因為加線音符離譜表遠就自動加長,這裡渲染完手動補上
 
   buildTimeline();
