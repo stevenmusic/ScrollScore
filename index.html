@@ -717,15 +717,22 @@ body.exporting-active .empty-card{
   align-items:center;justify-content:center;
   background:var(--scrim);backdrop-filter:blur(3px);
 }
-#formatOverlay.show{display:flex}
-#formatOverlay .box{
+/* Guitar Pro 多音軌時選一軌(跟匯出格式選擇同一種對話框) */
+#trackOverlay{
+  position:fixed;inset:0;z-index:45;display:none;
+  align-items:center;justify-content:center;
+  background:var(--scrim);backdrop-filter:blur(3px);
+}
+#trackOverlay .fmt b{overflow-wrap:anywhere}
+#formatOverlay.show,#trackOverlay.show{display:flex}
+#formatOverlay .box,#trackOverlay .box{
   text-align:center;padding:26px 28px;border:1px solid var(--gold);
   border-radius:var(--radius-md);background:var(--panel-2);width:min(300px, 86vw);
   max-height:86vh;max-height:86dvh;overflow-y:auto;box-sizing:border-box;
   box-shadow:var(--shadow-lg);
 }
 .fmt-step{display:flex;flex-direction:column;align-items:stretch}
-#formatOverlay .title{
+#formatOverlay .title,#trackOverlay .title{
   font-family:"Noto Serif TC",serif;font-size:var(--fs-xl);color:var(--gold);
   letter-spacing:.1em;margin-bottom:18px;
 }
@@ -820,7 +827,7 @@ body.exporting-active .empty-card{
       <span class="btn-label" data-i18n="settingsToggleLabel">設定</span>
     </button>
   </div>
-  <input type="file" id="fileInput" accept=".xml,.musicxml,.mxl">
+  <input type="file" id="fileInput" accept=".xml,.musicxml,.mxl,.gp,.gpx,.gp5,.gp4,.gp3">
 </header>
 <!-- 第二排:載入/播放/回到開頭。樂譜載入前不出現(跟原本 loadBtn 的行為一致,
      載入前的載入動作交給舞台中央的大卡片),載入後才靠右浮現在第一排下方,
@@ -952,7 +959,7 @@ body.exporting-active .empty-card{
         <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
       </div>
       <p class="empty-title" data-i18n="emptyTitle">點擊這裡載入樂譜,開始使用</p>
-      <p class="empty-sub" data-i18n="emptySub">支援 Sibelius / Finale / MuseScore 匯出之 MusicXML(.xml / .mxl)</p>
+      <p class="empty-sub" data-i18n="emptySub">支援 MusicXML(.xml / .mxl)與 Guitar Pro(.gp / .gpx / .gp5 / .gp4 / .gp3)</p>
       <button id="trySampleBtn" class="link-btn" data-i18n="trySampleBtn">或先試用範例樂譜看看 →</button>
     </div>
   </div>
@@ -960,6 +967,13 @@ body.exporting-active .empty-card{
   <div id="playline"></div>
   <div id="countdown">3</div>
   <button id="exitrec" data-i18n-attr="title:exitRecTitle">✕</button>
+  <div id="trackOverlay" role="dialog" aria-modal="true" aria-labelledby="trackTitle">
+    <div class="box">
+      <div class="title" id="trackTitle" data-i18n="gpTrackTitle">選擇要顯示的音軌</div>
+      <div id="trackList" class="fmt-step"></div>
+      <button class="btn" id="trackCancel" data-i18n="cancelBtn">取消</button>
+    </div>
+  </div>
   <div id="formatOverlay">
     <div class="box">
       <div class="title" id="fmtTitle">選擇匯出類型</div>
@@ -1190,7 +1204,7 @@ const I18N = {
     exportBtnTitleReady: "自動產生可下載的影片檔",
 
     emptyTitle: "點擊這裡載入樂譜,開始使用",
-    emptySub: "支援 Sibelius / Finale / MuseScore 匯出之 MusicXML(.xml / .mxl)",
+    emptySub: "支援 MusicXML(.xml / .mxl)與 Guitar Pro(.gp / .gpx / .gp5 / .gp4 / .gp3)",
     trySampleBtn: "或先試用範例樂譜看看 →",
     sampleScoreTitle: "ScrollScore 範例樂譜:小星星",
     sampleScoreFilename: "範例樂譜-小星星.musicxml",
@@ -1266,7 +1280,16 @@ const I18N = {
     statusParsing: "解析中:{name}",
     statusLoaded: "已載入:{name}({events} 個節點,{repeats} 組重複音型){note}",
     statusLoadFailed: "載入失敗:{msg}",
-    statusDropHint: "請拖曳 .musicxml / .xml / .mxl 檔案",
+    statusDropHint: "請拖曳 .musicxml / .xml / .mxl 或 Guitar Pro(.gp / .gpx / .gp5 / .gp4 / .gp3)檔案",
+    gpLoadingLib: "載入 Guitar Pro 讀取元件中…",
+    gpLoadLibFailed: "Guitar Pro 讀取元件載入失敗,請確認網路連線後再試一次",
+    gpParseFailed: "讀不懂這個 Guitar Pro 檔案:{msg}",
+    gpTrackTitle: "選擇要顯示的音軌",
+    gpTrackDrum: "鼓組",
+    gpTrackStringed: "{n} 弦",
+    gpTrackOther: "樂器",
+    gpTrackBars: "{n} 小節有音符",
+    gpCancelled: "已取消載入",
     errMxlNoMusicXml: "MXL 內找不到 MusicXML",
     tempoNoteWithUnit: "(已自動套用樂譜內建速度{unit}={t},相當於四分音符={q})",
     tempoNoteSimple: "(已自動套用樂譜內建速度{t})",
@@ -1396,7 +1419,7 @@ const I18N = {
     exportBtnTitleReady: "Automatically generates a downloadable video file",
 
     emptyTitle: "Click here to load a score and get started",
-    emptySub: "Supports MusicXML exported from Sibelius / Finale / MuseScore (.xml / .mxl)",
+    emptySub: "Supports MusicXML (.xml / .mxl) and Guitar Pro (.gp / .gpx / .gp5 / .gp4 / .gp3)",
     trySampleBtn: "Or try the sample score first →",
     sampleScoreTitle: "ScrollScore Sample: Twinkle Twinkle Little Star",
     sampleScoreFilename: "sample-score-twinkle.musicxml",
@@ -1471,7 +1494,16 @@ const I18N = {
     statusParsing: "Parsing: {name}",
     statusLoaded: "Loaded: {name} ({events} events, {repeats} repeat patterns){note}",
     statusLoadFailed: "Load failed: {msg}",
-    statusDropHint: "Please drop a .musicxml / .xml / .mxl file",
+    statusDropHint: "Please drop a .musicxml / .xml / .mxl or Guitar Pro (.gp / .gpx / .gp5 / .gp4 / .gp3) file",
+    gpLoadingLib: "Loading the Guitar Pro reader…",
+    gpLoadLibFailed: "Couldn't load the Guitar Pro reader. Check your connection and try again",
+    gpParseFailed: "Couldn't read this Guitar Pro file: {msg}",
+    gpTrackTitle: "Choose a track",
+    gpTrackDrum: "Drums",
+    gpTrackStringed: "{n}-string",
+    gpTrackOther: "Instrument",
+    gpTrackBars: "{n} bars with notes",
+    gpCancelled: "Loading cancelled",
     errMxlNoMusicXml: "No MusicXML file found inside the MXL archive",
     tempoNoteWithUnit: " (auto-applied the score's tempo {unit}={t}, equal to quarter note={q})",
     tempoNoteSimple: " (auto-applied the score's tempo {t})",
@@ -2055,7 +2087,10 @@ async function loadScoreFile(file){
   setStatus(T("statusParsing", { name: file.name }));
   try {
     let xmlText;
-    if (/\.mxl$/i.test(file.name)) {
+    if (GP_FILE_RE.test(file.name)) {
+      xmlText = await gpFileToMusicXML(file);
+      if (xmlText == null) { setStatus(T("gpCancelled")); return; }
+    } else if (/\.mxl$/i.test(file.name)) {
       xmlText = await extractMXL(file);
     } else {
       xmlText = await file.text();
@@ -2090,7 +2125,7 @@ async function loadScoreFile(file){
       $("instrument").value = "piano";
     }
     // 匯出影片標題浮水印預設值:優先用樂譜內建的標題,沒有的話退回檔名(去掉副檔名),使用者仍可自行修改
-    $("exportTitleInput").value = parsed.scoreTitle || file.name.replace(/\.(xml|musicxml|mxl)$/i, "");
+    $("exportTitleInput").value = parsed.scoreTitle || file.name.replace(SCORE_FILE_RE, "");
     arpMap = parsed.arpMap;
     articEntries = buildSortedEntries(articMap);
     arpEntries = buildSortedEntries(arpMap);
@@ -2140,7 +2175,8 @@ $("fileInput").addEventListener("change", async e => {
 });
 
 /* ── 拖放檔案到樂譜區直接載入(桌面版方便) ─────────────────── */
-const SCORE_FILE_RE = /\.(xml|musicxml|mxl)$/i;
+const SCORE_FILE_RE = /\.(xml|musicxml|mxl|gp|gpx|gp5|gp4|gp3)$/i;
+const GP_FILE_RE = /\.(gp|gpx|gp5|gp4|gp3)$/i;
 let dragDepth = 0;
 $("stage").addEventListener("dragenter", e => {
   if (!Array.from(e.dataTransfer.types || []).includes("Files")) return;
@@ -2164,6 +2200,541 @@ $("stage").addEventListener("drop", async e => {
   if (!file) { setStatus(T("statusDropHint")); return; }
   await loadScoreFile(file);
 });
+
+/* ── Guitar Pro 匯入(.gp / .gpx / .gp5 / .gp4 / .gp3)──────────────────
+   用 alphaTab 讀 GP 檔(第一次選 GP 檔時才從 CDN 載入),再轉成 MusicXML 交給原本的 OSMD 流程(播放、匯出影片都不用改)。
+   版面照 Guitar Pro:鼓件的譜上位置、符頭、技法記號(choke 的點、半開 hi-hat…)用檔案裡的鼓件表(GP7 以後存在檔案裡,
+   GP3~6 用 GP7 預設表 GP_DRUM_ARTS),符桿方向用檔案存的方向(GP7 以後每一拍都有存),沒存的照 alphaTab/Guitar Pro 的算法:
+   第二聲部朝下、多聲部時第一聲部朝上、單聲部看符尾組最高最低兩音的中點(在中線以下朝上);符尾分組照小節的 beaming 規則
+   (檔案有存就用,沒有用 Guitar Pro 預設)與每拍的 beamingMode;重音、斷音、choke 記號放在符頭那側(Guitar Pro 的位置)。
+   文字:標題、作者、段落標記、拍上的文字、速度文字、歌詞、力度、反覆/第幾次結尾/D.S./Coda 照原檔 */
+const ALPHATAB_URL = "https://cdn.jsdelivr.net/npm/@coderline/alphatab@1.8.4/dist/alphaTab.min.js";
+// GP7 預設鼓件表(alphaTab PercussionMapper.instrumentArticulations):id → "譜上位置(0 = 第五線 F5,往下每格 +1),輸出 GM 鼓號,符頭,技法記號,位置"
+const GP_DRUM_ARTS = {38:"3,38,N,",37:"3,37,X,",91:"3,38,D,",42:"-1,42,X,",92:"-1,46,CS,",46:"-1,46,CX,",44:"9,44,X,",35:"8,35,N,",36:"7,36,N,",50:"1,50,N,",48:"2,48,N,",47:"4,47,N,",45:"5,45,N,",43:"6,43,N,",93:"0,51,X,ed,a",51:"0,51,X,",53:"0,53,D,",94:"0,51,X,st,o",55:"-2,55,X,",95:"-2,55,X,st,o",52:"-3,52,HXH,",96:"-3,52,HXH,",49:"-2,49,HX,",97:"-2,49,HX,st,o",57:"-1,57,HX,",98:"-1,57,HX,st,o",99:"1,56,T,",100:"1,56,X,",56:"0,56,T,",101:"0,56,X,",102:"-1,56,T,",103:"-1,56,X,",77:"-9,77,T,",76:"-10,76,T,",60:"-4,60,N,",104:"-5,60,N,pa,i",105:"-6,60,X,",61:"-7,61,N,",106:"-8,61,N,pa,i",107:"-16,61,X,",66:"10,66,N,",65:"9,65,N,",68:"12,68,N,",67:"11,67,N,",64:"17,64,N,",108:"16,64,X,",109:"15,64,N,pa,i",63:"14,63,N,",110:"13,63,X,",62:"19,62,N,pa,i",72:"-11,72,N,",71:"-17,71,N,",73:"38,73,N,",74:"37,74,N,",86:"36,86,N,",87:"35,87,X,pa,i",54:"3,54,T,",111:"2,54,T,ub,a",112:"1,54,T,db,a",113:"-7,54,X,",79:"30,79,N,",78:"29,78,X,",58:"28,58,N,",81:"27,81,N,",80:"26,80,X,pa,i",114:"25,43,N,",115:"18,49,N,",116:"24,49,X,",69:"23,69,N,",117:"22,69,N,ub,o",85:"21,85,N,",75:"20,75,N,",70:"-12,70,N,",118:"-13,70,N,ub,o",119:"-14,70,N,",120:"-15,70,N,ub,o",82:"-23,82,N,",122:"-24,82,N,ub,o",84:"-18,53,N,",123:"-19,53,N,ub,o",83:"-20,53,N,",83:"-20,53,N,",124:"-21,62,0,go,b",125:"-22,62,0,go,a",39:"3,39,N,",40:"3,40,N,",31:"3,40,S,",41:"5,41,N,",59:"2,59,X,ed,a",126:"2,59,X,",127:"2,59,D,",29:"2,59,X,st,o",30:"-3,49,X,",33:"3,37,X,",34:"3,38,N,"};
+let alphaTabPromise = null;
+function loadAlphaTab(){
+  if (window.alphaTab) return Promise.resolve(window.alphaTab);
+  if (!alphaTabPromise) alphaTabPromise = new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = ALPHATAB_URL;
+    s.onload = () => window.alphaTab ? resolve(window.alphaTab) : reject(new Error("alphaTab"));
+    s.onerror = () => { alphaTabPromise = null; reject(new Error(T("gpLoadLibFailed"))); };
+    document.head.appendChild(s);
+  });
+  return alphaTabPromise;
+}
+function gpDrumArt(AT, note){
+  const track = note.beat.voice.bar.staff.track, idx = note.percussionArticulation;
+  const sym = v => (AT.model.MusicFontSymbol[v] || "");
+  if (idx >= 0 && idx < track.percussionArticulations.length) {
+    const a = track.percussionArticulations[idx];
+    return { line: a.staffLine, gm: a.outputMidiNumber, heads: [sym(a.noteHeadDefault), sym(a.noteHeadHalf), sym(a.noteHeadWhole)], tech: sym(a.techniqueSymbol), place: a.techniqueSymbolPlacement };
+  }
+  const d = GP_DRUM_ARTS[idx];
+  if (d) { const p = d.split(","); return { line: +p[0], gm: +p[1], heads: [p[2], p[2], p[2]], tech: p[3], place: p[4] === "a" ? 0 : p[4] === "i" ? 1 : p[4] === "b" ? 2 : 3 }; }
+  return { line: 3, gm: idx >= 27 && idx <= 87 ? idx : 38, heads: ["N", "N", "N"], tech: "", place: 3 };
+}
+// GP/SMuFL 符頭 → MusicXML(只用 OSMD 畫得出來的)
+function gpNotehead(name){
+  if (/^N$|^Notehead(Black|Half|Whole)$/.test(name)) return null;
+  if (/^(X|HX|HXH)$|XBlack|XHalf|XWhole|HeavyX/.test(name)) return "x";
+  if (/^(CX|CS)$|CircleX|CircleSlash|Circled/.test(name)) return "circle-x";
+  if (/^D$|Diamond/.test(name)) return "diamond";
+  if (/^T$|TriangleUp/.test(name)) return "triangle";
+  if (/TriangleDown/.test(name)) return "inverted triangle";
+  if (/^0$|NoteheadNull/.test(name)) return "none";
+  if (/^S$|Slashed/.test(name)) return "x";
+  if (/Square/.test(name)) return "square";
+  return null;
+}
+function gpTechCode(name){
+  if (!name || name === "None") return "";
+  if (/^st$|Staccato/.test(name)) return "st";
+  if (/^pa$|Parenthesis/.test(name)) return "pa";
+  if (/^ub$|UpBow/.test(name)) return "ub";
+  if (/^db$|DownBow/.test(name)) return "db";
+  if (/HalfOpen/.test(name)) return "ho";
+  if (/Open/.test(name)) return "op";
+  if (/Accent/.test(name)) return "ac";
+  return "";
+}
+function xmlEsc(s){ return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
+
+function gpToMusicXML(AT, score, trackIndex){
+  const M = AT.model;
+  const BD = (AT.rendering && AT.rendering.BeamDirection) || { Up: 0, Down: 1 };
+  const track = score.tracks[trackIndex];
+  const staves = track.staves;
+  const isDrum = staves.some(s => s.isPercussion);
+  const DIV = 6720;   // 每個四分音符的 divisions(3、5、6、7 連音都整除)
+  const TICK = 960;   // alphaTab 的 tick(四分音符 = 960)
+  const TYPE = { [-4]: "long", [-2]: "breve", 1: "whole", 2: "half", 4: "quarter", 8: "eighth", 16: "16th", 32: "32nd", 64: "64th", 128: "128th", 256: "256th" };
+  const beamsOf = d => d >= 8 ? Math.round(Math.log2(d / 4)) : 0;
+  const durTicks = d => d < 0 ? TICK * 4 * -d : TICK * 4 / d;
+  const beatDiv = b => {
+    let x = DIV * 4 / (b.duration < 0 ? 1 / -b.duration : b.duration);
+    let add = x / 2; for (let i = 0; i < b.dots; i++) { x += add; add /= 2; }
+    if (b.hasTuplet) x = x * b.tupletDenominator / b.tupletNumerator;
+    return Math.round(x);
+  };
+  const out = [];
+  const o = s => out.push(s);
+  // 鼓件 → <score-instrument>(播放靠 midi-unpitched 決定鼓件)
+  const drumInst = new Map();   // gm → id
+  if (isDrum) for (const st of staves) for (const bar of st.bars) for (const v of bar.voices) for (const b of v.beats) for (const n of b.notes) {
+    const a = gpDrumArt(AT, n);
+    if (!drumInst.has(a.gm)) drumInst.set(a.gm, "P1-I" + a.gm);
+  }
+  o('<?xml version="1.0" encoding="UTF-8"?>');
+  o('<!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 4.0 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">');
+  o('<score-partwise version="4.0">');
+  const title = score.title || "";
+  if (title) o(`<work><work-title>${xmlEsc(title)}</work-title></work>`);
+  if (score.subTitle) o(`<movement-title>${xmlEsc(score.subTitle)}</movement-title>`);
+  o("<identification>");
+  if (score.artist) o(`<creator type="artist">${xmlEsc(score.artist)}</creator>`);
+  if (score.music) o(`<creator type="composer">${xmlEsc(score.music)}</creator>`);
+  if (score.words) o(`<creator type="lyricist">${xmlEsc(score.words)}</creator>`);
+  if (score.copyright) o(`<rights>${xmlEsc(score.copyright)}</rights>`);
+  o("<encoding><software>ScrollScore (Guitar Pro import via alphaTab)</software></encoding></identification>");
+  o('<part-list><score-part id="P1">');
+  o(`<part-name>${xmlEsc(track.name || "")}</part-name>`);
+  if (track.shortName) o(`<part-abbreviation>${xmlEsc(track.shortName)}</part-abbreviation>`);
+  if (isDrum) {
+    for (const [gm, id] of drumInst) o(`<score-instrument id="${id}"><instrument-name>GM ${gm}</instrument-name></score-instrument>`);
+    for (const [gm, id] of drumInst) o(`<midi-instrument id="${id}"><midi-channel>10</midi-channel><midi-unpitched>${gm + 1}</midi-unpitched></midi-instrument>`);
+  } else {
+    o(`<score-instrument id="P1-I1"><instrument-name>${xmlEsc(track.name || "")}</instrument-name></score-instrument>`);
+    o(`<midi-instrument id="P1-I1"><midi-channel>${(track.playbackInfo.primaryChannel || 0) + 1}</midi-channel><midi-program>${(track.playbackInfo.program || 0) + 1}</midi-program></midi-instrument>`);
+  }
+  o('</score-part></part-list><part id="P1">');
+
+  // Guitar Pro 預設符尾分組(alphaTab BarHelpers 的預設表;拍號不在表內時以四分(複拍子附點四分)為一組)
+  const DEF_BEAM = { "2_16": [16, [1, 1]], "1_8": [8, [1]], "1_4": [4, [1]], "3_16": [16, [3]], "4_16": [16, [2, 2]], "2_8": [8, [1, 1]], "5_16": [16, [3, 2]], "6_16": [16, [3, 3]], "3_8": [8, [3]], "4_8": [8, [2, 2]], "2_4": [4, [1, 1]], "9_16": [16, [3, 3, 3]], "5_8": [8, [3, 2]], "12_16": [16, [3, 3, 3, 3]], "6_8": [8, [3, 3]], "3_4": [4, [1, 1, 1]], "7_8": [8, [4, 3]], "8_8": [8, [3, 3, 2]], "4_4": [4, [1, 1, 1, 1]], "9_8": [8, [3, 3, 3]], "10_8": [8, [4, 3, 3]], "5_4": [4, [1, 1, 1, 1, 1]], "12_8": [8, [3, 3, 3, 3]], "6_4": [4, [1, 1, 1, 1, 1, 1]], "15_8": [8, [3, 3, 3, 3, 3]], "8_4": [4, [1, 1, 1, 1, 1, 1, 1, 1]], "18_8": [8, [3, 3, 3, 3, 3, 3]] };
+  const barTicks = mb => mb.calculateDuration ? mb.calculateDuration(false) : TICK * 4 * mb.timeSignatureNumerator / mb.timeSignatureDenominator;
+  function beamLookup(mb, shortest){
+    const rules = mb.actualBeamingRules || mb.beamingRules;
+    let groupsMap;
+    if (rules && rules.groups && rules.groups.size) groupsMap = rules.groups;
+    else {
+      const key = mb.timeSignatureNumerator + "_" + mb.timeSignatureDenominator;
+      if (DEF_BEAM[key]) groupsMap = new Map([[DEF_BEAM[key][0], DEF_BEAM[key][1]]]);
+      else {
+        let divLen = TICK; if (mb.timeSignatureDenominator === 8 && mb.timeSignatureNumerator % 3 === 0) divLen += TICK / 2;
+        const n = Math.ceil(barTicks(mb) / divLen), per = divLen / TICK * 2;
+        groupsMap = new Map([[8, Array(n).fill(per)]]);
+      }
+    }
+    // findRule
+    let rule = null;
+    if (groupsMap.size === 1) rule = [...groupsMap][0];
+    else if (shortest < 4) rule = [shortest, []];
+    else {
+      for (let d = shortest; d <= 256 && !rule; d *= 2) if (groupsMap.has(d)) rule = [d, groupsMap.get(d)];
+      for (let d = shortest / 2; d > 2 && !rule; d /= 2) if (groupsMap.has(d)) rule = [d, groupsMap.get(d)];
+      if (!rule) rule = [shortest, []];
+    }
+    const groups = rule[1].slice(); while (groups.length && groups[groups.length - 1] === 0) groups.pop();
+    if (!groups.length) return t => t;
+    const total = barTicks(mb), division = durTicks(rule[0]), slotCount = total / division, slots = [];
+    let gi = 0, remain = groups[0];
+    for (let i = 0; i < slotCount; i++) {
+      if (gi < groups.length) { slots.push(gi); if (--remain <= 0) { gi++; if (gi < groups.length) remain = groups[gi]; } }
+      else { slots.push(gi); gi++; }
+    }
+    return t => slots[Math.floor((t % total) / division)];
+  }
+  // 譜上位置(0 = 第五線,往下每格 +1)
+  const STEP_NAMES = ["C", "D", "E", "F", "G", "A", "B"];
+  const SHARP = [[0, 0], [0, 1], [1, 0], [1, 1], [2, 0], [3, 0], [3, 1], [4, 0], [4, 1], [5, 0], [5, 1], [6, 0]];
+  const FLAT = [[0, 0], [1, -1], [1, 0], [2, -1], [2, 0], [3, 0], [4, -1], [4, 0], [5, -1], [5, 0], [6, -1], [6, 0]];
+  const spell = (midi, ks, mode) => {
+    const pc = ((midi % 12) + 12) % 12, oct = Math.floor(midi / 12) - 1;
+    const AM = M.NoteAccidentalMode;
+    let tbl = ks < 0 ? FLAT : SHARP;
+    if (mode === AM.ForceSharp) tbl = SHARP; else if (mode === AM.ForceFlat) tbl = FLAT;
+    const [st, alt] = tbl[pc];
+    let o2 = oct; if (st === 0 && alt < 0) o2++;   // Cb
+    return { step: STEP_NAMES[st], alter: alt, octave: o2, pos: o2 * 7 + st };
+  };
+  const clefTop = (clef, ott) => {   // 第五線的音位(C0 = 0)
+    const C = M.Clef, O = M.Ottavia;
+    const base = clef === C.F4 ? 26 : clef === C.C3 ? 32 : clef === C.C4 ? 30 : 38;
+    const k = ott === O._8va ? 7 : ott === O._15ma ? 14 : ott === O._8vb ? -7 : ott === O._15mb ? -14 : 0;
+    return base + k;
+  };
+  const notePos = (n, bar) => {
+    if (n.isPercussion) return 38 - gpDrumArt(AT, n).line;
+    const ks = keyOf(bar);
+    return spell(n.displayValue, ks, n.accidentalMode).pos;
+  };
+  const keyOf = bar => (bar.keySignature != null ? bar.keySignature : bar.masterBar.keySignature) || 0;
+  const steps = (n, bar) => n.isPercussion ? gpDrumArt(AT, n).line : clefTop(bar.clef, bar.clefOttava) - notePos(n, bar);
+
+  // 一個小節的一個聲部 → 符尾組(alphaTab BeamingHelper)
+  function beamHelpers(bar, voice, lookup){
+    const BM = M.BeatBeamingMode, GT = M.GraceType;
+    const helpers = [];
+    let cur = null, curGrace = null;
+    const canJoin = (b1, b2) => {
+      if (!b1 || !b2 || b1.graceType !== b2.graceType || b1.graceType === GT.BendGrace || b2.graceType === GT.BendGrace || b1.deadSlapped || b2.deadSlapped) return false;
+      if (b1.graceType !== GT.None && b2.graceType !== GT.None) return true;
+      const cj = d => d > 4;
+      if (!cj(b1.duration) || !cj(b2.duration)) return b1.playbackStart === b2.playbackStart;
+      if (b1.tupletGroup !== b2.tupletGroup) return false;
+      if (b1.hasTuplet && b2.hasTuplet && b1.tupletGroup === b2.tupletGroup && b1.tupletGroup.isFull) return true;
+      return lookup(b1.playbackStart) === lookup(b2.playbackStart);
+    };
+    const check = (h, b) => {
+      let add = false;
+      if (!h.beats.length) add = true;
+      else {
+        const last = h.beats[h.beats.length - 1];
+        switch (last.beamingMode) {
+          case BM.ForceSplitToNext: add = false; break;
+          case BM.ForceMergeWithNext: add = true; break;
+          default: add = canJoin(last, b);
+        }
+      }
+      if (add) {
+        if (h.pref == null && b.preferredBeamDirection != null) h.pref = b.preferredBeamDirection;
+        if (b.invertBeamDirection) h.invert = true;
+        if (!b.isRest) { if (h.beats.length === 1 && h.beats[0].isRest) h.beats = []; h.beats.push(b); }
+        else if (!h.beats.length) h.beats.push(b);
+        h.all.push(b);
+      }
+      return add;
+    };
+    for (const b of voice.beats) {
+      if (b.isEmpty && !b.notes.length && !b.isRest) continue;
+      const grace = b.graceType !== GT.None;
+      let h = grace ? curGrace : cur;
+      if (!grace) curGrace = null;
+      if (!h || !check(h, b)) {
+        h = { beats: [], all: [], pref: null, invert: false, grace };
+        check(h, b);
+        if (grace) curGrace = h; else cur = h;
+        helpers.push(h);
+      }
+      b.__h = h;
+    }
+    return helpers;
+  }
+  function helperDirection(h, bar, voice, multiVoice){
+    const Up = BD.Up, Down = BD.Down;
+    const inv = d => h.invert ? (d === Down ? Up : Down) : d;
+    if (h.pref != null) return h.pref;
+    if (voice.index > 0) return inv(Down);
+    if (multiVoice) return inv(Up);
+    if (h.grace) return inv(Up);
+    let hi = null, lo = null;
+    for (const b of h.beats) for (const n of b.notes) {
+      const s = steps(n, bar);
+      if (hi == null || s < hi) hi = s;
+      if (lo == null || s > lo) lo = s;
+    }
+    if (hi == null) return inv(Up);
+    const mid = (bar.staff.standardNotationLineCount || 5) - 1;
+    return inv((hi + lo) / 2 > mid ? Up : Down);
+  }
+
+  const DIRS = M.Direction;
+  const DIR_TEXT = { JumpDaCapo: "D.C.", JumpDaCapoAlCoda: "D.C. al Coda", JumpDaCapoAlDoubleCoda: "D.C. al Double Coda", JumpDaCapoAlFine: "D.C. al Fine", JumpDalSegno: "D.S.", JumpDalSegnoAlCoda: "D.S. al Coda", JumpDalSegnoAlDoubleCoda: "D.S. al Double Coda", JumpDalSegnoAlFine: "D.S. al Fine", JumpDalSegnoSegno: "D.S.S.", JumpDalSegnoSegnoAlCoda: "D.S.S. al Coda", JumpDalSegnoSegnoAlDoubleCoda: "D.S.S. al Double Coda", JumpDalSegnoSegnoAlFine: "D.S.S. al Fine", JumpDaCoda: "To Coda", JumpDaDoubleCoda: "To Double Coda", TargetFine: "Fine" };
+  const DYN = ["ppp", "pp", "p", "mp", "mf", "f", "ff", "fff", "pppp", "ppppp", "pppppp", "ffff", "fffff", "ffffff", "sf", "sfp", "sfpp", "fp", "rf", "rfz", "sfz", "sffz", "fz", "n", "pf", "sfzp"];
+  const TF = M.TripletFeel;
+  const TF_TEXT = { [TF.Triplet8th]: "Triplet Feel ♪♪ = ♪³♪", [TF.Triplet16th]: "Triplet Feel (16th)", [TF.Dotted8th]: "♪♪ = ♪. ♬", [TF.Dotted16th]: "Dotted Feel (16th)", [TF.Scottish8th]: "Scottish Feel", [TF.Scottish16th]: "Scottish Feel (16th)" };
+
+  let prevTime = null, prevKey = null, prevClefs = [], prevTF = TF.NoTripletFeel, prevStaffLines = null;
+  const lastDyn = staves.map(() => null);
+  const slurNum = new Map(); let slurNext = 1;
+  const wedgeOpen = staves.map(() => 0);
+  const nMb = score.masterBars.length;
+  for (let mi = 0; mi < nMb; mi++) {
+    const mb = score.masterBars[mi];
+    const mLen = Math.round(barTicks(mb) / TICK * DIV);
+    o(`<measure number="${mi + 1}"${mb.isAnacrusis ? ' implicit="yes"' : ""}>`);
+    // 左邊小節線:反覆開始、第幾次結尾開始
+    const endNums = [];
+    for (let k = 0; k < 8; k++) if (mb.alternateEndings & (1 << k)) endNums.push(k + 1);
+    const prevEnd = mi > 0 ? score.masterBars[mi - 1].alternateEndings : 0;
+    const nextEnd = mi + 1 < nMb ? score.masterBars[mi + 1].alternateEndings : 0;
+    if (mb.isRepeatStart || (endNums.length && prevEnd !== mb.alternateEndings)) {
+      o('<barline location="left">');
+      if (mb.isRepeatStart) o('<bar-style>heavy-light</bar-style>');
+      if (endNums.length && prevEnd !== mb.alternateEndings) o(`<ending number="${endNums.join(",")}" type="start">${endNums.join(". ")}.</ending>`);
+      if (mb.isRepeatStart) o('<repeat direction="forward"/>');
+      o('</barline>');
+    }
+    // 拍號/調號/譜號
+    const attrs = [];
+    if (mi === 0) attrs.push(`<divisions>${DIV}</divisions>`);
+    const key = keyOf(staves[0].bars[mi]);   // Guitar Pro 鼓譜也畫調號,照畫
+    if (key !== prevKey) { attrs.push(`<key><fifths>${key}</fifths>${mb.keySignatureType === M.KeySignatureType.Minor ? "<mode>minor</mode>" : ""}</key>`); prevKey = key; }
+    const ts = `${mb.timeSignatureNumerator}/${mb.timeSignatureDenominator}/${mb.timeSignatureCommon ? 1 : 0}`;
+    if (ts !== prevTime) {
+      const sym = mb.timeSignatureCommon ? (mb.timeSignatureNumerator === 2 && mb.timeSignatureDenominator === 2 ? ' symbol="cut"' : ' symbol="common"') : "";
+      attrs.push(`<time${sym}><beats>${mb.timeSignatureNumerator}</beats><beat-type>${mb.timeSignatureDenominator}</beat-type></time>`);
+      prevTime = ts;
+    }
+    if (mi === 0 && staves.length > 1) attrs.push(`<staves>${staves.length}</staves>`);
+    staves.forEach((st, si) => {
+      const bar = st.bars[mi];
+      let c;
+      if (st.isPercussion) c = "percussion";
+      else {
+        const C = M.Clef, O = M.Ottavia;
+        const [sign, line] = bar.clef === C.F4 ? ["F", 4] : bar.clef === C.C3 ? ["C", 3] : bar.clef === C.C4 ? ["C", 4] : bar.clef === C.Neutral ? ["percussion", 0] : ["G", 2];
+        const oc = bar.clefOttava === O._8va ? 1 : bar.clefOttava === O._15ma ? 2 : bar.clefOttava === O._8vb ? -1 : bar.clefOttava === O._15mb ? -2 : 0;
+        c = `${sign}/${line}/${oc}`;
+      }
+      if (c !== prevClefs[si]) {
+        const num = staves.length > 1 ? ` number="${si + 1}"` : "";
+        if (c === "percussion") attrs.push(`<clef${num}><sign>percussion</sign></clef>`);
+        else { const [sign, line, oc] = c.split("/"); attrs.push(`<clef${num}><sign>${sign}</sign>${sign !== "percussion" ? `<line>${line}</line>` : ""}${+oc ? `<clef-octave-change>${oc}</clef-octave-change>` : ""}</clef>`); }
+        prevClefs[si] = c;
+      }
+    });
+    const lines = staves.map(s => s.standardNotationLineCount || 5).join(",");
+    if (lines !== prevStaffLines) {
+      staves.forEach((s, si) => { if ((s.standardNotationLineCount || 5) !== 5 || prevStaffLines != null) attrs.push(`<staff-details${staves.length > 1 ? ` number="${si + 1}"` : ""}><staff-lines>${s.standardNotationLineCount || 5}</staff-lines></staff-details>`); });
+      prevStaffLines = lines;
+    }
+    if (attrs.length) o(`<attributes>${attrs.join("")}</attributes>`);
+
+    // 小節開頭的文字:段落、反覆記號目標、速度、律動
+    const topDirs = [];   // [位置(divisions), xml]
+    if (mb.section) {
+      if (mb.section.marker) topDirs.push([0, `<direction placement="above"><direction-type><rehearsal>${xmlEsc(mb.section.marker)}</rehearsal></direction-type></direction>`]);
+      if (mb.section.text) topDirs.push([0, `<direction placement="above"><direction-type><words font-weight="bold">${xmlEsc(mb.section.text)}</words></direction-type></direction>`]);
+    }
+    const jumpDirs = [];
+    if (mb.directions) for (const d of mb.directions) {
+      const name = DIRS[d];
+      if (name === "TargetSegno") topDirs.push([0, '<direction placement="above"><direction-type><segno/></direction-type><sound segno="segno"/></direction>']);
+      else if (name === "TargetSegnoSegno") topDirs.push([0, '<direction placement="above"><direction-type><segno/></direction-type><direction-type><segno/></direction-type></direction>']);
+      else if (name === "TargetCoda") topDirs.push([0, '<direction placement="above"><direction-type><coda/></direction-type><sound coda="coda"/></direction>']);
+      else if (name === "TargetDoubleCoda") topDirs.push([0, '<direction placement="above"><direction-type><coda/></direction-type><direction-type><coda/></direction-type></direction>']);
+      else if (DIR_TEXT[name]) jumpDirs.push(`<direction placement="above"><direction-type><words font-style="italic">${xmlEsc(DIR_TEXT[name])}</words></direction-type></direction>`);
+    }
+    const tempos = [];   // GP5 有時同一個速度存兩次,只留一個
+    for (const a of mb.tempoAutomations || []) if (a.type === M.AutomationType.Tempo && !tempos.some(x => x.value === a.value && x.ratioPosition === a.ratioPosition)) tempos.push(a);
+    if (mi === 0 && !tempos.length && score.tempo) tempos.push({ value: score.tempo, ratioPosition: 0, text: score.tempoLabel, isVisible: true });
+    for (const a of tempos) {
+      const bpm = Math.round(a.value * 100) / 100;
+      const pos = Math.round(a.ratioPosition * mLen);
+      const words = a.text ? `<direction-type><words font-weight="bold">${xmlEsc(a.text)}</words></direction-type>` : "";
+      const metro = a.isVisible !== false ? `<direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>${bpm}</per-minute></metronome></direction-type>` : "";
+      // 速度文字與節拍器記號分成兩個 direction(放在同一個 direction 裡 OSMD 會把文字畫兩次)
+      if (words) topDirs.push([pos, `<direction placement="above">${words}</direction>`]);
+      topDirs.push([pos, `<direction placement="above">${metro || '<direction-type><words></words></direction-type>'}<sound tempo="${bpm}"/></direction>`]);
+    }
+    if (mb.tripletFeel !== prevTF) {
+      if (TF_TEXT[mb.tripletFeel]) topDirs.push([0, `<direction placement="above"><direction-type><words>${xmlEsc(TF_TEXT[mb.tripletFeel])}</words></direction-type></direction>`]);
+      prevTF = mb.tripletFeel;
+    }
+    topDirs.sort((a, b) => a[0] - b[0]);
+
+    // 音符
+    let first = true;
+    staves.forEach((st, si) => {
+      let bar = st.bars[mi];
+      // 反覆小節記號(%):OSMD 畫不出來,照前一(兩)小節的內容寫出來,播放才正確
+      const SM = M.SimileMark;
+      let src = bar;
+      if (bar.simileMark === SM.Simple && mi > 0) { let k = mi - 1; while (k > 0 && st.bars[k].simileMark === SM.Simple && st.bars[k].isEmpty) k--; src = st.bars[k]; }
+      else if ((bar.simileMark === SM.FirstOfDouble || bar.simileMark === SM.SecondOfDouble) && mi > 1 && bar.isEmpty) src = st.bars[mi - 2];
+      const voices = src.voices.filter(v => !v.isEmpty && v.beats.some(b => !b.isEmpty || b.notes.length));
+      const shortest = Math.max(4, ...src.voices.flatMap(v => v.beats.filter(b => b.graceType === M.GraceType.None && !b.isRest).map(b => b.duration)));
+      const lookup = beamLookup(mb, shortest);
+      const multiVoice = voices.length > 1;
+      const sNum = staves.length > 1 ? `<staff>${si + 1}</staff>` : "";
+      if (!voices.length) {
+        if (!first) o(`<backup><duration>${mLen}</duration></backup>`);
+        if (si === 0) for (const [, x] of topDirs) o(x);
+        o(`<note><rest measure="yes"/><duration>${mLen}</duration><voice>${si * 4 + 1}</voice>${sNum}</note>`);
+        first = false;
+        return;
+      }
+      voices.forEach((voice, vi) => {
+        if (!first) o(`<backup><duration>${mLen}</duration></backup>`);
+        first = false;
+        const helpers = beamHelpers(src, voice, lookup);
+        for (const h of helpers) h.dir = helperDirection(h, src, voice, multiVoice);
+        const vNum = si * 4 + voice.index + 1;
+        let pos = 0, dirIdx = 0;
+        const emitDirsUpTo = p => { if (si === 0 && vi === 0) while (dirIdx < topDirs.length && topDirs[dirIdx][0] <= p) o(topDirs[dirIdx++][1]); };
+        const beats = voice.beats.filter(b => !(b.isEmpty && !b.notes.length && !b.isRest));
+        beats.forEach((b, bi) => {
+          const grace = b.graceType !== M.GraceType.None;
+          if (!grace) emitDirsUpTo(pos);
+          const h = b.__h;
+          const stemDir = h ? (h.dir === BD.Up ? "up" : "down") : "up";
+          // 拍上的文字、力度、漸強漸弱(只看每個譜表的第一聲部)
+          if (b.text) o(`<direction placement="above"><direction-type><words>${xmlEsc(b.text)}</words></direction-type>${sNum}</direction>`);
+          if (vi === 0 && !b.isRest && !grace && !(score.stylesheet && score.stylesheet.hideDynamics)) {
+            // Guitar Pro 在第一個音與力度改變處畫力度記號。GP 每個音都有力度(預設 f),第一個如果是預設的 f
+            // 只畫不算(id="gp-default-dynamics",parseXmlTimeline 略過),不然整首都被當成「譜上寫了 f」,播放的段落大小聲會變平
+            if (b.dynamics !== lastDyn[si]) {
+              const isDefault = lastDyn[si] == null && b.dynamics === M.DynamicValue.F;
+              o(`<direction placement="below"${isDefault ? ' id="gp-default-dynamics"' : ""}><direction-type><dynamics><${DYN[b.dynamics] || "mf"}/></dynamics></direction-type>${sNum}</direction>`);
+              lastDyn[si] = b.dynamics;
+            }
+          }
+          if (vi === 0 && !grace) {
+            const CT = M.CrescendoType;
+            if (b.crescendo !== wedgeOpen[si]) {
+              if (wedgeOpen[si]) o(`<direction placement="below"><direction-type><wedge type="stop" number="${si + 1}"/></direction-type>${sNum}</direction>`);
+              if (b.crescendo) o(`<direction placement="below"><direction-type><wedge type="${b.crescendo === CT.Crescendo ? "crescendo" : "diminuendo"}" number="${si + 1}"/></direction-type>${sNum}</direction>`);
+              wedgeOpen[si] = b.crescendo;
+            }
+          }
+          const dur = grace ? 0 : beatDiv(b);
+          const type = TYPE[b.duration] || "quarter";
+          const dots = "<dot/>".repeat(b.dots || 0);
+          const tm = b.hasTuplet ? `<time-modification><actual-notes>${b.tupletNumerator}</actual-notes><normal-notes>${b.tupletDenominator}</normal-notes></time-modification>` : "";
+          // 符尾(MusicXML beam 1~n)
+          let beamXml = "";
+          if (h && h.beats.length > 1 && !b.isRest) {
+            const list = h.beats, i = list.indexOf(b);
+            for (let L = 1; L <= beamsOf(b.duration); L++) {
+              const prevOk = i > 0 && beamsOf(list[i - 1].duration) >= L && !(L > 1 && list[i - 1].beamingMode === M.BeatBeamingMode.ForceSplitOnSecondaryToNext);
+              const nextOk = i < list.length - 1 && beamsOf(list[i + 1].duration) >= L && !(L > 1 && b.beamingMode === M.BeatBeamingMode.ForceSplitOnSecondaryToNext);
+              const v = prevOk && nextOk ? "continue" : prevOk ? "end" : nextOk ? "begin" : (i === 0 ? "forward hook" : "backward hook");
+              beamXml += `<beam number="${L}">${v}</beam>`;
+            }
+          }
+          // 連音括號
+          let tupStart = false, tupStop = false;
+          if (b.hasTuplet && b.tupletGroup) {
+            const tb = b.tupletGroup.beats;
+            tupStart = tb[0] === b; tupStop = tb[tb.length - 1] === b;
+          }
+          const fermata = (vi === 0 && mb.getFermata && !grace) ? mb.getFermata(b) : null;
+          if (b.isRest) {
+            o(`<note><rest/><duration>${dur}</duration><voice>${vNum}</voice><type>${type}</type>${dots}${tm}${sNum}${(tupStart || tupStop || fermata) ? `<notations>${tupStart ? '<tuplet type="start" bracket="yes"/>' : ""}${tupStop ? '<tuplet type="stop"/>' : ""}${fermata ? "<fermata/>" : ""}</notations>` : ""}</note>`);
+          } else {
+            // 和弦內的音由高到低(順序不影響顯示,只是好讀)
+            const notes = b.notes.filter(n => n.isVisible !== false).slice().sort((x, y) => notePos(y, src) - notePos(x, src));
+            notes.forEach((n, ni) => {
+              let pitch, inst = "", head = null, parens = n.isGhost, techXml = "", articXml = "";
+              const outsidePl = stemDir === "up" ? "below" : "above";
+              if (n.isPercussion) {
+                const a = gpDrumArt(AT, n);
+                const p = 38 - a.line, st = STEP_NAMES[((p % 7) + 7) % 7], oc = Math.floor(p / 7);
+                pitch = `<unpitched><display-step>${st}</display-step><display-octave>${oc}</display-octave></unpitched>`;
+                inst = `<instrument id="${drumInst.get(a.gm)}"/>`;
+                const hn = b.duration === 1 || b.duration < 0 ? a.heads[2] : b.duration === 2 ? a.heads[1] : a.heads[0];
+                head = gpNotehead(hn);
+                const tc = gpTechCode(a.tech);
+                const pl = a.place === 0 ? "above" : a.place === 2 ? "below" : outsidePl;
+                if (tc === "pa") parens = true;
+                else if (tc === "st") articXml += `<staccato placement="${pl}"/>`;
+                else if (tc === "ac") articXml += `<accent placement="${pl}"/>`;
+                else if (tc === "op") techXml += `<open-string placement="${pl}"/>`;
+                else if (tc === "ho") techXml += `<half-muted placement="${pl}"/>`;
+                else if (tc === "ub") techXml += `<up-bow placement="${pl}"/>`;
+                else if (tc === "db") techXml += `<down-bow placement="${pl}"/>`;
+              } else {
+                const sp = spell(n.realValue, keyOf(src), n.accidentalMode);
+                pitch = `<pitch><step>${sp.step}</step>${sp.alter ? `<alter>${sp.alter}</alter>` : ""}<octave>${sp.octave}</octave></pitch>`;
+                inst = "";
+                if (n.isDead) head = "x";
+                else if (n.harmonicType === M.HarmonicType.Natural) head = "diamond";
+                if (n.harmonicType && n.harmonicType !== M.HarmonicType.None) techXml += "<harmonic/>";
+              }
+              if (n.isStaccato) articXml += `<staccato placement="${outsidePl}"/>`;
+              const AC = M.AccentuationType;
+              if (n.accentuated === AC.Normal) articXml += `<accent placement="${outsidePl}"/>`;
+              else if (n.accentuated === AC.Heavy) articXml += `<strong-accent placement="${outsidePl}"/>`;
+              else if (n.accentuated === AC.Tenuto) articXml += `<tenuto placement="${outsidePl}"/>`;
+              const ties = (n.isTieDestination ? '<tie type="stop"/>' : "") + (n.tieDestination ? '<tie type="start"/>' : "");
+              const tieds = (n.isTieDestination ? '<tied type="stop"/>' : "") + (n.tieDestination ? '<tied type="start"/>' : "");
+              let slurXml = "";
+              const slurTo = n.slurDestination || n.hammerPullDestination;
+              const slurFrom = n.slurOrigin || n.hammerPullOrigin;
+              if (slurFrom && slurNum.has(slurFrom.id)) { slurXml += `<slur type="stop" number="${slurNum.get(slurFrom.id)}"/>`; slurNum.delete(slurFrom.id); }
+              if (slurTo) { const k = slurNext; slurNext = slurNext % 6 + 1; slurNum.set(n.id, k); slurXml += `<slur type="start" number="${k}"${stemDir === "up" ? ' placement="below"' : ' placement="above"'}/>`; }
+              let orn = "";
+              if (ni === 0 && b.tremoloSpeed) { const k = beamsOf(b.tremoloSpeed); if (k > 0) orn = `<ornaments><tremolo type="single">${k}</tremolo></ornaments>`; }
+              const nt = (ni === 0 ? (tupStart ? '<tuplet type="start" bracket="yes"/>' : "") + (tupStop ? '<tuplet type="stop"/>' : "") + (fermata ? "<fermata/>" : "") : "")
+                + tieds + slurXml + orn
+                + (articXml ? `<articulations>${articXml}</articulations>` : "")
+                + (techXml ? `<technical>${techXml}</technical>` : "");
+              const headXml = (head || parens) ? `<notehead${head === "diamond" ? ' filled="no"' : ""}${parens ? ' parentheses="yes"' : ""}>${head || "normal"}</notehead>` : "";
+              const stemXml = (b.duration === 1 || b.duration < 0) ? "" : `<stem>${stemDir}</stem>`;
+              const graceXml = grace ? (b.graceType === M.GraceType.BeforeBeat ? '<grace slash="yes"/>' : "<grace/>") : "";
+              const lyr = (ni === 0 && b.lyrics) ? b.lyrics.map((t, li) => t ? `<lyric number="${li + 1}"><syllabic>single</syllabic><text>${xmlEsc(t)}</text></lyric>` : "").join("") : "";
+              o(`<note>${graceXml}${ni > 0 ? "<chord/>" : ""}${pitch}${grace ? "" : `<duration>${dur}</duration>`}${ties}${inst}<voice>${vNum}</voice><type>${type}</type>${dots}${tm}${stemXml}${headXml}${sNum}${ni === 0 ? beamXml : beamXml}${nt ? `<notations>${nt}</notations>` : ""}${lyr}</note>`);
+            });
+          }
+          pos += dur;
+        });
+        emitDirsUpTo(Infinity);
+        // 聲部比小節短:補一個看不見的空白,讓下一個 backup 對齊
+        if (pos < mLen && vi < voices.length - 1) { o(`<forward><duration>${mLen - pos}</duration><voice>${vNum}</voice>${sNum}</forward>`); pos = mLen; }
+        else if (pos < mLen) { o(`<forward><duration>${Math.max(0, mLen - pos)}</duration><voice>${vNum}</voice>${sNum}</forward>`); }
+      });
+    });
+    // 右邊:跳躍文字、反覆結束、第幾次結尾結束、雙縱線/終止線
+    for (const x of jumpDirs) o(x);
+    const endStops = endNums.length && nextEnd !== mb.alternateEndings;
+    const isLast = mi === nMb - 1;
+    if (mb.repeatCount > 0 || endStops || mb.isDoubleBar || isLast) {
+      o('<barline location="right">');
+      o(`<bar-style>${mb.repeatCount > 0 || isLast ? "light-heavy" : mb.isDoubleBar ? "light-light" : "regular"}</bar-style>`);
+      if (endStops) o(`<ending number="${endNums.join(",")}" type="${mb.repeatCount > 0 ? "stop" : "discontinue"}"/>`);
+      if (mb.repeatCount > 0) o(`<repeat direction="backward"${mb.repeatCount > 1 ? ` times="${mb.repeatCount}"` : ""}/>`);
+      o('</barline>');
+    }
+    o("</measure>");
+  }
+  o("</part></score-partwise>");
+  return out.join("\n");
+}
+
+/* 讀 GP 檔 → MusicXML。多音軌時讓使用者選一軌(預設第一個鼓組音軌);按取消回傳 null */
+async function gpFileToMusicXML(file){
+  setStatus(T("gpLoadingLib"));
+  const AT = await loadAlphaTab();
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let score;
+  try { score = AT.importer.ScoreLoader.loadScoreFromBytes(bytes); }
+  catch (e) { throw new Error(T("gpParseFailed", { msg: (e && e.message) || e })); }
+  const tracks = score.tracks.filter(t => t.staves.length);
+  if (!tracks.length) throw new Error(T("gpParseFailed", { msg: "no tracks" }));
+  const idx = tracks.length === 1 ? tracks[0].index : await pickGpTrack(tracks);
+  if (idx == null) return null;
+  setStatus(T("statusParsing", { name: file.name }));
+  return gpToMusicXML(AT, score, idx);
+}
+let trackPickerClosedAt = -1e9;   // 連點音軌時第二下會落在樂譜上變成「播放」,關閉後 0.5 秒內的點擊不算
+function pickGpTrack(tracks){
+  return new Promise(resolve => {
+    const list = $("trackList");
+    list.innerHTML = "";
+    const done = v => { trackPickerClosedAt = performance.now(); $("trackOverlay").classList.remove("show"); $("trackCancel").onclick = null; document.removeEventListener("keydown", onKey, true); resolve(v); };
+    const onKey = e => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); done(null); } };
+    const firstDrum = tracks.find(t => t.isPercussion);
+    for (const t of tracks) {
+      const st = t.staves[0];
+      const kind = t.isPercussion ? T("gpTrackDrum") : st.isStringed ? T("gpTrackStringed", { n: st.tuning.length }) : T("gpTrackOther");
+      const bars = st.bars.filter(b => b.voices.some(v => v.beats.some(be => be.notes.length))).length;
+      const btn = document.createElement("button");
+      btn.className = "fmt";
+      const span = document.createElement("span");
+      const b = document.createElement("b"); b.textContent = t.name || kind;
+      const sm = document.createElement("small"); sm.textContent = kind + "・" + T("gpTrackBars", { n: bars });
+      span.append(b, sm); btn.append(span);
+      if (t === firstDrum) btn.style.borderColor = "var(--gold)";
+      btn.addEventListener("click", () => done(t.index));
+      list.appendChild(btn);
+    }
+    $("trackCancel").onclick = () => done(null);
+    document.addEventListener("keydown", onKey, true);
+    $("trackOverlay").classList.add("show");
+    (list.querySelector("button[style]") || list.firstChild).focus();
+  });
+}
 
 async function extractMXL(file){
   const zip = await JSZip.loadAsync(file);
@@ -2294,6 +2865,11 @@ function tameFarDirectionsMusicXML(xmlText){
     return changed ? new XMLSerializer().serializeToString(doc) : xmlText;
   } catch (e) { console.warn("tameFarDirectionsMusicXML 失敗,照原檔顯示:", e); return xmlText; }
 }
+/* 鼓譜記譜規則(大鼓 + hi-hat 符桿朝上、沒寫符桿一律朝上、演奏記號一律放上方、符尾一律水平)暫時停用(使用者要求,2026-10):
+   所有鼓譜照匯入檔案的排版顯示(符桿方向、記號位置、符尾照原檔;Guitar Pro 檔照 Guitar Pro 的排版轉換)。
+   程式保留,改回 true 即恢復。只剩兩個「OSMD 相容」轉換照常做(不做的話原檔的記號會畫錯或不見):
+   MuseScore 4 的 <technical><open/> → <open-string/>、邊擊 slashed 符頭 → x */
+const DRUM_ENGRAVING_RULES = false;
 function drumStemFixMusicXML(xmlText){
   if (!/sign>\s*percussion/.test(xmlText)) return xmlText;
   try { return drumStemFixCore(xmlText); }
@@ -2330,7 +2906,7 @@ function drumStemFixCore(xmlText){
       const nh = kid(el, "notehead");
       if (nh && kid(el, "unpitched") && /^(back )?slashed$/.test(nh.textContent.trim())) { nh.textContent = "x"; changed = true; }
     }
-    for (const g of groups) {
+    if (DRUM_ENGRAVING_RULES) for (const g of groups) {
       const kinds = g.map(kind);
       if (!kinds.includes("kick") || !kinds.includes("hh")) continue;
       for (const n of g) {
@@ -2345,7 +2921,7 @@ function drumStemFixCore(xmlText){
     }
     // 沒寫符桿方向的鼓譜音符:一律朝上(單聲部鼓譜的慣例;OSMD 自己決定的話會照音高,小鼓以上變成朝下)。
     // 有寫的照原檔,作者刻意把腳(大鼓)分成朝下的第二聲部時不動
-    for (const g of groups) {
+    if (DRUM_ENGRAVING_RULES) for (const g of groups) {
       if (g.some(n => kid(n, "stem"))) continue;
       for (const n of g) {
         const stem = doc.createElement("stem"); stem.textContent = "up";
@@ -2364,7 +2940,7 @@ function drumStemFixCore(xmlText){
           for (const at of Array.from(a.attributes)) o.setAttribute(at.name, at.value);
           box.replaceChild(o, a); changed = true;
         }
-        for (const a of elems(box)) if (a.getAttribute("placement") !== "above") { a.setAttribute("placement", "above"); changed = true; }
+        if (DRUM_ENGRAVING_RULES) for (const a of elems(box)) if (a.getAttribute("placement") !== "above") { a.setAttribute("placement", "above"); changed = true; }
       }
     }
   }
@@ -2712,7 +3288,7 @@ async function renderScore(xmlText){
   osmd.zoom = 0.9;
   // 鼓譜的符尾一律水平:符尾的斜度應該看最靠近符尾的音(手打的 hi-hat/銅鈸,通常都在同一個位置),
   // VexFlow 卻照符桿頂端算,會被下面大鼓/小鼓的高低帶歪(三個同高的 hi-hat 符尾斜將近一格)。鼓譜教材多用水平符尾
-  if (osmd.EngravingRules) osmd.EngravingRules.FlatBeams = /sign>\s*percussion/.test(finalXml);
+  if (osmd.EngravingRules) osmd.EngravingRules.FlatBeams = DRUM_ENGRAVING_RULES && /sign>\s*percussion/.test(finalXml);
   osmd.EngravingRules.RenderPedals = true;
   osmd.render();
   // 單行橫向排版時,一個地方的記號太遠,整首曲子的譜表間距都會被撐開。OSMD 的踏板記號在某些檔案會一層層往下疊
@@ -2879,7 +3455,8 @@ function parseXmlTimeline(xmlText){
           if (d) divisions = parseFloat(d.textContent) || divisions;
         } else if (child.tagName === "direction") {
           const dynEl = child.getElementsByTagName("dynamics")[0];
-          if (dynEl && dynEl.children[0]) dynMarks.push({ t: cursor, mark: dynEl.children[0].tagName.toLowerCase() });
+          // gp-default-dynamics:Guitar Pro 匯入時第一個預設 f 只是顯示(見 gpToMusicXML),不當成力度記號
+          if (dynEl && dynEl.children[0] && child.getAttribute("id") !== "gp-default-dynamics") dynMarks.push({ t: cursor, mark: dynEl.children[0].tagName.toLowerCase() });
           for (const w of Array.from(child.getElementsByTagName("wedge"))) {
             const type = w.getAttribute("type"), num = w.getAttribute("number") || "1";
             if (type === "crescendo" || type === "diminuendo") openWedges[num] = { start: cursor, dir: type === "crescendo" ? "cresc" : "dim" };
@@ -4594,7 +5171,7 @@ document.addEventListener("keydown", e => {
     return;
   }
   if (document.body.classList.contains("recording") || exporting) return;
-  if ($("formatOverlay").classList.contains("show") || $("exportOverlay").classList.contains("show")) return;
+  if ($("formatOverlay").classList.contains("show") || $("exportOverlay").classList.contains("show") || $("trackOverlay").classList.contains("show")) return;
   if (!events.length) return;
   if (e.code === "Space") {
     e.preventDefault();
@@ -4829,7 +5406,8 @@ let didSwipeMeasure = false;
 $("stage").addEventListener("click", (e) => {
   if (didSwipeMeasure) { didSwipeMeasure = false; return; } // 剛才是滑動導覽,不當作點擊暫停
   if (exporting) return;
-  if (e.target.closest("#formatOverlay, #empty, #exitrec, button, input, select, a, textarea")) return;
+  if (e.timeStamp - trackPickerClosedAt < 500) return;   // 用事件發生的時間:載入樂譜時主執行緒忙,第二下會晚好幾秒才送到
+  if (e.target.closest("#formatOverlay, #trackOverlay, #empty, #exitrec, button, input, select, a, textarea")) return;
   $("playBtn").click();
 });
 
@@ -4841,7 +5419,7 @@ const SWIPE_MEASURE_PX = 70; // 每多滑這麼多px,多跳一個小節
 let swipeStartX = null, swipeStartY = null, swipeStatusTimer = null;
 $("stage").addEventListener("pointerdown", (e) => {
   if (exporting || !measureRanges.length) return;
-  if (e.target.closest("#formatOverlay, #empty, #exitrec, button, input, select, a, textarea")) return;
+  if (e.target.closest("#formatOverlay, #trackOverlay, #empty, #exitrec, button, input, select, a, textarea")) return;
   swipeStartX = e.clientX; swipeStartY = e.clientY;
 });
 $("stage").addEventListener("pointerup", (e) => {
