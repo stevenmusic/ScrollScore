@@ -1624,7 +1624,7 @@ function setStatus(msg){ statusEl.textContent = msg; }
 
 let osmd = null;
 let events = [];        // {tWhole, x, notes:[{freq,durWhole}], legato, pedalOn}
-let slurRanges = [], pedalRanges = [], repeatChordRanges = [], measureRanges = [], vibratoRanges = [];
+let slurRanges = [], pedalRanges = [], repeatChordRanges = [], measureRanges = [], vibratoRanges = [], autoPedalRanges = [];
 let perfMeasures = [];   // 展開反覆記號後依演奏順序的小節:[{start, end(演奏位置), mIdx, srcStart(記譜位置), qpm}]
 /* 小節高亮要對齊真正的小節線,不能靠音符位置內插:音符的 x 是「音符中心」,而小節線在
    第一個音符之前(還要容納譜號、調號、升降記號),兩者不成比例。實測內插出來的右邊界
@@ -3793,6 +3793,24 @@ function detectRepeatingChordRanges(onsets, maxChordSize){
   }
   return ranges;
 }
+/* 自動踏板(樂譜沒有任何踏板記號時):真人彈這類音型一定會踩踏板,所以也要有踏板的聲音(踩下/放開的機械聲、琴弦共鳴)。
+   換踏板的時機跟音符的和聲延長規則一樣:同一個和聲(repeatChordRanges,各譜表合併)踩著,和聲一換就換踏板;
+   同一個和聲很長時每 capWhole(= RING_CAP_WHOLE,音符最多延長的長度)換一次。不畫在樂譜上;
+   音符的延長/半踏板衰減完全照原本規則(這裡不改變音長) */
+function buildAutoPedalRanges(ranges, capWhole){
+  const rs = [...ranges].sort((a, b) => a.start - b.start), out = [];
+  for (const r of rs) {
+    const last = out[out.length - 1];
+    if (last && r.start < last.end - 1e-6) {
+      if (r.start - last.start < 1e-6) { last.end = Math.max(last.end, r.end); continue; }   // 同時開始(左右手同一個和聲)→ 合併
+      last.end = r.start;                                                                   // 新和聲在中途出現 → 這裡換踏板
+    }
+    out.push({ start: r.start, end: r.end });
+  }
+  const split = [];
+  for (const r of out) for (let a = r.start; a < r.end - 1e-6; a += capWhole) split.push({ start: a, end: Math.min(r.end, a + capWhole) });
+  return split.filter(r => r.end - r.start > 1e-6);
+}
 function inRanges(t, ranges){
   for (const r of ranges) if (t >= r.start && t < r.end) return true;
   return false;
@@ -3944,9 +3962,12 @@ function buildTimeline(){
   // 但完全不設限的話會誇張到單一音符殘響10.4個全音符(約14小節),不同和聲整個疊在一起變糊。
   // 折衷:保留這個延長效果,但限制任何一個音符最多只能比自己的起點多響 RING_CAP_WHOLE。
   const RING_CAP_WHOLE = 1.0;
+  autoPedalRanges = pedalRanges.length ? [] : buildAutoPedalRanges(repeatChordRanges, RING_CAP_WHOLE);
   for (const ev of events) {
     const sT = ev.srcT != null ? ev.srcT : ev.tWhole, toPerf = w => ev.tWhole + (w - sT);   // 記譜位置的範圍 → 這一遍的演奏位置
     ev.pedalOn = inRanges(sT, pedalRanges);
+    ev.autoPedal = !ev.pedalOn && inRanges(sT, autoPedalRanges);   // 只影響踏板聲與琴弦共鳴,音符延長照原本的和聲規則
+    for (const n of ev.notes) n.autoPedal = ev.autoPedal;          // 給 playPianoNote:自動踏板範圍裡的音送進琴弦共鳴
     ev.legato = !ev.pedalOn && inRanges(sT, slurRanges);
     // 記錄這個音符所屬和聲/圓滑線範圍的結束時間點,讓同一組和聲裡的音符都能撐滿整個和聲的長度
     const activeRanges = ev.pedalOn ? pedalRanges : (ev.legato ? slurRanges : null);
@@ -5947,7 +5968,7 @@ function loadInstrumentSamples(instKey){
    依序:截短到曲子實際需要的長度 → 改單聲道 → 合併最少用到的力度層(找最近的層代替)。 */
 const PIANO_BASES = ["piano/", "https://raw.githubusercontent.com/stevenmusic/ScrollScore/main/piano/"];
 let PIANO_GAIN = 1.5;          // 實測:整首約 -11.5 LUFS、完全不削波,p→ff 仍有約 8dB 差(再大聲限幅器就開始削波、力度被壓平)
-const PIANO_VERB_SEND = 0.5;     // 殘響送出量(踩踏板時 ×1.7,琴弦全部放開共鳴、空間感變大)
+const PIANO_VERB_SEND = 0.5;     // 殘響送出量(踩踏板的琴弦共鳴改由 PIANO_SYMPA 真的模擬,不再用多送殘響近似)
 let PIANO_RELEASE_TRIM = 0;    // 放鍵弦共鳴的額外增減(dB)
 const PIANO_NOTE_NAMES = ["C","Cs","D","Ds","E","F","Fs","G","Gs","A","As","B"];
 let pianoMan = null, pianoBase = null, pianoManPromise = null, pianoLoading = null, pianoGen = 0, pianoFallback = false;
@@ -5968,6 +5989,26 @@ function pianoDamperTau(m){ return m <= 48 ? 0.16 - (m - 21) / 27 * 0.06 : m <= 
 /* 半踏板(制音器輕碰琴弦)時的衰減時間常數:低音弦重、比較壓不住 */
 let PIANO_HALF_PEDAL = 0.7;   // 倍率:實測無踏板記號的曲子清晰度 +0.8dB,又保留和聲延長的豐滿感
 function pianoHalfPedalTau(m){ return PIANO_HALF_PEDAL * Math.max(0.35, 1.3 - (m - 21) / 87 * 0.95); }
+/* 逐音音色(依力度):真鋼琴輕彈時琴槌軟、泛音少(溫暖),重彈時琴槌變硬、高頻泛音暴增(明亮、有咬勁)。
+   Salamander 的 16 層錄音這個變化不夠:跟 MAESTRO 真實 Yamaha 音樂會鋼琴「同一份演奏」逐音比較(273 個單獨的音),
+   中弱(力度 45~64)比真鋼琴亮 6dB、強音暗 3~5dB,5kHz 以上整體少 6~16dB(Keyscape C7 更多),起音瞬間的高頻也不夠。
+   每個音各接兩個高頻架式濾波器:
+   - pres(2kHz):力度 45 以下 −10dB → 105 以上 +5dB,線性內插
+   - air(6.5kHz):4 + 17×(力度/127)^1.4 dB,補回錄音缺少的高頻泛音(輕彈補一點、重彈補很多)
+   - 起音:pres 在敲下瞬間再多 attack×(力度/127) dB,20ms 時間常數回到原值(琴槌敲弦那一下的亮度)
+   參數用 tools/audiotest 的模擬器對 7 首 MAESTRO 演奏校正:各力度區間亮度差 ≤ 2dB、起音高頻 1.8dB(真鋼琴 1.9)、
+   1~5kHz 頻譜形狀差 ≤ 3dB;補到 12dB 的高頻後,取樣的底噪仍在 −100dBFS 左右 */
+const PIANO_TONE = { presFreq: 2000, presLo: -10, presHi: 5, presV0: 45, presV1: 105, airFreq: 6500, airLo: 4, airHi: 21, airExp: 1.4, attack: 12, attackTau: 0.02 };
+function pianoToneFor(vel){
+  const T = PIANO_TONE, v = Math.max(1, Math.min(127, vel));
+  const pres = T.presLo + (T.presHi - T.presLo) * Math.max(0, Math.min(1, (v - T.presV0) / (T.presV1 - T.presV0)));
+  return { pres, air: T.airLo + (T.airHi - T.airLo) * Math.pow(v / 127, T.airExp), attack: T.attack * v / 127 };
+}
+/* 踏板共鳴:踩下延音踏板 = 所有制音器離開琴弦,88 組弦都會被正在響的聲音帶動跟著共振(真鋼琴踩踏板的「光暈」)。
+   piano/sympa.flac 是全部琴弦當共振器的脈衝響應(piano/build/sympa_ir.py:每條弦的泛音含非諧和性、低音弦衰減慢、
+   低音左高音右),踩著踏板時發出的音送進去;放開踏板 = 制音器落下,閘門 0.1 秒內關掉。
+   send 校正成單音的共鳴比琴聲本身小約 15dB(0.3~3 秒,實測 send 3.2e-4 時 18dB),和弦的音互相是泛音關係,共鳴自然更大 */
+const PIANO_SYMPA = { send: 4.5e-4, closeTau: 0.1, openTau: 0.02 };
 function isIOSDevice(){ return /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1); }
 function pianoMemoryBudgetBytes(){
   const dm = navigator.deviceMemory;
@@ -6198,6 +6239,7 @@ function loadPianoSamples(){
     // 放鍵共鳴/機械聲/踏板聲也算進記憶體預算;預算有限的裝置這些改單聲道
     const auxMono = pianoMemoryBudgetBytes() < 1e9;
     const aux = new Set(["pedalD1", "pedalD2", "pedalU1", "pedalU2"]);
+    if (pianoRanges().length) aux.add("sympa");   // 有踏板(記號或自動踏板)才需要踏板共鳴
     for (const p of need.values()) aux.add((p.L >= pianoLayerFor(45) ? "harmL" : "harmS") + pianoNoteName(p.c));
     for (const ev of events) for (const n of ev.notes) if (!n.drum && n.freq) {
       const m = Math.max(21, Math.min(108, Math.round(freqToMidi(n.freq)))); aux.add("rel" + (m - 20));
@@ -6244,26 +6286,40 @@ function pianoSampleFor(m, L){
   }
   return null;
 }
-let pianoVoices = [], pianoLastByKey = {};
-function pianoResetVoices(){ pianoVoices = []; pianoLastByKey = {}; }
-/* 鋼琴專用 EQ(接在 masterGain 之前,後面一樣走 loudnessComp → 限幅器):
-   - 2.8kHz 小幅下凹:新鋼琴(真實錄音,不再像舊版那樣用低通把輕的音壓暗)在 2~3kHz 的寬頻成分比舊鋼琴多約 6dB,
-     剛好落在手機喇叭的共振峰(約 3~4kHz),手機上聽起來「尖」。模擬手機喇叭量測後收 3.5dB
+let pianoVoices = [], pianoLastByKey = {}, pianoRRFlip = {};
+function pianoResetVoices(){ pianoVoices = []; pianoLastByKey = {}; pianoRRFlip = {}; }
+/* 鋼琴專用 EQ(接在 masterGain 之前,後面一樣走 loudnessComp → 限幅器)。依力度變化的明暗與高頻泛音在每個音上(PIANO_TONE),這裡只管整體:
+   - 3.3kHz 收 4.5dB:逐音的 pres/air 補亮之後,2.5~4kHz 比 MAESTRO 真鋼琴多 3~5dB(手機喇叭的共振峰也在這裡,太多會尖)
    - 450Hz 收 2dB(箱子聲)
-   - 9kHz 以上 +1.5dB 補空氣感(Accurate-Salamander 削過 5kHz 以上的泛音);放在 9kHz 而不是 6kHz,避免變成嘶聲
+   - 100Hz 低頻架式 +1.5dB:Keyscape / Claire 的低音比我們厚 3~10dB,真鋼琴在演奏者位置聽低音也比音樂廳錄音飽滿
+   舊版 2.8kHz −3.5dB + 9kHz +1.5dB 已拿掉(會讓強音更悶、高頻補得不夠)。
    另外試過給鋼琴獨立的慢起音壓縮器取代 loudnessComp,實測同樣響度下 p→ff 的差距從 7.7dB 縮到 5.6dB、
    清晰度沒有變好,所以壓縮維持原本的 */
-const PIANO_EQ = { mudFreq: 450, mudGain: -2, mudQ: 1.0, harshFreq: 2800, harshGain: -3.5, harshQ: 0.8, airFreq: 9000, airGain: 1.5 };
+const PIANO_EQ = { mudFreq: 450, mudGain: -2, mudQ: 1.0, harshFreq: 3300, harshGain: -4.5, harshQ: 1.1, lowFreq: 100, lowGain: 1.5 };
 let pianoBusIn = null, pianoBusCtx = null;
 function getPianoBus(){
   if (pianoBusIn && pianoBusCtx === audioCtx) return pianoBusIn;
   const E = PIANO_EQ;
   const peq = (f, g, q) => { const n = audioCtx.createBiquadFilter(); n.type = "peaking"; n.frequency.value = f; n.gain.value = g; n.Q.value = q; return n; };
   const mud = peq(E.mudFreq, E.mudGain, E.mudQ), harsh = peq(E.harshFreq, E.harshGain, E.harshQ);
-  const air = audioCtx.createBiquadFilter(); air.type = "highshelf"; air.frequency.value = E.airFreq; air.gain.value = E.airGain;
-  mud.connect(harsh); harsh.connect(air); air.connect(masterGain);
+  const low = audioCtx.createBiquadFilter(); low.type = "lowshelf"; low.frequency.value = E.lowFreq; low.gain.value = E.lowGain;
+  mud.connect(harsh); harsh.connect(low); low.connect(masterGain);
   pianoBusIn = mud; pianoBusCtx = audioCtx;
   return mud;
+}
+/* 踏板共鳴的卷積器(見 PIANO_SYMPA);sympa.flac 還沒載到就回傳 null(這次不加共鳴,載到後的音才有) */
+let pianoResIn = null, pianoResGate = null, pianoResCtx = null;
+function getPianoResonance(){
+  if (pianoResIn && pianoResCtx === audioCtx) return pianoResIn;
+  const ir = pianoAux.sympa;
+  if (!ir) return null;
+  const input = audioCtx.createGain();
+  const conv = audioCtx.createConvolver(); conv.normalize = false; conv.buffer = ir;   // 不自動正規化:send 是對檔案本身校正的
+  const gate = audioCtx.createGain(); gate.gain.value = 0;
+  const verb = audioCtx.createGain(); verb.gain.value = PIANO_VERB_SEND;
+  input.connect(conv); conv.connect(gate); gate.connect(getPianoBus()); gate.connect(verb); verb.connect(getPianoVerb());
+  pianoResIn = input; pianoResGate = gate; pianoResCtx = audioCtx;
+  return input;
 }
 /* ── 鋼琴專用殘響(取代共用的 buildImpulseResponse 大廳)────────────────
    跟真實房間量測(Surrey 大學 RealRoomBRIRs)與 Salamander 原始錄音比對後的設計:
@@ -6346,12 +6402,22 @@ function pianoKill(v, at){
   try { v.src.stop(at + 0.35); } catch (e) {}
   for (const g of v.rel) { g.gain.cancelScheduledValues(0); g.gain.setValueAtTime(0, 0); }
 }
-function playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel){
+function playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel, autoPedal){
   if (!pianoMan) return false;
   const tm = freqToMidi(freq), m = Math.round(tm);
   if (vel == null) vel = 70;
-  const s = pianoSampleFor(m, pianoLayerFor(vel));
+  let s = pianoSampleFor(m, pianoLayerFor(vel));
   if (!s) return false;
+  // 同一個鍵短時間內再彈、又落在同一層:改用相鄰的力度層(各層音量已校正一樣,只差一點音色),
+  // 真鋼琴連續敲同一個鍵每下都略有不同;Salamander 沒有輪替錄音,每下完全一樣會像機器
+  const last = pianoLastByKey[m];
+  if (last && last.L === s.L && last.c === s.c && when - last.when < 2.5) {
+    const flip = (pianoRRFlip[m] = !pianoRRFlip[m]);
+    for (const l of flip ? [s.L + 1, s.L - 1] : [s.L - 1, s.L + 1]) {
+      const alt = l >= 1 && l <= 16 && pianoBuf[pianoNoteName(s.c) + "-v" + l];
+      if (alt) { s = alt; break; }
+    }
+  }
   const rate = Math.pow(2, (tm - s.c + ((pianoMan.tune[m] || 0) / 100)) / 12);
   const gain = PIANO_GAIN * pianoVelGain(vel);
   let keyUp = Math.max(dur, 0.05);
@@ -6377,17 +6443,23 @@ function playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel
   while (pianoVoices.length >= PIANO_MAX_VOICES) pianoKill(pianoVoices.shift(), when);
   const src = audioCtx.createBufferSource();
   src.buffer = s.buf; src.playbackRate.value = rate;
+  // 依力度的音色(PIANO_TONE):pres 在敲下瞬間多亮一點再回到原值,air 補高頻泛音
+  const tone = pianoToneFor(vel);
+  const pres = audioCtx.createBiquadFilter(); pres.type = "highshelf"; pres.frequency.value = PIANO_TONE.presFreq;
+  pres.gain.setValueAtTime(tone.pres + tone.attack, when); pres.gain.setTargetAtTime(tone.pres, when, PIANO_TONE.attackTau);
+  const air = audioCtx.createBiquadFilter(); air.type = "highshelf"; air.frequency.value = PIANO_TONE.airFreq; air.gain.value = tone.air;
   const g = audioCtx.createGain();
   g.gain.setValueAtTime(gain, when);
   // 譜上沒寫踏板、是程式依和聲自動延長的(harmonyEndSec):當成「半踏板」——制音器輕碰琴弦,放鍵後還有餘音但衰減較快,
   // 不然一串級進的旋律(C D E F…)全部疊在一起響到小節結束,就是聽起來「糊」的主因。譜上真的有踏板才完全延音
   if (!pedal && !noDamper && damperAt > keyUp + 0.02) g.gain.setTargetAtTime(0, keyUp, pianoHalfPedalTau(m));
   if (damperAt < end) g.gain.setTargetAtTime(0, damperAt, tau);
-  src.connect(g);
-  pianoConnect(g, PIANO_VERB_SEND * (pedal ? 1.7 : 1));   // harmonyEndSec 一定有值(至少是同時最長音的結尾),不能拿來判斷踏板
+  src.connect(pres); pres.connect(air); air.connect(g);
+  pianoConnect(g, PIANO_VERB_SEND);   // harmonyEndSec 一定有值(至少是同時最長音的結尾),不能拿來判斷踏板
+  if (pedal || autoPedal) { const res = getPianoResonance(); if (res) { const rs = audioCtx.createGain(); rs.gain.value = PIANO_SYMPA.send; g.connect(rs); rs.connect(res); } }
   src.start(when); src.stop(end + 0.05);
   scheduled.push(src);
-  const v = { src, g, end, rel: [] };
+  const v = { src, g, end, rel: [], L: s.L, c: s.c, when };
   // 制音器落下:弦共鳴(harm)+ 放鍵機械聲(rel),原廠音量是相對原版錄音,用 d 換算到這套校正後的音量;
   // 按得越久共鳴越小(rt_decay dB/秒)。音已經自然消失或沒有制音器的高音就不加
   if (!noDamper && damperAt < bufEnd - 0.05) {
@@ -6407,11 +6479,15 @@ function pianoSchedulePedalNoise(fromSec, toSec, timeToCtx){
   const calib = useCalib(), d16 = -1.5;
   const g = PIANO_GAIN * Math.pow(10, (-20 - d16) / 20) * 0.6;
   let cur = null, curOff = 0, k = 0;
-  const fire = (name, sec, gg) => { if (sec < fromSec - 0.01 || sec > toSec) return; const b = pianoAux[name]; if (b) pianoOneShot(b, timeToCtx(sec), gg, 1, PIANO_VERB_SEND); };
+  const gateMoves = [];   // 踏板共鳴的閘門:[秒, 開/關]
+  const fire = (name, sec, gg) => {
+    gateMoves.push([sec, name.startsWith("pedalD")]);
+    if (sec < fromSec - 0.01 || sec > toSec) return; const b = pianoAux[name]; if (b) pianoOneShot(b, timeToCtx(sec), gg, 1, PIANO_VERB_SEND);
+  };
   for (const ev of events) {
     // 踏板範圍是記譜位置;反覆記號重播時同一個範圍再踩一次(off = 這一遍演奏位置與記譜位置的差)
     const sT = ev.srcT != null ? ev.srcT : ev.tWhole, off = ev.tWhole - sT;
-    const r = ev.pedalOn ? pedalRanges.find(r => sT >= r.start && sT < r.end) : null;
+    const r = (ev.pedalOn || ev.autoPedal) ? pianoRanges().find(r => sT >= r.start && sT < r.end) : null;
     if (r !== cur || (r && Math.abs(off - curOff) > 1e-6)) {
       const t = posToSec(ev.tWhole, calib);
       if (cur) fire("pedalU" + (1 + (k & 1)), r ? t - 0.06 : posToSec(Math.min(cur.end + curOff, ev.tWhole), calib), g);
@@ -6420,8 +6496,26 @@ function pianoSchedulePedalNoise(fromSec, toSec, timeToCtx){
     }
   }
   if (cur) fire("pedalU" + (1 + (k & 1)), posToSec(cur.end + curOff, calib), g);
+  // 踏板共鳴閘門:從開始播放的位置起,踩下(制音器離弦)打開、放開(制音器落下)關掉
+  getPianoResonance();
+  if (pianoResGate) {
+    const p = pianoResGate.gain, now = audioCtx.currentTime;
+    let open = false;
+    for (const [sec, o] of gateMoves) if (sec <= fromSec) open = o;
+    p.cancelScheduledValues(0); p.setValueAtTime(open ? 1 : 0, now);
+    for (const [sec, o] of gateMoves) {
+      if (sec <= fromSec || sec > toSec) continue;
+      p.setTargetAtTime(o ? 1 : 0, Math.max(now, timeToCtx(sec)), o ? PIANO_SYMPA.openTau : PIANO_SYMPA.closeTau);
+    }
+  }
 }
-function pianoRanges(){ return pedalRanges || []; }
+/* 停止播放:踏板共鳴的閘門關掉(不然停在踩踏板的地方,共鳴會留到下一次播放) */
+function pianoCloseResonance(){
+  if (!pianoResGate || pianoResCtx !== audioCtx) return;
+  const p = pianoResGate.gain; p.cancelScheduledValues(0); p.setTargetAtTime(0, audioCtx.currentTime, PIANO_SYMPA.closeTau);
+}
+/* 踏板範圍(記譜位置):有踏板記號就用記號,沒有就用自動踏板 */
+function pianoRanges(){ return pedalRanges && pedalRanges.length ? pedalRanges : (autoPedalRanges || []); }
 
 /* ── 民謠吉他(鋼弦):FSS Steel-String Acoustic Guitar(FreePats,FlameStudios 的 FS Seagull 取樣,GPL + 音色例外)──
    E2~C6 每個半音都有錄音(重彈 42 個、中彈 17 個),44.1kHz。原本用的 Ella Gitauru 真正的錄音只有 5 個音高,其他音都要升調,
@@ -7503,7 +7597,7 @@ function scheduleNote(freq, when, dur, legato, pedal, chordAnchors, harmonyEndSe
     scheduleTremolo(freq, when, dur, tech.tremolo, legato, pedal, chordAnchors, harmonyEndSec, artic, staff, vel, gn);
     return;
   }
-  if (inst === "piano" && !pianoFallback && playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel)) return;
+  if (inst === "piano" && !pianoFallback && playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel, gn && gn.autoPedal)) return;
   if (isGuitarSampled(inst) && playGuitarNote(inst, freq, when, dur, harmonyEndSec, artic, tech, vel, gn)) return;
   if (REAL_INSTRUMENTS[inst] && playSampledInstrument(inst, freq, when, dur, legato, pedal, chordAnchors, harmonyEndSec, artic, isGuitarInst ? tech : null, staff)) return;
   // 真實取樣尚未載入完成或缺失時,退回合成音色,絕不會沒有聲音
@@ -8193,6 +8287,7 @@ function pausePlayback(){
 function stopAudioOnly(){
   for (const node of scheduled) { try { node.stop(); } catch(e){} }
   scheduled = [];
+  pianoCloseResonance();
 }
 
 function stopPlayback(){
@@ -9089,8 +9184,8 @@ function exportHasDrums(){ return !importedAudioBuffer && events.some(ev => ev.n
 async function measureExportGain(rangeStart, rangeEnd, onProgress){
   if (typeof OfflineAudioContext === "undefined" || typeof AudioWorkletNode === "undefined") return null;
   const KEEP = ["audioCtx", "masterGain", "masterLimiter", "masterOut", "masterBus", "masterLimiterNode", "masterReady", "reverbBus", "reverbConvolver", "reverbWet", "reverbPreDelay",
-    "pianoRoomBus", "pianoBusIn", "pianoBusCtx", "pianoVerbIn", "pianoVerbWet", "pianoVerbCtx", "gtrVerbIn", "gtrVerbWet", "gtrVerbCtx", "drumBus", "drumVerbIn", "drumVerbWet",
-    "scheduled", "startCtxTime", "ringingOpenHat", "pianoVoices", "pianoLastByKey", "gtrRR"];
+    "pianoRoomBus", "pianoBusIn", "pianoBusCtx", "pianoVerbIn", "pianoVerbWet", "pianoVerbCtx", "pianoResIn", "pianoResGate", "pianoResCtx", "gtrVerbIn", "gtrVerbWet", "gtrVerbCtx", "drumBus", "drumVerbIn", "drumVerbWet",
+    "scheduled", "startCtxTime", "ringingOpenHat", "pianoVoices", "pianoLastByKey", "pianoRRFlip", "gtrRR"];
   const saved = {};
   for (const k of KEEP) saved[k] = eval(k);
   const restore = () => { for (const k of KEEP) eval(k + " = saved['" + k + "']"); };

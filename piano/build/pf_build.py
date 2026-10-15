@@ -72,7 +72,8 @@ def job_aux(name):
 
 if __name__ == '__main__':
     os.makedirs(OUT, exist_ok=True)
-    for f in glob.glob(f'{OUT}*.flac'): os.remove(f)
+    for f in glob.glob(f'{OUT}*.flac'):
+        if os.path.basename(f) != 'sympa.flac': os.remove(f)   # 踏板共鳴 IR 由 sympa_ir.py 產生,保留
     with ProcessPoolExecutor(4) as ex:
         R = list(ex.map(job_main, [(n, v) for n in NOTES for v in range(1, 17)]))
         aux = [os.path.basename(f)[:-4] for f in glob.glob(f'{SRC}*.wav') if re.match(r'(harm[LS]|rel|pedal)', os.path.basename(f))]
@@ -92,6 +93,8 @@ if __name__ == '__main__':
                tune={str(k): tune.get(k, 0) for k in range(21, 109)},
                samples={f'{FN(n)}-v{v}': dict(lufs=lu, frames=fr, d=D[f'{FN(n)}-v{v}']) for n, v, lu, fr, st in R},
                aux={FN(n): dict(lufs=lu, frames=fr, peak=pk) for n, lu, fr, pk in A})
+    if os.path.exists(f'{OUT}sympa.flac'):   # 踏板共鳴 IR(sympa_ir.py)
+        y, _ = sf.read(f'{OUT}sympa.flac'); man['aux']['sympa'] = dict(lufs=round(mom(y, 48000), 2), frames=len(y), peak=round(20 * np.log10(np.abs(y).max()), 2))
     json.dump(man, open(f'{OUT}manifest.json', 'w'), indent=0)
     tot = sum(fr for *_, fr, st in R)
     print(f'main samples {len(R)}, aux {len(A)}; decoded stereo float32 {tot * 8 / 1e6:.0f} MB; mean length {tot / len(R) / 48000:.1f}s')

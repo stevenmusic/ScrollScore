@@ -17,6 +17,7 @@ pip install numpy scipy soundfile pyloudnorm
 | `gen_drums.py` + `check_drums.py` | 產生測試鼓譜(搖滾、放克鬼音/開放 hi-hat、爵士三連音搖擺、抒情漸強漸弱、金屬雙大鼓)並檢查記譜規則(不跨拍、休止符對齊拍子、手上腳下、符尾不跨拍) |
 | `gp_compare.mjs` | Guitar Pro 匯入比對:同一個 GP 檔用 alphaTab 照 Guitar Pro 規則排版(參考圖)與 App 匯入後的整條樂譜各存一張 PNG,另存轉出的 MusicXML、印出鼓件分布。`--track N` 指定音軌 |
 | `gp_ui_test.mjs` | GP 選音軌對話框:19 種尺寸 × 中英文的版面檢查 + 隨機種子的真人操作模擬(選軌、取消、Esc、連點、旋轉、切語言、播放中匯入、重新整理),`--seed N` |
+| `piano_tone_eval.py` | 鋼琴音色校正:用 App 的取樣與播放規則(含 PIANO_TONE、PIANO_EQ)彈 MAESTRO 真人演奏的 MIDI,跟同一份演奏的真實 Yamaha 錄音逐音比較各力度的亮度、起音高頻、1/3 八度頻譜。`python3 piano_tone_eval.py <放 曲名.flac + 曲名.mid 的目錄> 設定.json [秒數]`(MAESTRO 只拿來測試,不放 repo;另需 `pip install mido`) |
 | `shot.mjs` | 樂譜畫面截圖,`--eval '<js>'` 印出頁面裡的變數(events、perfMeasures、tempoMap…) |
 
 Guitar Pro 測試檔:alphaTab repo(github.com/CoderLine/alphaTab)packages/alphatab/test-data 裡的 .gp/.gpx/.gp5/.gp4(例如 conversion/full-song.gp、guitarpro4/fade-to-black.gp4、guitarpro7/drum-tabs.gp),只拿來測試,不放進 repo。
