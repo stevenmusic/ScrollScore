@@ -5655,7 +5655,7 @@ function reverbAmount(){ const el = $("reverbAmount"); return el ? +el.value / 1
 function reverbWetTarget(){ return reverbAmount() * 0.55; }
 function applyReverbAmount(){
   if (reverbWet) reverbWet.gain.value = reverbWetTarget();
-  if (pianoVerbWet) pianoVerbWet.gain.value = reverbAmount() * PIANO_VERB.wet;
+  if (pianoVerbWet) pianoVerbWet.gain.value = reverbAmount() * (pianoVerbHall ? PIANO_HALL.wet : PIANO_VERB.wet);
   if (gtrVerbWet) gtrVerbWet.gain.value = reverbAmount() * GTR_VERB.wet;
   const el = $("reverbAmountVal");
   if (el) el.textContent = $("reverbAmount").value;
@@ -6240,6 +6240,7 @@ function loadPianoSamples(){
     const auxMono = pianoMemoryBudgetBytes() < 1e9;
     const aux = new Set(["pedalD1", "pedalD2", "pedalU1", "pedalU2"]);
     if (pianoRanges().length) aux.add("sympa");   // 有踏板(記號或自動踏板)才需要踏板共鳴
+    aux.add("hall");                              // 音樂廳殘響 IR
     for (const p of need.values()) aux.add((p.L >= pianoLayerFor(45) ? "harmL" : "harmS") + pianoNoteName(p.c));
     for (const ev of events) for (const n of ev.notes) if (!n.drum && n.freq) {
       const m = Math.max(21, Math.min(108, Math.round(freqToMidi(n.freq)))); aux.add("rel" + (m - 20));
@@ -6257,9 +6258,12 @@ function loadPianoSamples(){
       (seen.has(p.c) ? rest : first).push(p); seen.add(p.c);
     }
     for (const a of Object.keys(pianoAux)) if (!aux.has(a)) delete pianoAux[a];
-    const auxJobs = auxList.filter(a => !pianoAux[a]).map(a => async () => {
-      try { const b = await fetchPianoBuffer(a + ".flac", null, auxMono ? 1 : null); if (gen === pianoGen) pianoAux[a] = b; } catch (e) {}
-    });
+    const auxJobs = auxList.filter(a => !pianoAux[a]).map(a => Object.assign(async () => {
+      try {
+        const b = await fetchPianoBuffer(a + ".flac", null, auxMono && a !== "hall" ? 1 : null);   // 殘響 IR 一定要立體聲
+        if (gen === pianoGen) { pianoAux[a] = b; if (a === "hall") pianoVerbUseHall(); }
+      } catch (e) {}
+    }, { aux: a }));
     const total = first.length + rest.length + auxJobs.length;
     let done = 0;
     const tick = () => { done++; if (gen === pianoGen && done % 8 === 0) setStatus(T("statusLoadingPiano", { pct: Math.round(done / total * 100) })); };
@@ -6268,8 +6272,10 @@ function loadPianoSamples(){
       tick();
     };
     if (total) setStatus(T("statusLoadingPiano", { pct: 0 }));
-    await runLimited(first.map(job), SAMPLE_FETCH_CONCURRENCY);
-    await runLimited([...auxJobs.map(j => async () => { await j(); tick(); }), ...rest.map(job)], SAMPLE_FETCH_CONCURRENCY);
+    // 音樂廳 IR 跟第一批一起載(播放中才換殘響會斷一下),其餘放鍵聲/踏板聲跟剩下的層一起
+    const hallJob = auxJobs.find(j => j.aux === "hall"), otherAux = auxJobs.filter(j => j !== hallJob);
+    await runLimited([...(hallJob ? [async () => { await hallJob(); tick(); }] : []), ...first.map(job)], SAMPLE_FETCH_CONCURRENCY);
+    await runLimited([...otherAux.map(j => async () => { await j(); tick(); }), ...rest.map(job)], SAMPLE_FETCH_CONCURRENCY);
     if (gen === pianoGen) setStatus(T("statusPianoReady", { n: Object.keys(pianoBuf).length }));
   })();
   return pianoLoading;
@@ -6372,7 +6378,19 @@ function buildPianoHallIR(cfg = PIANO_VERB){   // 吉他也用同一套演算法
   for (const d of out) for (let i = 0; i < fadeOut; i++) d[len - fadeOut + i] *= Math.pow(Math.cos(i / fadeOut * Math.PI / 2), 2);
   return ir;
 }
-let pianoVerbIn = null, pianoVerbWet = null, pianoVerbCtx = null;
+/* 音樂廳 IR(piano/hall.flac,piano/build/hall_ir.py):26×17×11m 鞋盒型獨奏廳(約 400 席)的幾何聲學模擬
+   (鏡像法前 3 階 + 射線追蹤、ISO 倍頻程吸音係數、空氣吸收),鋼琴在舞台、間隔 60cm 的 AB 麥克風在琴前 6m;
+   RT60 125Hz 2.1 / 500Hz 1.85 / 1kHz 1.7 / 2kHz 1.65 / 4kHz 1.3 / 8kHz 0.8 秒(坐滿觀眾的獨奏廳)、低頻左右相關性修正成擴散聲場的理論值。早期反射的時間、方向、
+   各頻率的衰減都是物理算出來的,比手調的 buildPianoHallIR 自然;IR 已經從直達聲起算,所以不加預延遲。
+   真實量測的 IR(OpenAIR 等)目前下載不到,拿到後換掉 hall.flac 即可。hall.flac 沒載到就退回 buildPianoHallIR */
+const PIANO_HALL = { highpass: 110, wet: 0.66 };   // wet:殘響響度跟舊的合成殘響一樣(這個 IR 的能量比較平均,同樣 0.33 會小 5.5dB);整體頻譜差 < 1dB,變的只有空間感
+let pianoVerbIn = null, pianoVerbWet = null, pianoVerbCtx = null, pianoVerbConv = null, pianoVerbPre = null, pianoVerbHp = null, pianoVerbHall = false;
+function pianoVerbUseHall(){
+  if (!pianoVerbConv || pianoVerbHall || !pianoAux.hall || PIANO_HALL.wet <= 0) return;
+  pianoVerbConv.buffer = pianoAux.hall;
+  pianoVerbPre.delayTime.value = 0; pianoVerbHp.frequency.value = PIANO_HALL.highpass;
+  pianoVerbHall = true; applyReverbAmount();
+}
 function getPianoVerb(){
   if (pianoVerbIn && pianoVerbCtx === audioCtx) return pianoVerbIn;
   const input = audioCtx.createGain();
@@ -6380,8 +6398,10 @@ function getPianoVerb(){
   const pre = audioCtx.createDelay(0.1); pre.delayTime.value = PIANO_VERB.preDelay;
   const conv = audioCtx.createConvolver(); conv.buffer = buildPianoHallIR();
   pianoVerbWet = audioCtx.createGain(); pianoVerbWet.gain.value = reverbAmount() * PIANO_VERB.wet;
-  input.connect(hp); hp.connect(pre); pre.connect(conv); conv.connect(pianoVerbWet); pianoVerbWet.connect(masterGain);
-  pianoVerbIn = input; pianoVerbCtx = audioCtx;
+  // 殘響回送也經過鋼琴 EQ(跟直達聲同一套音色處理;以前直接進 masterGain,殘響在 3kHz 附近比琴聲亮 5dB)
+  input.connect(hp); hp.connect(pre); pre.connect(conv); conv.connect(pianoVerbWet); pianoVerbWet.connect(getPianoBus());
+  pianoVerbIn = input; pianoVerbCtx = audioCtx; pianoVerbConv = conv; pianoVerbPre = pre; pianoVerbHp = hp; pianoVerbHall = false;
+  pianoVerbUseHall();   // 音樂廳 IR 已經載到就直接換上
   return input;
 }
 function pianoConnect(node, sendAmt){
@@ -9184,7 +9204,7 @@ function exportHasDrums(){ return !importedAudioBuffer && events.some(ev => ev.n
 async function measureExportGain(rangeStart, rangeEnd, onProgress){
   if (typeof OfflineAudioContext === "undefined" || typeof AudioWorkletNode === "undefined") return null;
   const KEEP = ["audioCtx", "masterGain", "masterLimiter", "masterOut", "masterBus", "masterLimiterNode", "masterReady", "reverbBus", "reverbConvolver", "reverbWet", "reverbPreDelay",
-    "pianoRoomBus", "pianoBusIn", "pianoBusCtx", "pianoVerbIn", "pianoVerbWet", "pianoVerbCtx", "pianoResIn", "pianoResGate", "pianoResCtx", "gtrVerbIn", "gtrVerbWet", "gtrVerbCtx", "drumBus", "drumVerbIn", "drumVerbWet",
+    "pianoRoomBus", "pianoBusIn", "pianoBusCtx", "pianoVerbIn", "pianoVerbWet", "pianoVerbCtx", "pianoVerbConv", "pianoVerbPre", "pianoVerbHp", "pianoVerbHall", "pianoResIn", "pianoResGate", "pianoResCtx", "gtrVerbIn", "gtrVerbWet", "gtrVerbCtx", "drumBus", "drumVerbIn", "drumVerbWet",
     "scheduled", "startCtxTime", "ringingOpenHat", "pianoVoices", "pianoLastByKey", "pianoRRFlip", "gtrRR"];
   const saved = {};
   for (const k of KEEP) saved[k] = eval(k);
