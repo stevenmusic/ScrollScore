@@ -8959,7 +8959,8 @@ const DRUM_EXPORT_SCORE_SCALE = 1.4;
    改成「照音符大小」決定:譜線間距目標 EXPORT_AUTO_SCORE.space px,但播放軸右邊至少要看得到 aheadSec 秒的音樂
    (用整首的平均捲動速度算;用「小節數」的話,巴哈這種小節很寬但很慢的曲子會被縮得太小),
    不小於 7px,也不超過扣掉標題與樂器面板後的高度。橫式照舊(使用者覺得沒問題) */
-const EXPORT_AUTO_SCORE = { portrait: { space: 12, drumSpace: 18, aheadSec: 3 }, square: { space: 11, drumSpace: 15, aheadSec: 3 } };
+// 鼓譜(使用者反映 18/15 太小):節奏型一直重複、讀譜不用看很遠,看前面 2 秒就夠,所以可以放更大
+const EXPORT_AUTO_SCORE = { portrait: { space: 12, drumSpace: 26, aheadSec: 3, drumAheadSec: 2 }, square: { space: 11, drumSpace: 22, aheadSec: 3, drumAheadSec: 2 } };
 function exportAutoScoreH(cfg, kind){
   const svg = $("score").querySelector("svg");
   const P = EXPORT_AUTO_SCORE[kind];
@@ -8968,7 +8969,7 @@ function exportAutoScoreH(cfg, kind){
   const unit = 10 * (osmd.zoom || 1);   // 一個譜線間距在 SVG 裡的 px
   let sc = (isDrumScore ? P.drumSpace : P.space) / unit;
   const srcW = parseFloat(svg.getAttribute("width")) || svg.clientWidth, dur = totalSec();
-  if (srcW > 0 && dur > 0) sc = Math.min(sc, cfg.W * (1 - PLAYLINE_RATIO) / (P.aheadSec * srcW / dur));
+  if (srcW > 0 && dur > 0) sc = Math.min(sc, cfg.W * (1 - PLAYLINE_RATIO) / ((isDrumScore ? P.drumAheadSec : P.aheadSec) * srcW / dur));
   sc = Math.max(sc, 7 / unit);
   const panel = !cfg.includeKeyboard ? 0 : currentInstrument() === "drum" ? Math.min(cfg.W * EXPORT_KIT_MAX_W, cfg.H * 0.42)
     : computeKeyboardHeight(cfg.W, cfg.H * 0.03, cfg.H * 0.25);
