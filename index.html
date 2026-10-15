@@ -6428,7 +6428,7 @@ function pianoPlan(need, auxBytes){
 /* 取樣檔快取(Cache Storage):第一次下載後存在裝置上,之後開 App / 換曲子直接從本機讀,不用再下載
    (鋼琴 16 層全部約 156MB,手機網路下載是載入最慢的部分)。取樣檔重新產生時要把 SAMPLE_CACHE 的版本號加一,
    不然使用者會繼續用到舊檔。不支援 Cache Storage(非 https、無痕模式、儲存空間不足)時照原本直接下載 */
-const SAMPLE_CACHE = "scrollscore-samples-v1";
+const SAMPLE_CACHE = "scrollscore-samples-v2";   // v2(2026-10):piano/hall.flac 換成真實音樂廳
 let sampleCachePromise = null;
 function sampleCache(){
   if (!sampleCachePromise) sampleCachePromise = (typeof caches !== "undefined" && window.isSecureContext)
@@ -6638,12 +6638,13 @@ function buildPianoHallIR(cfg = PIANO_VERB){   // 吉他也用同一套演算法
   for (const d of out) for (let i = 0; i < fadeOut; i++) d[len - fadeOut + i] *= Math.pow(Math.cos(i / fadeOut * Math.PI / 2), 2);
   return ir;
 }
-/* 音樂廳 IR(piano/hall.flac,piano/build/hall_ir.py):26×17×11m 鞋盒型獨奏廳(約 400 席)的幾何聲學模擬
-   (鏡像法前 3 階 + 射線追蹤、ISO 倍頻程吸音係數、空氣吸收),鋼琴在舞台、間隔 60cm 的 AB 麥克風在琴前 6m;
-   RT60 125Hz 2.1 / 500Hz 1.85 / 1kHz 1.7 / 2kHz 1.65 / 4kHz 1.3 / 8kHz 0.8 秒(坐滿觀眾的獨奏廳)、低頻左右相關性修正成擴散聲場的理論值。早期反射的時間、方向、
-   各頻率的衰減都是物理算出來的,比手調的 buildPianoHallIR 自然;IR 已經從直達聲起算,所以不加預延遲。
-   真實量測的 IR(OpenAIR 等)目前下載不到,拿到後換掉 hall.flac 即可。hall.flac 沒載到就退回 buildPianoHallIR */
-const PIANO_HALL = { highpass: 110, wet: 0.66 };   // wet:殘響響度跟舊的合成殘響一樣(這個 IR 的能量比較平均,同樣 0.33 會小 5.5dB);整體頻譜差 < 1dB,變的只有空間感
+/* 音樂廳 IR(piano/hall.flac,piano/build/hall_detmold.py,2026-10):真實量測的音樂廳——德國 Detmold 音樂大學音樂廳
+   (約 600 席,Detmold SRIR 資料庫 Set C,CC BY 4.0),舞台前排的 Neumann KH 120 A → 第三排中間(約 8m),
+   全指向 + 8 字形麥克風組成 M/S 立體聲(單聲道就是全指向,完全不會抵消);RT60 125Hz 1.96 / 500Hz 1.52 / 1kHz 1.51 /
+   2kHz 1.42 / 4kHz 1.29 / 8kHz 0.90 秒。原始檔 1.45 秒就截斷,尾巴照各頻率實測衰減率延長。IR 已經從直達聲起算,不加預延遲。
+   以前是 pyroomacoustics 模擬的鞋盒型獨奏廳(piano/build/hall_ir.py,還留著):殘響密度要 190ms 才到完全擴散(真實廳 20ms,
+   前段反射太稀疏)、0.89~0.97 秒有 −37dB 的平行牆顫動回聲,真實廳都沒有。hall.flac 沒載到就退回 buildPianoHallIR */
+const PIANO_HALL = { highpass: 110, wet: 0.44 };   // wet:殘響回送響度跟舊的模擬廳一樣(App 實測舒伯特/蕭邦/巴哈差 ≤ 0.11dB;ConvolverNode 會依 IR 能量與長度自動正規化,檔案本身的音量不算數);整體輸出各八度差 ≤ 0.3dB,新殘響本身 2~4kHz 暗 3~5dB(真實廳的高頻吸收)
 let pianoVerbIn = null, pianoVerbWet = null, pianoVerbCtx = null, pianoVerbConv = null, pianoVerbPre = null, pianoVerbHp = null, pianoVerbHall = false;
 function pianoVerbUseHall(){
   if (!pianoVerbConv || pianoVerbHall || !pianoAux.hall || PIANO_HALL.wet <= 0) return;

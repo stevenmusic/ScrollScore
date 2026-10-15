@@ -1,6 +1,7 @@
 // 離線算出 ScrollScore 的實際輸出(跟網頁播放走同一條音訊路徑),存成 32-bit float WAV。
 // 用法:node render.mjs <樂譜> <輸出.wav> [--inst piano|drum] [--tempo N] [--reverb N] [--sec 最長秒數] [--taps]
 //   --taps:多存 2 聲道 = masterGain(響度壓縮器之前的鋼琴/吉他總和),共 4 聲道
+//   --tapsrc verb(配合 --taps):3、4 聲道改存鋼琴殘響回送 pianoVerbWet 的輸出(換殘響 IR 時校正 PIANO_HALL.wet)
 // 需要:npm i playwright opensheetmusicdisplay@2.0.0 jszip(在 NODE_PATH 或本目錄)
 // 雲端環境 jsdelivr 被擋,所以 OSMD/JSZip 從 npm 拿,用 page.route 攔截
 import { chromium } from "playwright";
@@ -74,20 +75,22 @@ const info = await page.evaluate(async () => {
 });
 console.error("info", JSON.stringify(info));
 const t0 = Date.now();
-const nch = await page.evaluate(async taps => {
+const nch = await page.evaluate(async ([taps, tapSrc]) => {
   const ctx = __ctx;
   if (taps === 4) {
     masterOut.disconnect();
     const m = ctx.createChannelMerger(4), s1 = ctx.createChannelSplitter(2), s2 = ctx.createChannelSplitter(2);
     masterOut.connect(s1); s1.connect(m, 0, 0); s1.connect(m, 1, 1);
-    (typeof masterBus !== "undefined" && masterBus ? masterBus : masterGain).connect(s2); s2.connect(m, 0, 2); s2.connect(m, 1, 3);
+    if (tapSrc === "verb") { getPianoVerb(); pianoVerbWet.connect(s2); }   // --tapsrc verb:3、4 聲道改成鋼琴殘響回送(換 IR 時校正 PIANO_HALL.wet 用)
+    else (typeof masterBus !== "undefined" && masterBus ? masterBus : masterGain).connect(s2);
+    s2.connect(m, 0, 2); s2.connect(m, 1, 3);
     ctx.destination.channelInterpretation = "discrete";
     m.connect(ctx.destination);
   }
   startAudioFrom(0);
   window.__buf = await ctx.startRendering();
   return window.__buf.numberOfChannels;
-}, TAPS);
+}, [TAPS, opt("tapsrc", null)]);
 console.error("rendered in", (Date.now() - t0) / 1000, "s");
 // 分段取回 float32
 const len = await page.evaluate(() => __buf.length);

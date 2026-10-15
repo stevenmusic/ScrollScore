@@ -1,6 +1,7 @@
-"""鋼琴殘響用的音樂廳脈衝響應:python3 piano/build/hall_ir.py [輸出.flac,預設 piano/hall.flac]
+"""(舊版,2026-10 起 piano/hall.flac 改用真實量測的 Detmold 音樂廳:piano/build/hall_detmold.py;這支只留著參考)
+模擬的音樂廳脈衝響應:python3 piano/build/hall_ir.py [輸出.flac]
 
-真實音樂廳的量測 IR(OpenAIR、Detmold、3D-MARCo)目前拿不到(OpenAIR 憑證過期、Zenodo 限流),
+當時真實音樂廳的量測 IR(OpenAIR、Detmold、3D-MARCo)拿不到(OpenAIR 憑證過期、Zenodo 限流),
 改用 pyroomacoustics(MIT 授權)做幾何聲學模擬:鏡像法(前 3 階,早期反射位置/延遲準確)+ 射線追蹤(後段殘響),
 材料用 ISO/文獻的倍頻程吸音係數,空氣吸收開著,所以各頻率的衰減、早期反射的時間與方向都是物理算出來的,
 不是手調的雜訊包絡。
@@ -11,7 +12,7 @@
 輸出:直達聲拿掉(App 的取樣本身就是近距離的直達聲),以直達聲到達時間為 0,保留之後的早期反射與殘響;
 -70dB 或 2.8 秒截止、最後 0.4 秒淡出、低頻左右相關性修正到擴散聲場的理論值,48kHz 立體聲 16-bit FLAC。射線追蹤有隨機性,重建時各頻段 T30 會差 0.1 秒左右。"""
 import sys, numpy as np, soundfile as sf, pyroomacoustics as pra
-OUT = sys.argv[1] if len(sys.argv) > 1 else 'piano/hall.flac'
+OUT = sys.argv[1] if len(sys.argv) > 1 else 'hall_sim.flac'
 SR = 48000
 np.random.seed(7)
 d = pra.materials_data['absorption']
