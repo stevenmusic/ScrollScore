@@ -1643,7 +1643,8 @@ function metronomeUnitLabel(beatUnit, dotCount){
   return "(" + dotPrefix + base + ")";
 }
 let scoreDynMarks = [], scoreWedges = []; // 力度記號與髮夾(記譜位置),鼓的整首力度用
-let scoreDynOffsets = [];   // una corda 等整段力度偏移 {start, end, delta}(記譜位置)
+let scoreDynOffsets = [];
+let scoreChokeTimes = [];   // 鼓譜的止音文字(Mute / Choke…)位置(記譜位置),見 markDrumChokes   // una corda 等整段力度偏移 {start, end, delta}(記譜位置)
 let scoreTempoWords = [];   // 速度文字 {t: 記譜位置, kind: "rit" | "accel" | "atempo"}(rit./rall./a tempo…,彈性速度模型用)
 let ghostNoteheadEntries = {}; // 同上,記錄括號符頭(鬼音 ghost note,輕輕帶過的小鼓等),播放時用最輕的力度層
 let crossNoteheadEntries = {}; // midi(取整數) -> 已排序的 {t,v} 陣列,記錄哪些時間點是打叉符頭(rim click等特殊擊法),用 findNearestEntry 容許誤差比對
@@ -2105,6 +2106,7 @@ async function loadScoreFile(file){
     scoreTempoWords = parsed.tempoWords || [];
     scoreWedges = parsed.wedges || [];
     scoreDynOffsets = parsed.dynOffsets || [];
+    scoreChokeTimes = parsed.chokeTimes || [];
     ghostNoteheadEntries = {};
     for (const mk of Object.keys(parsed.ghostNoteheadMap || {})) {
       ghostNoteheadEntries[mk] = buildSortedEntries(parsed.ghostNoteheadMap[mk]);
@@ -3319,6 +3321,7 @@ async function renderScore(xmlText){
   extendLedgerLineStems(); // OSMD符桿長度是固定值,不會因為加線音符離譜表遠就自動加長,這裡渲染完手動補上
 
   buildTimeline();
+  markDrumChokes();
   computeDrumSongDynamics();
   computePianoDynamics();
   computeGuitarDynamics();
@@ -3418,6 +3421,7 @@ function parseXmlTimeline(xmlText){
     const openWedges = {};
     const wordActs = [];   // 力度文字 {t, a: dynamicWordActions(), dash: 虛線編號}(soft、dolce、cresc.…,見 resolveScoreDynamicWords)
     const dashStops = [];  // 虛線結束 {t, num}
+    const chokeTimes = []; // 止音文字 Mute / Choke 的位置(鼓譜用)
     const staffOnsets = {}; // staffNum -> [{tWhole, durWhole, pcs:Set}], 給重複音型偵測用
     const articMap = {}; // tWhole(定點字串) -> {accent,strongAccent,staccato,staccatissimo,tenuto,detachedLegato,spiccato,softAccent,fermata}
     const arpMap = {}; // tWhole(定點字串) -> "up"/"down",分解和弦(琶音)標記
@@ -3484,6 +3488,7 @@ function parseXmlTimeline(xmlText){
           for (const wEl of Array.from(child.getElementsByTagName("words"))) {
             const kind = tempoWordKind(wEl.textContent);
             if (kind) tempoWords.push({ t: cursor, kind });
+            if (isChokeWord(wEl.textContent)) chokeTimes.push(cursor);
             const acts = dynamicWordActions(wEl.textContent);
             if (acts) {
               const dsh = Array.from(child.getElementsByTagName("dashes")).find(d => d.getAttribute("type") === "start");
@@ -3683,7 +3688,7 @@ function parseXmlTimeline(xmlText){
     const measureRanges = measureBoundaries.map((start, i) => ({
       start, end: i + 1 < measureBoundaries.length ? measureBoundaries[i + 1] : cursor
     }));
-    return { slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges, articMap, arpMap, soundTempo, metronomeDisplay, timeSig, isDrumScore, crossNoteheadMap, ghostNoteheadMap, dynMarks, dynOffsets, tempoWords, wedges, measureRanges, guitarTechMap, vibratoRanges: outWavyLines, scoreTitle };
+    return { slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges, articMap, arpMap, soundTempo, metronomeDisplay, timeSig, isDrumScore, crossNoteheadMap, ghostNoteheadMap, dynMarks, dynOffsets, chokeTimes, tempoWords, wedges, measureRanges, guitarTechMap, vibratoRanges: outWavyLines, scoreTitle };
   } catch (e) {
     console.error("讀取踏板/圓滑線資訊失敗:", e);
     return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, arpMap: {}, soundTempo: null, metronomeDisplay: null, timeSig: null, isDrumScore: false, crossNoteheadMap: {}, measureRanges: [], guitarTechMap: {}, vibratoRanges: [], scoreTitle: null };
@@ -4034,6 +4039,32 @@ function resolveScoreDynamicWords(dynMarks, wedges, wordActs, dashStops, bars, e
   }
   if (cordaStart != null && endT > cordaStart + eps) offsets.push({ start: cordaStart, end: endT, delta: -0.05 });
   return offsets;
+}
+/* 鼓譜的止音文字:Mute / Choke / Grab / Damp / Secco / 止音 / ミュート…(鈸打下去馬上用手抓住,後面的休止符是真的沒聲音)。
+   吉他的 Mute(悶音)只有鼓才會用到這裡(markDrumChokes 只標鈸) */
+function isChokeWord(text){
+  const s = (text || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  return /(^|[^a-z])(mute|muted|mutes|choke|choked|chk|grab|grabbed|damp|damped|dampen|dampened|muffle|muffled|secco|sec|etouffe|etouffez|gedampft|abdampfen|smorzato secco)([^a-z]|$)/.test(s)
+    || /止音|悶音|闷音|抓鈸|抓镲|ミュート|チョーク/.test(s);
+}
+const DRUM_CHOKE_KEYS = new Set([49, 57, 55, 52, 51, 59, 53]);   // crash、splash、china、ride(會一直響、可以用手抓住的鈸)
+/* 標出要止音的鈸(n.choke):
+   1) 譜上的止音文字 → 那個位置(或之後一拍內最近一個)有打鈸的事件
+   2) 鈸上的斷音點(Guitar Pro 的 choke 技法匯入時就是畫成點;一般記譜鈸上的點也是「打完馬上抓住」) */
+function markDrumChokes(){
+  for (const ev of events) for (const n of ev.notes) if (n.drum) n.choke = false;
+  const cymbalNotes = ev => ev.notes.filter(n => n.drum && DRUM_CHOKE_KEYS.has(n.key));
+  for (const ev of events) if (ev.artic && (ev.artic.staccato || ev.artic.staccatissimo)) for (const n of cymbalNotes(ev)) n.choke = true;
+  for (const t of scoreChokeTimes) {
+    let best = null;
+    for (const ev of events) {
+      if (ev.srcT == null || ev.srcT < t - 1e-4 || ev.srcT > t + 0.25 + 1e-6 || !cymbalNotes(ev).length) continue;
+      if (!best || ev.srcT < best.srcT) best = ev;
+    }
+    if (!best) continue;
+    // 反覆記號展開後同一個記譜位置會出現好幾次,每一次都要止音
+    for (const ev of events) if (ev.srcT != null && Math.abs(ev.srcT - best.srcT) < 1e-6) for (const n of cymbalNotes(ev)) n.choke = true;
+  }
 }
 function inRanges(t, ranges){
   for (const r of ranges) if (t >= r.start && t < r.end) return true;
@@ -5982,7 +6013,7 @@ async function beginPlayback(fromSec){
 
 function startAudioFrom(fromSec){
   startCtxTime = audioCtx.currentTime - fromSec;
-  scheduled = [];
+  scheduled = []; ringingCymbals = {};
   const calib = useCalib();
   computeDrumPerformance(); // 依目前的速度重算(速度會影響「越快越輕」)
   pianoResetVoices(); gtrRR = {};
@@ -6007,7 +6038,7 @@ function startAudioFrom(fromSec){
           : harmonyEndSec;
         const noteTech = (isGuitar && n.glissTargetFreq != null) ? Object.assign({}, tech, { glissTargetFreq: n.glissTargetFreq }) : tech;
         // 人性化的時間偏移可能是負的(提早一點點):第一拍剛好在 currentTime 時會變成過去的時間而整個被丟掉,所以不早於現在
-        if (n.drum) { const h = humanizeDrumHit(ev, n); scheduleDrum(n.key, Math.max(audioCtx.currentTime, startCtxTime + t + rollT + h.dt), h); }
+        if (n.drum) { const h = humanizeDrumHit(ev, n), w = Math.max(audioCtx.currentTime, startCtxTime + t + rollT + h.dt); scheduleDrum(n.key, w, h, n.choke ? startCtxTime + t + durSec : null); }
         else scheduleNote(n.freq, Math.max(audioCtx.currentTime, startCtxTime + t + rollT + ((isGuitar ? n.gdt : n.pdt) || 0)), durSec, ev.legato, ev.pedalOn, chordAnchors, noteHarmonyEndSec, ev.artic, noteTech, n.staff, isGuitar ? n.gvel : n.pvel, n);
       } catch (e) {
         errCount++; lastErr = e;
@@ -8277,6 +8308,27 @@ function chokeOpenHat(when){
   ringingOpenHat = null;
 }
 
+/* 鈸的止音(choke):真實鼓手打完用手抓住鈸,聲音約 50ms 內收掉(還在響的同一片鈸——包括前面打的——也一起停)。
+   ringingCymbals[鼓件] = 還在響的聲音;止音時從當下包絡的音量快速收掉,避免爆音。殘響/鼓房的尾巴照常自然消失 */
+let ringingCymbals = {};
+function fadeDrumVoice(v, when, tau){
+  if (!v || when <= v.when || (v.sustainSec && when >= v.when + v.sustainSec)) return;
+  let cur = v.level;
+  if (v.sustainSec) {
+    const holdEnd = v.when + v.sustainSec * 0.5;
+    if (when > holdEnd) cur = v.level * Math.pow(0.0001 / v.level, (when - holdEnd) / (v.sustainSec * 0.5));
+  }
+  v.g.gain.cancelScheduledValues(when);
+  v.g.gain.setValueAtTime(cur, when);
+  v.g.gain.exponentialRampToValueAtTime(0.0001, when + tau);
+}
+function chokeCymbal(piece, when){
+  const list = ringingCymbals[piece];
+  if (!list) return;
+  for (const v of list) fadeDrumVoice(v, when, 0.05);
+  ringingCymbals[piece] = list.filter(v => v.when >= when);
+}
+
 /* 金屬銅鈸合成:九方波非諧波泛音堆疊(敲擊的「叮」)+ 濾波白噪音(鈸片震動的「沙沙」共鳴),
    兩層疊加是真實鈸聲(尤其爵士 ride)的關鍵 —— 純泛音堆疊只有攻擊聲、沒有那種會延續的沙沙聲底 */
 function synthCymbal(when, decay, hpFreq, gain, noiseMix){
@@ -8350,14 +8402,23 @@ const DRUM_KEY_VOICE = {
   50: "tomHigh", 48: "tom1", 47: "tom2", 45: "tom3", 43: "tom4", 41: "tom5",
   49: "crash1", 57: "crash2", 55: "splash", 52: "china", 51: "ride", 59: "ride", 53: "rideBell"
 };
-/* hit:humanizeDrumHit() 算出來的 {s(0~1 力度), vel, gainMul};沒有給就當一般力度 */
-function scheduleDrum(key, when, hit){
+/* hit:humanizeDrumHit() 算出來的 {s(0~1 力度), vel, gainMul};沒有給就當一般力度。
+   chokeAt:要止音的鈸在這個時間被抓住(譜上 Mute/Choke,見 markDrumChokes) */
+function scheduleDrum(key, when, hit, chokeAt){
   const s = hit && hit.s != null ? hit.s : 0.72;
   const voice = DRUM_VOICES[DRUM_KEY_VOICE[key] || "snare"];
   const gain = DRUM_KEY_VOICE[key] ? voice.gain : 0.7;
   if (voice.choke) chokeOpenHat(when);
   const played = playSample(voice.piece, when, gain, voice.rate || 0, voice.sustain || 0, s, voice.pan, voice.send);
-  if (played) { if (voice.openHat) ringingOpenHat = played; return; }
+  if (played) {
+    if (voice.openHat) ringingOpenHat = played;
+    if (DRUM_CHOKE_KEYS.has(key)) {
+      const list = (ringingCymbals[voice.piece] = (ringingCymbals[voice.piece] || []).filter(v => v.when + v.sustainSec > when));
+      list.push(played);
+      if (chokeAt != null) chokeCymbal(voice.piece, Math.max(chokeAt, when + 0.04));
+    }
+    return;
+  }
   voice.synth(when, drumVelGain(s) / drumVelGain(0.72)); // 合成備援音色沒有力度層,直接用倍率
 }
 
@@ -9344,7 +9405,7 @@ async function measureExportGain(rangeStart, rangeEnd, onProgress){
   if (typeof OfflineAudioContext === "undefined" || typeof AudioWorkletNode === "undefined") return null;
   const KEEP = ["audioCtx", "masterGain", "masterLimiter", "masterOut", "masterBus", "masterLimiterNode", "masterReady", "reverbBus", "reverbConvolver", "reverbWet", "reverbPreDelay",
     "pianoRoomBus", "pianoBusIn", "pianoBusCtx", "pianoVerbIn", "pianoVerbWet", "pianoVerbCtx", "pianoVerbConv", "pianoVerbPre", "pianoVerbHp", "pianoVerbHall", "pianoResIn", "pianoResGate", "pianoResCtx", "gtrVerbIn", "gtrVerbWet", "gtrVerbCtx", "drumBus", "drumVerbIn", "drumVerbWet", "drumRoomConv", "drumRoomWet", "drumRoomIn",
-    "scheduled", "startCtxTime", "ringingOpenHat", "pianoVoices", "pianoLastByKey", "pianoRRFlip", "gtrRR"];
+    "scheduled", "startCtxTime", "ringingOpenHat", "ringingCymbals", "pianoVoices", "pianoLastByKey", "pianoRRFlip", "gtrRR"];
   const saved = {};
   for (const k of KEEP) saved[k] = eval(k);
   const restore = () => { for (const k of KEEP) eval(k + " = saved['" + k + "']"); };
@@ -9357,7 +9418,7 @@ async function measureExportGain(rangeStart, rangeEnd, onProgress){
     const tap = new AudioWorkletNode(audioCtx, "ss-loudness-tap", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1], channelCount: 2, channelCountMode: "explicit" });
     masterOut.disconnect();
     masterBus.connect(tap); tap.connect(audioCtx.destination);
-    scheduled = []; ringingOpenHat = null; pianoResetVoices();
+    scheduled = []; ringingOpenHat = null; ringingCymbals = {}; pianoResetVoices();
     startCtxTime = LEAD;
     computeDrumPerformance();
     scheduleExportRange(rangeStart, rangeEnd, useCalib());
@@ -9379,7 +9440,7 @@ async function measureExportGain(rangeStart, rangeEnd, onProgress){
 /* 匯出區間的所有音符排程到目前的 audioCtx(以 startCtxTime 為曲子 rangeStart 的時間點)。
    即時匯出與匯出前的離線響度分析共用,兩邊排的音完全一樣 */
 function scheduleExportRange(rangeStart, rangeEnd, calib){
-  gtrRR = {};
+  gtrRR = {}; ringingCymbals = {};
   if (currentInstrument() === "piano") pianoSchedulePedalNoise(rangeStart, rangeEnd, sec => startCtxTime + sec - rangeStart);
   const isGuitar = currentInstrument() === "guitar" || currentInstrument() === "guitarnylon";
   for (const ev of events) {
@@ -9397,7 +9458,7 @@ function scheduleExportRange(rangeStart, rangeEnd, calib){
         ? startCtxTime + ((posToSec(n.guitarRingEndWhole, calib)) - rangeStart)
         : harmonyEndSec;
       const noteTech = (isGuitar && n.glissTargetFreq != null) ? Object.assign({}, tech, { glissTargetFreq: n.glissTargetFreq }) : tech;
-      if (n.drum) { const h = humanizeDrumHit(ev, n); scheduleDrum(n.key, startCtxTime + (t - rangeStart) + rollT + h.dt, h); }
+      if (n.drum) { const h = humanizeDrumHit(ev, n); scheduleDrum(n.key, startCtxTime + (t - rangeStart) + rollT + h.dt, h, n.choke ? startCtxTime + (t - rangeStart) + durSec : null); }
       else scheduleNote(n.freq, startCtxTime + (t - rangeStart) + rollT + ((isGuitar ? n.gdt : n.pdt) || 0), durSec, ev.legato, ev.pedalOn, chordAnchors, noteHarmonyEndSec, ev.artic, noteTech, n.staff, isGuitar ? n.gvel : n.pvel, n);
     }
   }
