@@ -62,6 +62,8 @@
 - 測試工具在 tools/audiotest/(見該目錄 README):離線渲染(OfflineAudioContext)量響度/真峰值/LRA、力度階梯、限幅器單元測試、測試鼓譜產生與記譜檢查、截圖。鋼琴測試曲用 ASAP dataset 的 MusicXML(只測試,不放 repo)
 - 測試鼓譜的記譜規則(使用者強調,寫錯過好幾次):照 Weinberg/PAS 與 MuseScore 4 預設鼓組(drumset.cpp)——音符與休止符不跨拍、休止符對齊拍子(空兩拍且從第 1 或 3 拍開始才用二分休止)、手(符桿上)腳(符桿下)兩個聲部各自寫滿、符尾以拍為單位、搖擺用三連音記、開放 hi-hat 是 x 符頭 + 上方「o」、中鼓 48 E5 / 47 D5 / 45 B4、落地鼓 43 A4 / 41 G4。MuseScore 網站上使用者上傳的譜品質參差,不能拿來當記譜依據
 
+- 頂欄收合(fitHeaderRow,依序試到放得下單排為止):BPM 字樣 → 按鈕只留圖示 → 主題/語言兩顆搬進設定面板最上面的「外觀與語言」(#headerPrefSlot)→ 品牌名讓位(360px 以下)。2026-10 起手機載入樂譜後頂欄一律單排(以前 280~430px 都是兩排,多吃約 60px 樂譜高度)。按鈕保留的是整顆按鈕的寬度(圖示與文字置中貼齊),不是文字的寬度。版面檢查 tools/audiotest/layout_check.mjs(19 種尺寸 × 中英文)、模擬操作 human_check.mjs(隨機種子)
+
 ## Git 流程
 - 所有改動完成後直接 commit 並 push 到 main，不用先問我
 

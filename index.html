@@ -160,6 +160,11 @@ header h1 span{color:var(--ivory);font-weight:600}
 /* 樂譜載入前,播放/停止先整個隱藏(而不只是變淡);整個第二排(#transportBar)本身
    也是載入後才出現,這裡是雙重保險,避免兩者的顯示時機萬一沒對齊 */
 #transportBar .btn:disabled{display:none}
+#headerPrefGroup{flex-direction:row;align-items:center;justify-content:space-between}
+#headerPrefGroup .settings-group-title{width:auto}
+#headerPrefSlot{display:flex;gap:8px}
+body:not(.header-prefs-moved) #headerPrefGroup{display:none}
+body.header-brand-hidden header .brand{display:none}
 .tempo-box{display:flex;align-items:center;gap:8px;font-size:var(--fs-sm);color:var(--muted);white-space:nowrap}
 .tempo-box b{color:var(--gold-bright);font-size:var(--fs-lg);min-width:34px;text-align:right;font-variant-numeric:tabular-nums}
 .tempo-box input[type=number]{
@@ -190,12 +195,14 @@ input[type=range]::-webkit-slider-thumb{
 #tempoDisplay{display:inline-block;min-width:3ch;text-align:right}
 /* 中英文切換時文字長度不同,按鈕會跟著變寬、把右邊(或同排)的按鈕一起擠動——
    固定保留較長那個語言的寬度,兩種語言下按鈕大小都一樣,切換語言按鈕不會位移 */
+/* 保留的是整顆按鈕的寬度(不是文字的寬度),圖示和文字貼在一起置中,不會中間空一段 */
 .btn-label{display:inline-block}
-.home-link .btn-label{min-width:35px;text-align:center}
-#settingsToggle .btn-label{min-width:51px;text-align:center}
-#loadBtn .btn-label{min-width:77px;text-align:center}
-#stopBtn .btn-label{min-width:56px;text-align:center}
-#playLabel{min-width:40px;text-align:center}
+@media (min-width:601px){
+  body:not(.header-icons-only) #settingsToggle{min-width:106px}
+  body:not(.header-icons-only) #loadBtn{min-width:131px}
+  body:not(.header-icons-only) #stopBtn{min-width:110px}
+  body:not(.header-icons-only) #playBtn{min-width:94px}
+}
 #tempoPopover{
   position:absolute;top:calc(100% + 10px);right:0;z-index:60;
   display:flex;flex-direction:column;gap:10px;min-width:190px;
@@ -290,6 +297,9 @@ input[type=range]::-webkit-slider-thumb{
 /* 「尚未匯入音檔(播放樂器合成音)」這類狀態文字很長,會把後面的「移除」擠到下一行變成孤兒。
    讓它吃掉剩餘寬度並在過長時截斷,整列就能維持一行 */
 #audioImportStatus,#bgImageStatus{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 還沒匯入時只顯示「匯入」按鈕;匯入後才出現檔名與「移除」(以前是「未匯入」+ 灰掉的移除鈕在佔位置) */
+#audioImportClearBtn:disabled,#bgImageClearBtn:disabled{display:none}
+.tempo-box:has(#audioImportClearBtn:disabled) #audioImportStatus,.tempo-box:has(#bgImageClearBtn:disabled) #bgImageStatus{visibility:hidden}
 /* 開關兩個一列。先前為了對齊改成一列一個,結果面板在手機上變成 1.27 個畫面高;
    用等寬的 flex 基準排成兩欄,既維持左緣對齊又省掉一半高度,窄螢幕放不下時自動退回一欄。
    min-width 取 108px:軌道 38 + 間距 10 + 四個中文字約 52 = 100,留一點餘裕,
@@ -387,6 +397,12 @@ input[type=range]::-webkit-slider-thumb{
   .settings-group{padding:10px 12px;gap:8px}
   #settingsPanel{gap:8px}
 }
+/* 折疊機外螢幕(280px):樂器選單與移調放不下同一列,換行、選單占滿整列 */
+@media (max-width:300px){
+  .settings-group .combo-row{flex-wrap:wrap}
+  .combo-row #instrument{flex:1 1 100%;max-width:none}
+  .combo-row .trans-group{margin-left:0}
+}
 /* 最舊款極窄機型(320px):再壓縮一輪按鈕內距與滑桿/數字框寬度 */
 @media (max-width:340px){
   .btn{padding:0 5px}
@@ -408,7 +424,7 @@ input[type=range]::-webkit-slider-thumb{
   .settings-group .tempo-box{width:auto}
   .settings-group .collapse-body .tempo-box{width:100%}
   .switch-grid{gap:6px 10px}
-  .switch-grid .switch-row{flex:1 1 calc(33.333% - 10px)}
+  .switch-grid .switch-row{flex:1 1 calc(25% - 10px)}   /* 4 個開關排成一列(三欄會變成 3+1) */
   input[type=range]{width:70px}
   #keyboardCanvas{height:64px;margin-bottom:6px}
   #stage{min-height:70px}
@@ -849,6 +865,11 @@ body.exporting-active .empty-card{
 <div id="settingsBackdrop"></div>
 
 <div id="settingsPanel">
+  <!-- 手機頂欄放不下時,主題/語言兩顆按鈕搬到這裡(fitHeaderRow 的最後一步),讓載入/播放/回到開頭留在頂欄同一列 -->
+  <div class="settings-group" id="headerPrefGroup">
+    <div class="settings-group-title" data-i18n="settingsGroupPrefs">外觀與語言</div>
+    <div id="headerPrefSlot"></div>
+  </div>
   <div class="settings-group">
     <div class="settings-group-title" data-i18n="settingsGroupTone">音色與調性</div>
     <!-- 樂器與移調併成一列:兩個控制項本身就會顯示自己的值(「鋼琴」、「原調」/「+2 半音」),
@@ -896,12 +917,12 @@ body.exporting-active .empty-card{
   </div>
 
   <details class="settings-group settings-collapse">
-    <summary class="settings-group-title"><span data-i18n="advancedSummary">進階(音檔、空間感、顏色、背景)</span><span class="chev">›</span></summary>
+    <summary class="settings-group-title"><span data-i18n="advancedSummary">進階</span><span class="chev">›</span></summary>
     <div class="collapse-body">
       <div class="tempo-box"><span class="row-label" data-i18n="audioRowLabel">音檔</span>
         <button class="btn" id="audioImportBtn" data-i18n="audioImportBtn">匯入音檔</button>
         <input type="file" id="audioImportFile" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.flac">
-        <span id="audioImportStatus" style="font-size:12px;opacity:0.75" data-i18n="audioImportStatusDefault">尚未匯入音檔(播放樂器合成音)</span>
+        <span id="audioImportStatus" style="font-size:12px;opacity:0.75" data-i18n="audioImportStatusDefault">未匯入</span>
         <button class="btn" id="audioImportClearBtn" style="padding:4px 10px" disabled data-i18n="removeBtn">移除</button>
       </div>
       <div class="tempo-box" data-i18n-attr="title:reverbTitle"><span class="row-label" data-i18n="reverbLabel">空間感</span>
@@ -919,7 +940,7 @@ body.exporting-active .empty-card{
       <div class="tempo-box"><span class="row-label" data-i18n="bgImageRowLabel">背景圖</span>
         <button class="btn" id="bgImageBtn" data-i18n="bgImageBtn">匯入背景圖片</button>
         <input type="file" id="bgImageFile" accept="image/*">
-        <span id="bgImageStatus" style="font-size:12px;opacity:0.75" data-i18n="bgImageStatusDefault">尚未匯入背景圖片</span>
+        <span id="bgImageStatus" style="font-size:12px;opacity:0.75" data-i18n="bgImageStatusDefault">未匯入</span>
         <button class="btn" id="bgImageClearBtn" style="padding:4px 10px" disabled data-i18n="removeBtn">移除</button>
       </div>
     </div>
@@ -955,8 +976,8 @@ body.exporting-active .empty-card{
       <div class="mark">
         <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
       </div>
-      <p class="empty-title" data-i18n="emptyTitle">點擊這裡載入樂譜,開始使用</p>
-      <p class="empty-sub" data-i18n="emptySub">支援 MusicXML(.xml / .mxl)與 Guitar Pro(.gp / .gpx / .gp5 / .gp4 / .gp3)</p>
+      <p class="empty-title" data-i18n="emptyTitle">點這裡載入樂譜</p>
+      <p class="empty-sub" data-i18n="emptySub">支援 MusicXML 與 Guitar Pro 檔案</p>
       <button id="trySampleBtn" class="link-btn" data-i18n="trySampleBtn">或先試用範例樂譜看看 →</button>
     </div>
   </div>
@@ -1164,6 +1185,7 @@ const I18N = {
     drumNotTransposable: "鼓組不需要移調",
 
     settingsGroupPlayback: "播放與顯示",
+    settingsGroupPrefs: "外觀與語言",
     countInTitle: "播放前先敲一小節節拍器,留時間把手放到樂器上",
     countInLabel: "預備拍",
     showTempoMarksTitle: "顯示樂譜上的速度記號",
@@ -1173,10 +1195,10 @@ const I18N = {
     measureHlTitle: "把正在演奏的那一小節整段用色塊標起來,視讀時更容易抓到位置",
     measureHlLabel: "小節高亮",
 
-    advancedSummary: "進階(音檔、空間感、顏色、背景)",
+    advancedSummary: "進階",
     audioRowLabel: "音檔",
     audioImportBtn: "匯入音檔",
-    audioImportStatusDefault: "尚未匯入音檔(播放樂器合成音)",
+    audioImportStatusDefault: "未匯入",
     audioImportedStatus: "已匯入:{name}(靜音樂器合成音)",
     removeBtn: "移除",
     reverbTitle: "模擬鋼琴在真實空間裡的殘響與左右聲像。取樣本身是近距離收音的乾聲,加一點空間感才不會聽起來貼在臉上",
@@ -1189,7 +1211,7 @@ const I18N = {
     scoreBgOpacityLabel: "背景濃度",
     bgImageRowLabel: "背景圖",
     bgImageBtn: "匯入背景圖片",
-    bgImageStatusDefault: "尚未匯入背景圖片",
+    bgImageStatusDefault: "未匯入",
     bgImportedStatus: "已匯入:{name}",
 
     loadScoreFirstTitle: "請先載入樂譜",
@@ -1198,8 +1220,8 @@ const I18N = {
     recBtnTitleReady: "清空畫面成純樂譜視圖,方便你自行用手機/電腦內建的螢幕錄影工具錄製",
     exportBtnTitleReady: "自動產生可下載的影片檔",
 
-    emptyTitle: "點擊這裡載入樂譜,開始使用",
-    emptySub: "支援 MusicXML(.xml / .mxl)與 Guitar Pro(.gp / .gpx / .gp5 / .gp4 / .gp3)",
+    emptyTitle: "點這裡載入樂譜",
+    emptySub: "支援 MusicXML 與 Guitar Pro 檔案",
     trySampleBtn: "或先試用範例樂譜看看 →",
     sampleScoreTitle: "ScrollScore 範例樂譜:小星星",
     sampleScoreFilename: "範例樂譜-小星星.musicxml",
@@ -1324,7 +1346,7 @@ const I18N = {
     statusLoadingDrumKit: "載入鼓音色中…",
     statusDrumKitReady: "鼓音色就緒",
     statusLoadingPiano: "載入鋼琴音色中…{pct}%",
-    statusPianoReady: "鋼琴音色就緒(16 層力度,{n} 個取樣)",
+    statusPianoReady: "鋼琴已就緒",
     statusExportRangeInvalid: "匯出區間不正確,請確認開始/結束時間(結束需晚於開始至少0.5秒)",
     errScoreNotFound: "找不到樂譜",
     errRasterizeFailed: "樂譜點陣化失敗",
@@ -1376,6 +1398,7 @@ const I18N = {
     drumNotTransposable: "Drums don't need transposing",
 
     settingsGroupPlayback: "Playback & Display",
+    settingsGroupPrefs: "Appearance & language",
     countInTitle: "Clicks a metronome bar before playback, giving you time to get your hands ready",
     countInLabel: "Count-in",
     showTempoMarksTitle: "Show tempo markings on the score",
@@ -1385,10 +1408,10 @@ const I18N = {
     measureHlTitle: "Highlight the currently playing measure with a color band, making it easier to track while reading",
     measureHlLabel: "Highlight",
 
-    advancedSummary: "Advanced (Audio, Reverb, Color, Background)",
+    advancedSummary: "More",
     audioRowLabel: "Audio",
     audioImportBtn: "Import Audio",
-    audioImportStatusDefault: "No audio imported (using synthesized instrument sound)",
+    audioImportStatusDefault: "None",
     audioImportedStatus: "Imported: {name} (instrument synthesis muted)",
     removeBtn: "Remove",
     reverbTitle: "Simulates the piano's reverb and stereo image in a real room. The samples themselves are dry, close-mic'd recordings — a touch of space keeps it from sounding too in-your-face",
@@ -1401,7 +1424,7 @@ const I18N = {
     scoreBgOpacityLabel: "BG Opacity",
     bgImageRowLabel: "Background",
     bgImageBtn: "Import Background",
-    bgImageStatusDefault: "No background image imported",
+    bgImageStatusDefault: "None",
     bgImportedStatus: "Imported: {name}",
 
     loadScoreFirstTitle: "Load a score first",
@@ -1410,8 +1433,8 @@ const I18N = {
     recBtnTitleReady: "Clears the screen to a plain score view so you can record it with your phone/computer's built-in screen recorder",
     exportBtnTitleReady: "Automatically generates a downloadable video file",
 
-    emptyTitle: "Click here to load a score and get started",
-    emptySub: "Supports MusicXML (.xml / .mxl) and Guitar Pro (.gp / .gpx / .gp5 / .gp4 / .gp3)",
+    emptyTitle: "Tap here to load a score",
+    emptySub: "MusicXML and Guitar Pro files",
     trySampleBtn: "Or try the sample score first →",
     sampleScoreTitle: "ScrollScore Sample: Twinkle Twinkle Little Star",
     sampleScoreFilename: "sample-score-twinkle.musicxml",
@@ -1535,7 +1558,7 @@ const I18N = {
     statusLoadingDrumKit: "Loading drum sounds…",
     statusDrumKitReady: "Drum sounds ready",
     statusLoadingPiano: "Loading piano sounds… {pct}%",
-    statusPianoReady: "Piano ready (16 velocity layers, {n} samples)",
+    statusPianoReady: "Piano ready",
     statusExportRangeInvalid: "Invalid export range — check start/end times (end must be at least 0.5s after start)",
     errScoreNotFound: "Score not found",
     errRasterizeFailed: "Failed to rasterize score",
@@ -5089,8 +5112,11 @@ $("langToggle").addEventListener("click", () => {
 const TRANSPORT_BTN_IDS = ["loadBtn", "playBtn", "stopBtn"];
 const HEADER_COLLAPSE_STEPS = [
   { bodyClass: "header-tempo-compact" }, // 「BPM」先收,只留數字
-  { bodyClass: "header-icons-only" }     // 其餘按鈕文字改圖示
+  { bodyClass: "header-icons-only" },    // 其餘按鈕文字改圖示
+  { bodyClass: "header-prefs-moved", movePrefs: true },  // 主題/語言搬進設定面板(手機頂欄因此維持單排,不再多一列)
+  { bodyClass: "header-brand-hidden" }    // 360px 以下的小手機:品牌名讓位給播放控制
 ];
+const HEADER_PREF_IDS = ["themeToggle", "langToggle"];
 // 手機瀏覽器實際渲染的字型寬度跟這支程式量測當下的環境會有落差(尤其中文字型),
 // 剛好卡在邊緣時,量測當下量到「放得下」,但實際渲染出來可能因為極小的字型度量差異
 // 就超出去。留一段安全餘裕,不要卡在邊緣上決定要不要合併。
@@ -5114,6 +5140,14 @@ function headerIsOneRow(hl, hr){
 }
 function setHeaderCollapseStep(step, on){
   document.body.classList.toggle(step.bodyClass, on);
+  if (!step.movePrefs) return;
+  const slot = document.getElementById("headerPrefSlot"), hr = document.querySelector(".header-right"), anchor = hr && hr.querySelector(".tempo-compact");
+  for (const id of HEADER_PREF_IDS) {
+    const el = document.getElementById(id);
+    if (!el || !slot || !hr) continue;
+    if (on && el.parentElement !== slot) slot.appendChild(el);
+    else if (!on && el.parentElement !== hr) hr.insertBefore(el, anchor);
+  }
 }
 /* fitHeaderRow() 收合步驟裡有一步是切 body 的 class(header-icons-only、header-merged),
    而下面 bodyClassObserver 正是在看 body 的 class 屬性——不斷開的話,自己切 body class
