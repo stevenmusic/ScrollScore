@@ -8953,8 +8953,33 @@ async function ensureTitleFontsLoaded(cfg){
    同樣高度下鼓譜的譜表看起來偏小、上下留白多,所以鼓譜匯出時樂譜帶再放大這個倍率。
    放大後扣掉鼓組面板的空間仍然足夠(橫式 1080 高:樂譜 616、面板上限約 285) */
 const DRUM_EXPORT_SCORE_SCALE = 1.4;
+/* 直式/方形匯出的樂譜大小(2026-10 重新設計,使用者交給 Claude 設計):
+   以前是固定輸出高度(直式 560、方形 500),但每首曲子樂譜本身的高度差很多(巴哈前奏曲 239、蕭邦敘事曲 641、鼓譜 155),
+   同一個直式畫面:巴哈譜線間距 21px、一次只看到 1 小節(捲很快),蕭邦只有 8px(字太小、上下大片空白),鼓譜 31px。
+   改成「照音符大小」決定:譜線間距目標 EXPORT_AUTO_SCORE.space px,但播放軸右邊至少要看得到 aheadSec 秒的音樂
+   (用整首的平均捲動速度算;用「小節數」的話,巴哈這種小節很寬但很慢的曲子會被縮得太小),
+   不小於 7px,也不超過扣掉標題與樂器面板後的高度。橫式照舊(使用者覺得沒問題) */
+const EXPORT_AUTO_SCORE = { portrait: { space: 12, drumSpace: 18, aheadSec: 3 }, square: { space: 11, drumSpace: 15, aheadSec: 3 } };
+function exportAutoScoreH(cfg, kind){
+  const svg = $("score").querySelector("svg");
+  const P = EXPORT_AUTO_SCORE[kind];
+  if (!svg || !P) return cfg.scoreH;
+  const srcH = parseFloat(svg.getAttribute("height")) || svg.clientHeight;
+  const unit = 10 * (osmd.zoom || 1);   // 一個譜線間距在 SVG 裡的 px
+  let sc = (isDrumScore ? P.drumSpace : P.space) / unit;
+  const srcW = parseFloat(svg.getAttribute("width")) || svg.clientWidth, dur = totalSec();
+  if (srcW > 0 && dur > 0) sc = Math.min(sc, cfg.W * (1 - PLAYLINE_RATIO) / (P.aheadSec * srcW / dur));
+  sc = Math.max(sc, 7 / unit);
+  const panel = !cfg.includeKeyboard ? 0 : currentInstrument() === "drum" ? Math.min(cfg.W * EXPORT_KIT_MAX_W, cfg.H * 0.42)
+    : computeKeyboardHeight(cfg.W, cfg.H * 0.03, cfg.H * 0.25);
+  const maxH = cfg.H - panel - cfg.H * 0.16;   // 標題區 + 上下留白
+  return Math.round(Math.max(120, Math.min(srcH * sc, maxH)));
+}
+// 鼓組面板高度上限(相對畫面寬):直式時以前面板會吃掉半個畫面(957px),樂譜被擠到最上面
+const EXPORT_KIT_MAX_W = 0.72;
 async function showExportPreview(cfg){
-  if (isDrumScore) cfg.scoreH = Math.round(cfg.scoreH * DRUM_EXPORT_SCORE_SCALE);
+  if (cfg.autoKind) cfg.scoreH = exportAutoScoreH(cfg, cfg.autoKind);
+  else if (isDrumScore) cfg.scoreH = Math.round(cfg.scoreH * DRUM_EXPORT_SCORE_SCALE);
   pendingExportCfg = cfg;
   $("formatOverlay").classList.remove("show");
   await ensureTitleFontsLoaded(cfg);
@@ -8978,12 +9003,12 @@ $("fmtLandscape").addEventListener("click", () => {
 // 而且只占畫面 1/5、上下大片空白(使用者反映)。鼓譜照舊(另外乘 DRUM_EXPORT_SCORE_SCALE)
 const EXPORT_PORTRAIT_SCORE_H = 560, EXPORT_SQUARE_SCORE_H = 500;
 $("fmtPortrait").addEventListener("click", () => {
-  showExportPreview(Object.assign({ W: 1080, H: 1920, scoreH: isDrumScore ? 380 : EXPORT_PORTRAIT_SCORE_H, align: chosenAlign, bitrate: 5000000, fps: exportFps, includeKeyboard: chosenIncludeKeyboard, startSec: chosenStartSec, endSec: chosenEndSec }, watermarkCfg()));
+  showExportPreview(Object.assign({ W: 1080, H: 1920, scoreH: isDrumScore ? 380 : EXPORT_PORTRAIT_SCORE_H, autoKind: "portrait", align: chosenAlign, bitrate: 5000000, fps: exportFps, includeKeyboard: chosenIncludeKeyboard, startSec: chosenStartSec, endSec: chosenEndSec }, watermarkCfg()));
 });
 // 正方形:高度介於橫式(1080)與直式(1920)之間,樂譜高度取 400 —— 比橫式略高一點點,
 // 因為正方形沒有橫式那麼寬,同樣的樂譜高度看起來會相對小
 $("fmtSquare").addEventListener("click", () => {
-  showExportPreview(Object.assign({ W: 1080, H: 1080, scoreH: isDrumScore ? 400 : EXPORT_SQUARE_SCORE_H, align: chosenAlign, bitrate: 5000000, fps: exportFps, includeKeyboard: chosenIncludeKeyboard, startSec: chosenStartSec, endSec: chosenEndSec }, watermarkCfg()));
+  showExportPreview(Object.assign({ W: 1080, H: 1080, scoreH: isDrumScore ? 400 : EXPORT_SQUARE_SCORE_H, autoKind: "square", align: chosenAlign, bitrate: 5000000, fps: exportFps, includeKeyboard: chosenIncludeKeyboard, startSec: chosenStartSec, endSec: chosenEndSec }, watermarkCfg()));
 });
 $("previewBackBtn").addEventListener("click", () => {
   $("previewOverlay").classList.remove("show");
@@ -9207,7 +9232,7 @@ function computeExportLayout(cfg){
   const kbMaxH = fullAvailableKbH * 0.8;
   const kbH = (cfg.includeKeyboard && currentInstrument() !== "drum")
     ? computeKeyboardHeight(W, Math.min(kbMaxH, H * 0.03), kbMaxH)
-    : kbMaxH;
+    : Math.min(kbMaxH, W * EXPORT_KIT_MAX_W);
   // 樂器面板永遠貼齊畫面最底部,不會因為靠上/置中/靠下而移動;
   // 靠上/置中/靠下只影響樂譜本身在「扣掉面板後剩餘的空間」裡怎麼擺放
   const scoreAreaH = H - kbH;
