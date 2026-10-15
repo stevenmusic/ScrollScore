@@ -5717,7 +5717,10 @@ $("stage").addEventListener("pointerup", (e) => {
 
 function ensureAudio(){
   if (!audioCtx) {
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    // latencyHint "playback":音訊緩衝加大(播放不需要即時反應,App 也沒有按鍵即時發聲),負荷高時比較不會爆音;
+    // 多出來的輸出延遲在 currentSec() 扣掉,畫面跟聽到的聲音對齊
+    const AC = window.AudioContext || window.webkitAudioContext;
+    try { audioCtx = new AC({ latencyHint: "playback" }); } catch (e) { audioCtx = new AC(); }
     initAudioGraph();
   }
   if (audioCtx.state === "suspended") audioCtx.resume();
@@ -6027,42 +6030,74 @@ async function beginPlayback(fromSec){
   startPlayback(fromSec);
 }
 
+/* ── 邊播邊排程(lookahead scheduler)──────────────
+   以前按下播放就把整首曲子每個音的音訊節點一次建好:蕭邦第一號敘事曲 2555 個事件 → 58,181 個節點、主執行緒卡 9.3 秒(桌機),
+   音訊執行緒每 2.7ms 要走過整張圖,瀏覽器負荷不了就出現爆音/雜訊(使用者反映),播放中改速度也要整首重排一次。
+   現在只排「接下來 SCHED_AHEAD 秒」的音,每 SCHED_TICK_MS 補一次(專業取樣器/音序器的做法);分頁切到背景時計時器會被放慢,
+   改成多排 SCHED_AHEAD_HIDDEN 秒。離線算聲音(OfflineAudioContext:匯出前量響度、測試工具)沒有「現在」,一次排完 */
+const SCHED_AHEAD = 3, SCHED_AHEAD_HIDDEN = 25, SCHED_TICK_MS = 120;
+let noteSched = null;
+let pianoPedalQueue = [];   // 還沒排的踏板機械聲 [audioCtx 時間, buffer, gain](pianoSchedulePedalNoise 填)
+function stopNoteScheduler(){ if (noteSched && noteSched.timer) clearInterval(noteSched.timer); noteSched = null; }
+/* 排程 [fromSec, toSec) 之間的事件;base = 樂曲第 0 秒對應的 audioCtx 時間 */
+function startNoteScheduler(fromSec, toSec, base, calib){
+  stopNoteScheduler();
+  const live = !(typeof OfflineAudioContext !== "undefined" && audioCtx instanceof OfflineAudioContext);
+  const isGuitar = currentInstrument() === "guitar" || currentInstrument() === "guitarnylon";
+  const order = events.map((ev, i) => [posToSec(ev.tWhole, calib), i]).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const st = { k: 0, timer: null, errCount: 0, lastErr: null };
+  while (st.k < order.length && order[st.k][0] < fromSec - 0.02) st.k++;
+  st.pump = () => {
+    const horizon = live ? audioCtx.currentTime + (document.hidden ? SCHED_AHEAD_HIDDEN : SCHED_AHEAD) : Infinity;
+    while (st.k < order.length) {
+      const [t, idx] = order[st.k];
+      if (t >= toSec + 0.02) { st.k = order.length; break; }
+      if (base + t > horizon) break;
+      scheduleEventNotes(events[idx], t, base, calib, isGuitar, live, st);
+      st.k++;
+    }
+    let q = 0;
+    while (q < pianoPedalQueue.length && pianoPedalQueue[q][0] <= horizon) { const [w, b, gg] = pianoPedalQueue[q++]; pianoOneShot(b, w, gg, 1, PIANO_VERB_SEND); }
+    if (q) pianoPedalQueue.splice(0, q);
+    if (st.k >= order.length && !pianoPedalQueue.length && st.timer) { clearInterval(st.timer); st.timer = null; }
+    if (st.errCount) { setStatus(T("statusScheduleWarn", { n: st.errCount, msg: (st.lastErr && st.lastErr.message) || "" })); st.errCount = 0; }
+  };
+  noteSched = st;
+  st.pump();
+  if (live && (st.k < order.length || pianoPedalQueue.length)) st.timer = setInterval(st.pump, SCHED_TICK_MS);
+}
+document.addEventListener("visibilitychange", () => { if (noteSched) noteSched.pump(); });
+function scheduleEventNotes(ev, t, base, calib, isGuitar, live, st){
+  const now = live ? audioCtx.currentTime : 0;
+  const chordAnchors = {};
+  const harmonyEndSec = ev.harmonyEndWhole != null ? base + posToSec(ev.harmonyEndWhole, calib) : null;
+  const tech = (isGuitar && ev.guitarTech) ? Object.assign({}, ev.guitarTech, { vibrato: ev.vibrato }) : (isGuitar && ev.vibrato ? { vibrato: true } : null);
+  for (const n of ev.notes) {
+    try {
+      const rollT = computeArpNoteOffsetSec(ev, n, t, calib);
+      const durSec = calib ? Math.max(calibToSec(ev.tWhole + n.durWhole) - t, 0.05) : spanSec(ev.tWhole, n.durWhole);
+      // 吉他:同弦延音範圍(guitarRingEndWhole)取代一般和聲延長判斷,才符合「其他音符要在別條弦上才能延音」的物理限制
+      const noteHarmonyEndSec = (isGuitar && n.guitarRingEndWhole != null) ? base + posToSec(n.guitarRingEndWhole, calib) : harmonyEndSec;
+      const noteTech = (isGuitar && n.glissTargetFreq != null) ? Object.assign({}, tech, { glissTargetFreq: n.glissTargetFreq }) : tech;
+      // 人性化的時間偏移可能是負的(提早一點點):第一拍剛好在 currentTime 時會變成過去的時間而整個被丟掉,所以不早於現在
+      if (n.drum) { const h = humanizeDrumHit(ev, n), w = Math.max(now, base + t + rollT + h.dt); scheduleDrum(n.key, w, h, n.choke ? drumChokeAt(w, durSec) : null); }
+      else scheduleNote(n.freq, Math.max(now, base + t + rollT + ((isGuitar ? n.gdt : n.pdt) || 0)), durSec, ev.legato, ev.pedalOn, chordAnchors, noteHarmonyEndSec, n.artic !== undefined ? n.artic : ev.artic, noteTech, n.staff, isGuitar ? n.gvel : n.pvel, n);
+    } catch (e) {
+      st.errCount++; st.lastErr = e;
+      console.error("排程音符失敗:", e);
+    }
+  }
+}
+let playStartSec = 0;
 function startAudioFrom(fromSec){
   startCtxTime = audioCtx.currentTime - fromSec;
+  playStartSec = fromSec;
   scheduled = []; ringingCymbals = {};
   const calib = useCalib();
   computeDrumPerformance(); // 依目前的速度重算(速度會影響「越快越輕」)
-  pianoResetVoices(); gtrRR = {};
+  pianoResetVoices(); gtrRR = {}; pianoPedalQueue = [];
   if (currentInstrument() === "piano") pianoSchedulePedalNoise(fromSec, Infinity, sec => startCtxTime + sec);
-  let errCount = 0, lastErr = null;
-  for (const ev of events) {
-    const t = posToSec(ev.tWhole, calib);
-    if (t < fromSec - 0.02) continue;
-    const chordAnchors = {};
-    const isGuitar = currentInstrument() === "guitar" || currentInstrument() === "guitarnylon";
-    const harmonyEndSec = ev.harmonyEndWhole != null
-      ? startCtxTime + (posToSec(ev.harmonyEndWhole, calib))
-      : null;
-    const tech = (isGuitar && ev.guitarTech) ? Object.assign({}, ev.guitarTech, { vibrato: ev.vibrato }) : (isGuitar && ev.vibrato ? { vibrato: true } : null);
-    for (const n of ev.notes) {
-      try {
-        const rollT = computeArpNoteOffsetSec(ev, n, t, calib);
-        const durSec = calib ? Math.max(calibToSec(ev.tWhole + n.durWhole) - t, 0.05) : spanSec(ev.tWhole, n.durWhole);
-        // 吉他:同弦延音範圍(guitarRingEndWhole)取代一般和聲延長判斷,才符合「其他音符要在別條弦上才能延音」的物理限制
-        const noteHarmonyEndSec = (isGuitar && n.guitarRingEndWhole != null)
-          ? startCtxTime + (posToSec(n.guitarRingEndWhole, calib))
-          : harmonyEndSec;
-        const noteTech = (isGuitar && n.glissTargetFreq != null) ? Object.assign({}, tech, { glissTargetFreq: n.glissTargetFreq }) : tech;
-        // 人性化的時間偏移可能是負的(提早一點點):第一拍剛好在 currentTime 時會變成過去的時間而整個被丟掉,所以不早於現在
-        if (n.drum) { const h = humanizeDrumHit(ev, n), w = Math.max(audioCtx.currentTime, startCtxTime + t + rollT + h.dt); scheduleDrum(n.key, w, h, n.choke ? drumChokeAt(w, durSec) : null); }
-        else scheduleNote(n.freq, Math.max(audioCtx.currentTime, startCtxTime + t + rollT + ((isGuitar ? n.gdt : n.pdt) || 0)), durSec, ev.legato, ev.pedalOn, chordAnchors, noteHarmonyEndSec, n.artic !== undefined ? n.artic : ev.artic, noteTech, n.staff, isGuitar ? n.gvel : n.pvel, n);
-      } catch (e) {
-        errCount++; lastErr = e;
-        console.error("排程音符失敗:", e);
-      }
-    }
-  }
-  if (errCount) setStatus(T("statusScheduleWarn", { n: errCount, msg: (lastErr && lastErr.message) || "" }));
+  startNoteScheduler(fromSec, Infinity, startCtxTime, calib);
 }
 
 function currentInstrument(){ return $("instrument").value; }
@@ -6702,7 +6737,7 @@ function pianoSchedulePedalNoise(fromSec, toSec, timeToCtx){
   const gateMoves = [];   // 踏板共鳴的閘門:[秒, 開/關]
   const fire = (name, sec, gg) => {
     gateMoves.push([sec, name.startsWith("pedalD")]);
-    if (sec < fromSec - 0.01 || sec > toSec) return; const b = pianoAux[name]; if (b) pianoOneShot(b, timeToCtx(sec), gg, 1, PIANO_VERB_SEND);
+    if (sec < fromSec - 0.01 || sec > toSec) return; const b = pianoAux[name]; if (b) pianoPedalQueue.push([timeToCtx(sec), b, gg]);   // 由 startNoteScheduler 邊播邊排
   };
   for (const ev of events) {
     // 踏板範圍是記譜位置;反覆記號重播時同一個範圍再踩一次(off = 這一遍演奏位置與記譜位置的差)
@@ -6716,6 +6751,7 @@ function pianoSchedulePedalNoise(fromSec, toSec, timeToCtx){
     }
   }
   if (cur) fire("pedalU" + (1 + (k & 1)), posToSec(cur.end + curOff, calib), g);
+  pianoPedalQueue.sort((a, b) => a[0] - b[0]);
   // 踏板共鳴閘門:從開始播放的位置起,踩下(制音器離弦)打開、放開(制音器落下)關掉
   getPianoResonance();
   if (pianoResGate) {
@@ -8508,7 +8544,10 @@ function synthTom(when, freq){
   o.start(when); o.stop(when + 0.4); scheduled.push(o);
 }
 
-function currentSec(){ return audioCtx ? (audioCtx.currentTime - startCtxTime) : 0; }
+/* 目前「聽到」的位置:audioCtx.currentTime 是正在算的那一格,喇叭真的播出來還要再晚 baseLatency + outputLatency
+   (播放模式的緩衝、藍牙耳機…);畫面跟著聽到的聲音走,剛開始播放的那一下不往回跳 */
+function audioOutLatency(){ return audioCtx ? Math.max(0, Math.min(0.5, (audioCtx.baseLatency || 0) + (audioCtx.outputLatency || 0))) : 0; }
+function currentSec(){ return audioCtx ? Math.max(playStartSec, audioCtx.currentTime - startCtxTime - audioOutLatency()) : 0; }
 
 function pausePlayback(){
   pausedAtSec = currentSec();
@@ -8520,6 +8559,7 @@ function pausePlayback(){
 }
 
 function stopAudioOnly(){
+  stopNoteScheduler(); pianoPedalQueue = [];
   for (const node of scheduled) { try { node.stop(); } catch(e){} }
   scheduled = [];
   pianoCloseResonance();
@@ -9423,7 +9463,7 @@ async function measureExportGain(rangeStart, rangeEnd, onProgress){
   if (typeof OfflineAudioContext === "undefined" || typeof AudioWorkletNode === "undefined") return null;
   const KEEP = ["audioCtx", "masterGain", "masterLimiter", "masterOut", "masterBus", "masterLimiterNode", "masterReady", "reverbBus", "reverbConvolver", "reverbWet", "reverbPreDelay",
     "pianoRoomBus", "pianoBusIn", "pianoBusCtx", "pianoVerbIn", "pianoVerbWet", "pianoVerbCtx", "pianoVerbConv", "pianoVerbPre", "pianoVerbHp", "pianoVerbHall", "pianoResIn", "pianoResGate", "pianoResCtx", "gtrVerbIn", "gtrVerbWet", "gtrVerbCtx", "drumBus", "drumVerbIn", "drumVerbWet", "drumRoomConv", "drumRoomWet", "drumRoomIn",
-    "scheduled", "startCtxTime", "ringingOpenHat", "ringingCymbals", "pianoVoices", "pianoLastByKey", "pianoRRFlip", "gtrRR"];
+    "scheduled", "startCtxTime", "ringingOpenHat", "ringingCymbals", "noteSched", "pianoPedalQueue", "pianoVoices", "pianoLastByKey", "pianoRRFlip", "gtrRR"];
   const saved = {};
   for (const k of KEEP) saved[k] = eval(k);
   const restore = () => { for (const k of KEEP) eval(k + " = saved['" + k + "']"); };
@@ -9458,28 +9498,9 @@ async function measureExportGain(rangeStart, rangeEnd, onProgress){
 /* 匯出區間的所有音符排程到目前的 audioCtx(以 startCtxTime 為曲子 rangeStart 的時間點)。
    即時匯出與匯出前的離線響度分析共用,兩邊排的音完全一樣 */
 function scheduleExportRange(rangeStart, rangeEnd, calib){
-  gtrRR = {}; ringingCymbals = {};
+  gtrRR = {}; ringingCymbals = {}; pianoPedalQueue = [];
   if (currentInstrument() === "piano") pianoSchedulePedalNoise(rangeStart, rangeEnd, sec => startCtxTime + sec - rangeStart);
-  const isGuitar = currentInstrument() === "guitar" || currentInstrument() === "guitarnylon";
-  for (const ev of events) {
-    const t = posToSec(ev.tWhole, calib);
-    if (t < rangeStart - 0.02 || t >= rangeEnd + 0.02) continue; // 只排程落在匯出區間內的音符
-    const chordAnchors = {};
-    const harmonyEndSec = ev.harmonyEndWhole != null
-      ? startCtxTime + ((posToSec(ev.harmonyEndWhole, calib)) - rangeStart)
-      : null;
-    const tech = (isGuitar && ev.guitarTech) ? Object.assign({}, ev.guitarTech, { vibrato: ev.vibrato }) : (isGuitar && ev.vibrato ? { vibrato: true } : null);
-    for (const n of ev.notes) {
-      const rollT = computeArpNoteOffsetSec(ev, n, t, calib);
-      const durSec = calib ? Math.max(calibToSec(ev.tWhole + n.durWhole) - t, 0.05) : spanSec(ev.tWhole, n.durWhole);
-      const noteHarmonyEndSec = (isGuitar && n.guitarRingEndWhole != null)
-        ? startCtxTime + ((posToSec(n.guitarRingEndWhole, calib)) - rangeStart)
-        : harmonyEndSec;
-      const noteTech = (isGuitar && n.glissTargetFreq != null) ? Object.assign({}, tech, { glissTargetFreq: n.glissTargetFreq }) : tech;
-      if (n.drum) { const h = humanizeDrumHit(ev, n), w = startCtxTime + (t - rangeStart) + rollT + h.dt; scheduleDrum(n.key, w, h, n.choke ? drumChokeAt(w, durSec) : null); }
-      else scheduleNote(n.freq, startCtxTime + (t - rangeStart) + rollT + ((isGuitar ? n.gdt : n.pdt) || 0), durSec, ev.legato, ev.pedalOn, chordAnchors, noteHarmonyEndSec, n.artic !== undefined ? n.artic : ev.artic, noteTech, n.staff, isGuitar ? n.gvel : n.pvel, n);
-    }
-  }
+  startNoteScheduler(rangeStart, rangeEnd, startCtxTime - rangeStart, calib);   // 即時匯出邊錄邊排;離線量響度一次排完
 }
 async function exportVideo(cfg){
   if (!events.length || exporting) return;
