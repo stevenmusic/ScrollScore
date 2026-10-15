@@ -8952,12 +8952,6 @@ function computeExportLayout(cfg){
   const minTopY = titleBlockBottom > 0 ? titleBlockBottom + Math.round(H * 0.02) : 0;
   let topY = Math.max(rawTopY, minTopY), kbY = H - kbH;
   const plX = W * PLAYLINE_RATIO;
-  /* 直式/方形 + 鋼琴鍵盤:鍵盤一樣貼底(鋼琴、鼓組都貼底),樂譜往下靠、緊貼在鍵盤上方。
-     以前樂譜在「標題到鍵盤」之間置中,直式時樂譜和鍵盤中間空了將近半個畫面(使用者反映),眼睛要上下跳很遠。
-     選「靠上」時照舊放在標題下方。橫式、鼓組維持原本的排法 */
-  if (cfg.includeKeyboard && H >= W && currentInstrument() !== "drum" && cfg.align !== "top") {
-    topY = Math.max(minTopY, Math.round(kbY - H * 0.03 - SCORE_H));
-  }
   return { W, H, SCORE_H, margin, kbH, kbY, scoreAreaH, topY, plX, minTopY };
 }
 /* 匯出畫面的樂譜底色是亮米色(#FFFDF6),使用者挑的游標顏色如果偏亮(預設的淡金色就是),

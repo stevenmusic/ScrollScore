@@ -48,7 +48,7 @@
 - 樂器只保留鋼琴、吉他（民謠、古典兩把）、鼓組
 - 民謠吉他、古典吉他目前標「開發中」並停用（使用者要求）：樂器選單的 <option disabled>，文字加「・開發中」；舊設定存了吉他時退回鋼琴。程式與取樣都保留，拿掉 disabled 即可恢復
 - 匯出影片用 canvas.captureStream + MediaRecorder
-- 匯出影片版面(computeExportLayout):鍵盤/鼓組面板一律貼底(使用者確認)。直式/方形的鋼琴譜放大(EXPORT_PORTRAIT_SCORE_H 560、EXPORT_SQUARE_SCORE_H 500,以前 380/400;直式再大一次只看得到 1.5 小節、捲太快),而且樂譜緊貼在鍵盤上方(選「靠上」除外),以前在標題與鍵盤之間置中,直式時兩者中間空了半個畫面。橫式與鼓組維持原本。檢查:tools/audiotest/export_preview.mjs(橫/直/方 × 有無面板的實際匯出畫面)
+- 匯出影片版面(computeExportLayout):鍵盤/鼓組面板一律貼底;樂譜位置完全照使用者選的「靠上/置中/靠下」(使用者強調:不要自作主張改對齊)。直式/方形的鋼琴譜放大(EXPORT_PORTRAIT_SCORE_H 560、EXPORT_SQUARE_SCORE_H 500,以前 380/400)。檢查:tools/audiotest/export_preview.mjs(橫/直/方 × 有無面板的實際匯出畫面)
 - 播放軸長度(畫面與匯出影片、鋼琴與鼓同一條規則):整首最高/最低的音符實際畫出來的範圍(measureStaffExtent:譜線 + .vf-stavenote/.vf-stem/.vf-beam/.vf-flag/.vf-ledgers,含符桿、連桁、休止符,不含速度/力度文字)再往外留幾個譜線間距,上下一樣多——有樂器面板 1.8 格、只有樂譜 1.2 格(PLAYLINE_PAD_SPACES_*)。只算符頭的話,符尾朝上那側很擠、另一側很空(使用者反映不平衡)。匯出時播放軸可以超出樂譜圖,但不碰標題(minTopY)、不壓樂器面板。畫面上 updatePlaylineExtent() 由 ResizeObserver 監看 #stage;舞台放不下樂譜(含留白)時 #scroller 縮小並置中(scoreFit,捲動一律用 setScrollerX)。用的是整首的最高最低音,所以只看開頭幾小節時可能一邊比較長(後面才出現的極端音)。檢查:tools/audiotest/playline_probe.mjs
 - 播放軸半透明(使用者要求):畫面上 #playline 的 opacity = 游標濃度 × 0.5,匯出影片 EXPORT_PLAYLINE_ALPHA = 0.5,鋼琴、鼓都一樣
 - 匯出影片底色:鼓譜純白 #FFFFFF(使用者要求,只限匯出影片),鋼琴維持米色 #FFFDF6;鼓組面板維持深色
