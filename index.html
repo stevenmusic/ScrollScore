@@ -1643,6 +1643,7 @@ function metronomeUnitLabel(beatUnit, dotCount){
   return "(" + dotPrefix + base + ")";
 }
 let scoreDynMarks = [], scoreWedges = []; // 力度記號與髮夾(記譜位置),鼓的整首力度用
+let scoreDynOffsets = [];   // una corda 等整段力度偏移 {start, end, delta}(記譜位置)
 let scoreTempoWords = [];   // 速度文字 {t: 記譜位置, kind: "rit" | "accel" | "atempo"}(rit./rall./a tempo…,彈性速度模型用)
 let ghostNoteheadEntries = {}; // 同上,記錄括號符頭(鬼音 ghost note,輕輕帶過的小鼓等),播放時用最輕的力度層
 let crossNoteheadEntries = {}; // midi(取整數) -> 已排序的 {t,v} 陣列,記錄哪些時間點是打叉符頭(rim click等特殊擊法),用 findNearestEntry 容許誤差比對
@@ -2103,6 +2104,7 @@ async function loadScoreFile(file){
     scoreDynMarks = parsed.dynMarks || [];
     scoreTempoWords = parsed.tempoWords || [];
     scoreWedges = parsed.wedges || [];
+    scoreDynOffsets = parsed.dynOffsets || [];
     ghostNoteheadEntries = {};
     for (const mk of Object.keys(parsed.ghostNoteheadMap || {})) {
       ghostNoteheadEntries[mk] = buildSortedEntries(parsed.ghostNoteheadMap[mk]);
@@ -3414,6 +3416,8 @@ function parseXmlTimeline(xmlText){
     const tempoWords = []; // 速度文字 {t, kind}:rit./rall./ritenuto/allarg./smorz.… = rit、accel./string. = accel、a tempo/Tempo I = atempo
     const wedges = [];     // 漸強/漸弱髮夾 {start, end, dir: "cresc"|"dim"}
     const openWedges = {};
+    const wordActs = [];   // 力度文字 {t, a: dynamicWordActions(), dash: 虛線編號}(soft、dolce、cresc.…,見 resolveScoreDynamicWords)
+    const dashStops = [];  // 虛線結束 {t, num}
     const staffOnsets = {}; // staffNum -> [{tWhole, durWhole, pcs:Set}], 給重複音型偵測用
     const articMap = {}; // tWhole(定點字串) -> {accent,strongAccent,staccato,staccatissimo,tenuto,detachedLegato,spiccato,softAccent,fermata}
     const arpMap = {}; // tWhole(定點字串) -> "up"/"down",分解和弦(琶音)標記
@@ -3480,7 +3484,13 @@ function parseXmlTimeline(xmlText){
           for (const wEl of Array.from(child.getElementsByTagName("words"))) {
             const kind = tempoWordKind(wEl.textContent);
             if (kind) tempoWords.push({ t: cursor, kind });
+            const acts = dynamicWordActions(wEl.textContent);
+            if (acts) {
+              const dsh = Array.from(child.getElementsByTagName("dashes")).find(d => d.getAttribute("type") === "start");
+              wordActs.push({ t: cursor, a: acts, dash: dsh ? (dsh.getAttribute("number") || "1") : null });
+            }
           }
+          for (const d of Array.from(child.getElementsByTagName("dashes"))) if (d.getAttribute("type") === "stop") dashStops.push({ t: cursor, num: d.getAttribute("number") || "1" });
           for (const w of Array.from(child.getElementsByTagName("wedge"))) {
             const type = w.getAttribute("type"), num = w.getAttribute("number") || "1";
             if (type === "crescendo" || type === "diminuendo") openWedges[num] = { start: cursor, dir: type === "crescendo" ? "cresc" : "dim" };
@@ -3668,10 +3678,12 @@ function parseXmlTimeline(xmlText){
       repeatRanges = repeatRanges.concat(detectRepeatingChordRanges(staffOnsets[staffNum]));
     }
     // 把小節起點清單接成 [start,end) 範圍,最後一小節的結尾就是整份樂譜結束的 cursor
+    let dynOffsets = [];
+    try { dynOffsets = resolveScoreDynamicWords(dynMarks, wedges, wordActs, dashStops, measureBoundaries, cursor); } catch (e) { console.warn("dynamic words", e); }
     const measureRanges = measureBoundaries.map((start, i) => ({
       start, end: i + 1 < measureBoundaries.length ? measureBoundaries[i + 1] : cursor
     }));
-    return { slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges, articMap, arpMap, soundTempo, metronomeDisplay, timeSig, isDrumScore, crossNoteheadMap, ghostNoteheadMap, dynMarks, tempoWords, wedges, measureRanges, guitarTechMap, vibratoRanges: outWavyLines, scoreTitle };
+    return { slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges, articMap, arpMap, soundTempo, metronomeDisplay, timeSig, isDrumScore, crossNoteheadMap, ghostNoteheadMap, dynMarks, dynOffsets, tempoWords, wedges, measureRanges, guitarTechMap, vibratoRanges: outWavyLines, scoreTitle };
   } catch (e) {
     console.error("讀取踏板/圓滑線資訊失敗:", e);
     return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, arpMap: {}, soundTempo: null, metronomeDisplay: null, timeSig: null, isDrumScore: false, crossNoteheadMap: {}, measureRanges: [], guitarTechMap: {}, vibratoRanges: [], scoreTitle: null };
@@ -3814,6 +3826,214 @@ function tempoWordKind(text){
   if (/\b(rit|ritard|ritardando|riten|ritenuto|rall|rallent|rallentando|allarg|allargando|smorz|smorzando|calando|morendo|slentando|stentato)\b/.test(s) && !/ritmico/.test(s)) return "rit";
   if (/\b(accel|accelerando|string|stringendo|incalzando|affrettando|precipitando)\b/.test(s)) return "accel";
   return null;
+}
+/* ── 譜上的力度文字(使用者要求,2026-10)────────────────────────
+   除了 <dynamics> 的 p/f 記號,很多譜把力度寫成文字(<words>):soft、dolce、cresc.、sotto voce、più forte、una corda……
+   這裡是文字 → 力度動作的資料庫(義/英/德/法/西/中/日,大小寫、重音符號、句點不影響),每個詞屬於一種動作:
+     level  絕對力度(soft = p、very loud = ff、mezza voce = mp…)
+     rel    相對一級(più forte / louder / lauter = 大一級;più piano / meno forte / softer = 小一級)
+     cap    個性詞的上限(dolce ≤ mp、dolcissimo / sotto voce ≤ p、lontano ≤ pp):已經比較小聲就不動
+     floor  個性詞的下限(marcato / energico / pesante ≥ mf、con forza / vigoroso ≥ f)
+     grad   文字漸強/漸弱(cresc. / dim. / smorz. / morendo / getting louder / 漸強…):poco = 小、molto = 大、
+            poco a poco / sempre = 比較長;morendo / perdendosi / smorz. / al niente = 漸弱到很小聲;「al ff」= 漸強到 ff
+     mom    瞬間重音(sf / sfz / rinf. / fp,文字寫的也算)
+     corda  una corda(弱音踏板,整段小聲一點)/ tre corde
+     subito 突然(subito p:前面的漸強不會慢慢接到它)
+   規則依序比對,比對到的字從字串拿掉(「più forte」不會再被當成「forte」、「漸強」不會再被當成「強」) */
+const DYN_LEVEL_STEPS = ["pppp", "ppp", "pp", "p", "mp", "mf", "f", "ff", "fff", "ffff"];
+const DYN_WORD_RULES = (() => {
+  const W = s => new RegExp("(?:^|\\s)(?:" + s + ")(?=\\s|$)", "g");   // 整個詞(\b 不認得 CJK 與重音字母)
+  const C = s => new RegExp(s, "g");                                    // 中文/日文:直接比對
+  const R = [];
+  const add = (re, act) => R.push([re, act]);
+  // 不是力度的「piano」:樂器名
+  add(W("pianoforte|piano ?solo|for piano|piano part|piano (?:i|ii|1|2)|piano reduction|klavier|klavier ?solo"), {});
+  // 從無聲開始/漸弱到無聲
+  add(W("dal niente|from nothing|aus dem nichts"), { level: "ppp", grad: { dir: "cresc", long: true } });
+  add(W("(?:al|a|fino al|sino al|sin al) niente|to nothing|ins nichts|jusqu au silence"), { grad: { dir: "dim", target: "pppp", long: true } });
+  // 突然
+  add(W("subito|sub|suddenly|sudden|plotzlich|soudain|soudainement|subitement|tout a coup|de repente|subitamente"), { subito: true });
+  add(C("突強|突强|突然強|突然强"), { mom: "sf" });
+  add(C("突弱|突然弱|急に弱く"), { level: "p", subito: true });
+  add(C("急に強く"), { level: "f", subito: true });
+  // 越來越大聲/小聲(sempre più forte = 一直變大聲 = 漸強)
+  add(W("sempre piu forte|piu e piu forte|poco a poco piu forte|di piu in piu forte|sempre piu f|louder and louder|immer lauter|immer starker|de plus en plus fort|cada vez mas fuerte"), { grad: { dir: "cresc", long: true } });
+  add(W("sempre piu piano|piu e piu piano|poco a poco piu piano|di piu in piu piano|sempre piu p|softer and softer|quieter and quieter|immer leiser|immer schwacher|de plus en plus doux|de plus en plus faible|cada vez mas suave"), { grad: { dir: "dim", long: true } });
+  add(C("越來越大聲|越来越大声|越來越強|越来越强|だんだん強く|次第に強く|しだいに強く|徐々に強く"), { grad: { dir: "cresc" } });
+  add(C("越來越小聲|越来越小声|越來越弱|越来越弱|だんだん弱く|次第に弱く|しだいに弱く|徐々に弱く"), { grad: { dir: "dim" } });
+  // 漸弱到很小聲(消失)
+  add(W("morendo|perdendo|perdendosi|estinguendo|spegnendo|mancando|smorz|smorza|smorzando|smorzato|en mourant|en se perdant|en s eteignant|s eteindre|s eteignant|verklingend|verklingen|ersterbend|verhallend|verloschend|ausklingend|die away|dying away|dies away|dying|fade out|fade away|fading away|fading out|fade|fading|disappearing"), { grad: { dir: "dim", fade: true } });
+  add(C("漸消|渐消|消失|消えるように|消え入るように"), { grad: { dir: "dim", fade: true } });
+  // 文字漸強
+  add(W("cresc|cres|crescendo|crescendi|crescendo molto|accresc|accrescendo|creciendo|en augmentant|en croissant|augmentez|en enflant|lauter werdend|anschwellend|anschwellen|starker werdend|zunehmend|wachsend|getting louder|gradually louder|growing louder|grow louder|build|build up|building|building up|swell|swelling|get louder|becoming louder|increasing"), { grad: { dir: "cresc" } });
+  add(C("漸強|渐强|漸大|渐大|漸響|渐响|逐漸加強|逐渐加强|クレッシェンド|クレシェンド"), { grad: { dir: "cresc" } });
+  // 文字漸弱
+  add(W("dim|dimin|diminuendo|diminuend|decresc|decres|decreso|decrescendo|descresc|decrescendo|calando|calandosi|en diminuant|diminuez|en decroissant|leiser werdend|abnehmend|schwacher werdend|abschwellend|nachlassend|getting softer|gradually softer|growing softer|get softer|getting quieter|becoming softer|decreasing|diminishing|disminuyendo|decreciendo"), { grad: { dir: "dim" } });
+  add(C("漸弱|渐弱|漸小|渐小|漸輕|渐轻|逐漸減弱|逐渐减弱|ディミヌエンド|デクレッシェンド|デクレシェンド"), { grad: { dir: "dim" } });
+  // 音節拆開寫的 cre - scen - do / di - mi - nu - en - do / smor - zan - do(第一段才算)
+  add(/^(?:cre|cre sc|cre scen)$/g, { grad: { dir: "cresc" } });
+  add(/^(?:decre|de cre|dimi|di mi|di mi nu)$/g, { grad: { dir: "dim" } });
+  add(/^(?:smor|smor zan)$/g, { grad: { dir: "dim", fade: true } });
+  // 最大/最小
+  add(W("ffff|forte fortissimo"), { level: "ffff" });
+  add(W("fff|fortississimo|forte possibile|il piu forte possibile|piu forte possibile|con tutta (?:la )?forza|tutta (?:la )?forza|con tutta forza|as loud as possible|with full force|with all (?:your )?force|full force|ausserst laut|so laut wie moglich|mit aller kraft|mit voller kraft|le plus fort possible|tres tres fort|lo mas fuerte posible"), { level: "fff" });
+  add(C("最強|最强|極強|极强|できるだけ強く|最も強く|フォルテシシモ"), { level: "fff" });
+  add(W("pppp"), { level: "pppp" });
+  add(W("ppp|pianississimo|piano possibile|il piu piano possibile|piu piano possibile|quasi niente|niente|appena udibile|appena sentito|appena|as soft as possible|as quietly as possible|barely audible|hardly audible|almost inaudible|extremely soft|extremely softly|extremely quiet|extremely quietly|ausserst leise|so leise wie moglich|kaum horbar|kaum horbar|a peine|a peine entendu|imperceptible|le plus doux possible|lo mas suave posible"), { level: "ppp" });
+  add(C("極弱|极弱|最弱|できるだけ弱く|ごく弱く|最も弱く|ピアニシシモ"), { level: "ppp" });
+  // 相對一級(要在 forte / piano 單字之前)
+  add(W("piu forte|piu f|meno piano|meno p|louder|a bit louder|stronger|lauter|starker|plus fort|mas fuerte|un poco piu forte"), { rel: 1 });
+  add(W("piu piano|piu p|meno forte|meno f|softer|quieter|a bit softer|leiser|schwacher|moins fort|plus doux|plus piano|mas suave|un poco piu piano"), { rel: -1 });
+  add(C("更強|更强|更大聲|更大声|より強く|もっと強く"), { rel: 1 });
+  add(C("更弱|更輕|更轻|更小聲|更小声|より弱く|もっと弱く"), { rel: -1 });
+  add(W("eco|come un eco|quasi eco|echo|like an echo|as an echo|comme un echo|en echo|wie ein echo|als echo"), { rel: -1, cap: "p" });
+  add(C("回聲|回声|こだま|エコー"), { rel: -1, cap: "p" });
+  // 絕對力度
+  add(W("ff|fortissimo|molto forte|molto f|forte assai|very loud|very loudly|very strong|very strongly|sehr laut|sehr stark|sehr kraftig|tres fort|muy fuerte|fortemente|with great force|tonante|fragoroso|strepitoso|strepituoso|con strepito|eclatant|gewaltig"), { level: "ff" });
+  add(C("很強|很强|非常強|非常强|甚強|甚强|とても強く|非常に強く|フォルティッシモ"), { level: "ff" });
+  add(W("pp|pianissimo|molto piano|molto p|piano assai|very soft|very softly|very quiet|very quietly|very gently|sehr leise|ganz leise|tres doux|tres doucement|tres piano|muy suave|muy piano|murmure|murmurando|mormorando|sussurrando|sussurrato|bisbigliando|whisper|whispered|whispering|whispering|chuchote|flusternd|gefluster"), { level: "pp" });
+  add(C("很弱|非常弱|甚弱|とても弱く|非常に弱く|ささやくように|ピアニッシモ|耳語|耳语"), { level: "pp" });
+  add(W("mf|mezzo forte|mezzoforte|mezzo f|poco forte|poco f|moderately loud|medium loud|fairly loud|rather loud|somewhat loud|halbstark|massig laut|massig stark|ziemlich laut|ziemlich stark|assez fort|un peu fort|medio forte|moderadamente fuerte"), { level: "mf" });
+  add(C("中強|中强|やや強く|少し強く|メゾフォルテ"), { level: "mf" });
+  add(W("mp|mezzo piano|mezzopiano|mezzo p|poco piano|poco p|moderately soft|moderately quiet|medium soft|fairly soft|rather soft|somewhat soft|halbleise|halb leise|halblaut|ziemlich leise|mezza voce|mezzavoce|mezza vocce|a mezza voce|demi voix|a demi voix|a mi voix|mi voix|half voice|half voiced|assez doux|un peu doux|medio piano|moderadamente suave|media voz|a media voz"), { level: "mp" });
+  add(C("中弱|やや弱く|少し弱く|メゾピアノ|半聲|半声"), { level: "mp" });
+  add(W("f|forte|loud|loudly|strong|strongly|forceful|forcefully|powerful|powerfully|laut|stark|fort|fuerte|fuertemente|piena voce|a piena voce|voce piena|full voice|full voiced|a pleine voix|pleine voix|plein jeu|volle stimme|mit voller stimme"), { level: "f" });
+  add(C("強く|大聲|大声|大きく|フォルテ"), { level: "f" });
+  add(W("p|piano|soft|softly|quiet|quietly|hushed|leise|doux|doucement|suave|suavemente|bassa voce|a bassa voce"), { level: "p" });
+  add(C("弱く|静かに|しずかに|小さく|小聲|小声|輕聲|轻声|ピアノ"), { level: "p" });
+  // 瞬間重音(文字寫的 sf / rinf.)
+  add(W("sffz|sfffz"), { mom: "sffz" });
+  add(W("sfp|sforzando piano|sforzato piano"), { mom: "sfp" });
+  add(W("fp|forte piano|fortepiano"), { mom: "fp" });
+  add(W("sfz|sforzando|sforzato|sforz|sforzatissimo"), { mom: "sfz" });
+  add(W("sf|fz|forzando|forzato|forz"), { mom: "sf" });
+  add(W("rfz|rf|rinf|rinforz|rinforzando|rinforzato|rinforzo|rinforzante"), { mom: "rfz" });
+  // 弱音踏板
+  add(W("una corda|una cordo|u c|uc|mit verschiebung|mit einer saite|due corde|1 corda"), { corda: "una" });
+  add(W("tre corde|tutte le corde|tutte corde|tutte la corde|t c|tc|ohne verschiebung|3 corde|alle saiten"), { corda: "tre" });
+  // 個性詞 → 上限
+  add(W("piu dolce|piu delicato|piu leggiero|piu tranquillo e dolce"), { cap: "p" });
+  add(W("lontano|come da lontano|da lontano|quasi da lontano|from afar|from a distance|distant|in the distance|wie aus der ferne|aus der ferne|von ferne|lointain|lointaine|comme de loin|de loin|au loin|lejano"), { cap: "pp" });
+  add(C("遠く|遠方|遠處|远处|遠遠|远远"), { cap: "pp" });
+  add(W("dolcissimo|dolciss|dolcissimamente|delicatissimo|delicatiss|leggierissimo|leggerissimo|leggieriss|leggeriss|quieto|languido|radolcente|raddolcente|raddolcendo|sotto voce|sottovoce|sotto vocce|soave|soavemente|tenerissimo|misterioso|misteriosamente|mysterious|mysteriously|very sweet|very sweetly|very tender|very tenderly|zart|zartlich|zartestens|sanft|sanftmutig|innig zart|mit dampfer|velato|velatamente|sordamente"), { cap: "p" });
+  add(C("輕柔|轻柔|輕輕|轻轻|神秘|そっと|ひそやかに"), { cap: "p" });
+  add(W("dolce|dolcemente|dolcezza|con dolcezza|sweet|sweetly|tender|tenderly|teneramente|tenero|con tenerezza|delicato|delicatamente|delicate|delicately|leggiero|leggero|leggieramente|leggiermente|leggeramente|light|lightly|leger|legere|dol|morbido|morbidamente|gentle|gently|lusingando|lusinghiero|carezzando|carezzevole|accarezzevole|tendre|tendrement|dulce|dulcemente|weich|lieblich|con affetto"), { cap: "mp" });
+  add(C("甜美|甘く|柔和|柔美|溫柔|温柔|優美|优美|やさしく|優しく|柔らかく|やわらかく|輕快|轻快|軽く"), { cap: "mp" });
+  // 個性詞 → 下限
+  add(W("marcatissimo|martellato|with force|with power|with strength|martellando|con forza|forza|forzato assai|vigoroso|vigorosamente|feroce|ferocemente|furioso|furiosamente|con furia|grandioso|grandiosamente|eroico|eroicamente|trionfale|trionfante|triumphant|triumphal|aggressive|aggressively|violent|violento|violentemente|wuchtig|kraftig|kraftvoll|mit kraft|heftig|stürmisch|sturmisch|wild|energisch kraftig|avec force|avec eclat|eclatant|tumultueux|tumultuoso|impetuoso|tempestuoso|impetuosamente|con impeto|bravura|con bravura|potente|possente|fortemente marcato"), { floor: "f" });
+  add(C("有力|強力|强力|力強く|激しく|激烈|熱烈|热烈|雄壮|雄偉|雄伟|壯麗|壮丽"), { floor: "f" });
+  add(W("marcato|marcata|marc|marque|tres marque|marquez|ben marcato|molto marcato|poco marcato|un poco marcato|accentato|accentuato|accented|accentue|akzentuiert|betont|pesante|pesantemente|heavy|heavily|schwer|lourd|lourdement|energico|energicamente|con energia|energetic|energetically|with energy|energisch|energique|deciso|decisamente|decisive|decisively|decided|entschlossen|entschieden|decide|risoluto|risolutamente|resolute|resolutely|appassionato|appassionata|appasionato|fuocoso|disperato|appassionatamente|con passione|passionate|passionately|leidenschaftlich|passionne|con fuoco|fuoco|feurig|ardente|avec feu|con brio|brioso|brillante|brillantemente|brilliant|brillant|sonoro|sonore|sonoramente|robusto|maestoso|maestosamente|majestic|majestically|majestatisch|majestueux|intense|intenso|intensely|bold|boldly|imperioso|imperiosamente|declamato|declamando|nobilmente|largamente e forte|tenuto e forte|scherzando forte|con slancio|slancio|animoso|fiero|fieramente|orgoglioso|marziale|alla marcia forte|capriccioso forte|ruvido|rude|stark betont"), { floor: "mf" });
+  add(C("熱情|热情|堂々と|力強い|重く|はっきりと|明確に|情熱的に|強調"), { floor: "mf" });
+  add(C("強|强"), { level: "f" });
+  add(C("弱|輕|轻"), { level: "p" });
+  return R;
+})();
+/* 文字 → 力度動作;不是力度文字回傳 null */
+function dynamicWordActions(text){
+  // 大寫的單獨字母(SONATE in F、T.S.P.、F. Serre)不是力度記號;力度字母一律小寫
+  let s = (text || "").replace(/(^|[^A-Za-z])[PFMSRZ]{1,5}(?=[^A-Za-z]|$)/g, "$1 ").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").normalize("NFC")
+    .replace(/ß/g, "ss").replace(/[.,;:!?()\[\]{}"'’‘`«»…–—_\-\/|*~]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!s || /^[\d\s]+$/.test(s)) return null;
+  // 「al ff」「bis ff」「to ff」:漸強/漸弱的目標力度
+  let target = null;
+  s = s.replace(/(?:^|\s)(?:al|a|fino al|fino a|sino al|sin al|bis zum|bis zu|bis|zum|jusqu au|jusqu a|to|until|hasta)\s+(pppp|ppp|pp|p|mp|mf|f|ff|fff|ffff|pianissimo|piano|forte|fortissimo)(?=\s|$)/g, (m, lv) => {
+    target = { pianissimo: "pp", piano: "p", forte: "f", fortissimo: "ff" }[lv] || lv; return " ";
+  });
+  const a = {}; let hit = false;
+  for (const [re, act] of DYN_WORD_RULES) {
+    re.lastIndex = 0;
+    if (!re.test(s)) continue;
+    re.lastIndex = 0;
+    s = s.replace(re, " ");
+    hit = true;
+    for (const k of Object.keys(act)) {
+      if (k === "grad") { if (!a.grad) a.grad = Object.assign({}, act.grad); }
+      else if (k === "rel") a.rel = (a.rel || 0) + act.rel;
+      else if (a[k] == null) a[k] = act[k];
+    }
+  }
+  if (!hit) return null;
+  // 只講某個聲部(il canto marcato、l'accompagnamento piano、marquez le chant、m.d.):不是整體力度
+  if (/(?:^|[^a-z])(canto|melodia|tema|basso|bassi|melody|soprano|tenore|thema|melodie|chant|accompagnamento|accomp|begleitung|accompaniment|mano|main|m\.? ?[dsg]\.|[rl]\.? ?h\.)(?=[^a-z]|$)/i.test(text || "")) { delete a.level; delete a.rel; delete a.cap; delete a.floor; delete a.grad; }
+  if (a.grad) {
+    const raw = " " + (text || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z\u3000-\u9fff]+/g, " ") + " ";
+    if (/ (molto|assai|much|sehr|tres|beaucoup|mucho|very|piu|sempre piu|largamente) /.test(raw) || /很|非常|大幅/.test(raw)) a.grad.amt = "molto";
+    else if (/ poco (?!a poco)/.test(raw.replace(/poco a poco/g, "")) || / (un poco|a little|slightly|etwas|un peu|leicht) /.test(raw) || /稍|少し|やや/.test(raw)) a.grad.amt = "poco";
+    if (/ (poco a poco|a poco a poco|sempre|gradually|gradualmente|little by little|nach und nach|allmahlich|allmahlig|immer|peu a peu|poco a poco sempre|poi|sin al|sino al|fino al) /.test(raw) || /逐漸|逐渐|漸漸|渐渐|徐々|次第|しだいに|だんだん/.test(raw)) a.grad.long = true;
+    if (target) a.grad.target = target;
+  } else if (target && !a.level) a.level = target;
+  return Object.keys(a).length ? a : null;
+}
+/* 力度文字套進力度記號/髮夾(解析樂譜時呼叫,依時間順序處理,相對/上限/下限要看當下的力度):
+   level → 力度記號(mark = p/f…,text: true);mom → 瞬間重音記號;rel/cap/floor → 換算成數值力度記號 {mark: "_w", level};
+   grad → 文字髮夾 {start, end, dir, target}:有 <dashes> 就到虛線結束,沒有就到下一個力度記號/下一個漸強漸弱
+   (最多 4 小節,poco a poco / sempre 8 小節),都沒有就 2 小節(poco a poco 4 小節),結束處補一個數值力度記號讓音量停在新的大小;
+   下一個記號方向相反(cresc. 之後 subito p)時不往它靠,照預設幅度。同一時間已經有 <dynamics> 力度記號時,個性詞的上限/下限不套用。
+   una corda → 回傳 {start, end, delta: −0.05}(到 tre corde 或曲尾)。bars = 每小節起點,endT = 曲尾 */
+function resolveScoreDynamicWords(dynMarks, wedges, wordActs, dashStops, bars, endT){
+  const offsets = [];
+  if (!wordActs.length) return offsets;
+  const LV = DYN_MARK_LEVEL, eps = 1e-6;
+  const isLevel = d => d.level != null || (d.mark in LV && !(d.mark in PIANO_MOMENTARY)) || d.mark === "fp" || d.mark === "sfp";
+  const lvOf = d => d.level != null ? d.level : (d.mark === "fp" || d.mark === "sfp") ? LV.p : LV[d.mark];
+  const clampLv = v => Math.max(LV.pppp, Math.min(LV.ffff, v));
+  const stepIdx = v => { let bi = 0; DYN_LEVEL_STEPS.forEach((k, i) => { if (Math.abs(LV[k] - v) < Math.abs(LV[DYN_LEVEL_STEPS[bi]] - v)) bi = i; }); return bi; };
+  const barIdx = t => { let i = 0; while (i + 1 < bars.length && bars[i + 1] <= t + eps) i++; return i; };
+  const addBars = (t, n) => { const i = barIdx(t) + n; return i < bars.length ? bars[i] : endT; };
+  const acts = wordActs.slice().sort((x, y) => x.t - y.t);
+  const explicitAt = new Set(dynMarks.filter(isLevel).map(d => d.t.toFixed(6)));
+  for (const w of acts) {
+    if (w.a.level) { dynMarks.push({ t: w.t, mark: w.a.level, text: true }); explicitAt.add(w.t.toFixed(6)); }
+    if (w.a.mom) dynMarks.push({ t: w.t, mark: w.a.mom, text: true });
+  }
+  for (const w of acts) if (w.a.subito) for (const d of dynMarks) if (Math.abs(d.t - w.t) < eps && isLevel(d)) d.subito = true;
+  const sortMarks = () => dynMarks.sort((x, y) => x.t - y.t);   // 穩定排序:同一時間後加的蓋過先加的
+  sortMarks();
+  const curAt = t => { let v = 0; for (const d of dynMarks) { if (d.t > t + eps) break; if (isLevel(d)) v = lvOf(d); } return v; };
+  const hairpins = wedges.slice();
+  let cordaStart = null;
+  for (let i = 0; i < acts.length; i++) {
+    const { t, a, dash } = acts[i];
+    if (a.corda === "una" && cordaStart == null) cordaStart = t;
+    if (a.corda === "tre" && cordaStart != null) { if (t > cordaStart + eps) offsets.push({ start: cordaStart, end: t, delta: -0.05 }); cordaStart = null; }
+    const explicit = explicitAt.has(t.toFixed(6));
+    let cur = curAt(t), nv = null;
+    if (a.rel && !a.level) nv = LV[DYN_LEVEL_STEPS[Math.max(0, Math.min(DYN_LEVEL_STEPS.length - 1, stepIdx(cur) + a.rel))]];
+    if (!explicit || a.rel) {
+      const base = nv != null ? nv : cur;
+      if (a.cap && base > LV[a.cap] + eps) nv = LV[a.cap];
+      else if (a.floor && !a.cap && base < LV[a.floor] - eps) nv = LV[a.floor];
+    }
+    if (nv != null) { dynMarks.push({ t, mark: "_w", level: nv, text: true }); sortMarks(); cur = nv; }
+    const g = a.grad;
+    if (!g) continue;
+    if (hairpins.some(w => Math.abs(w.start - t) < 0.0625 && w.dir === g.dir)) continue;   // 同一處已經有髮夾
+    const sign = g.dir === "cresc" ? 1 : -1;
+    const amt = g.fade ? 0.16 : g.amt === "molto" ? 0.18 : g.amt === "poco" ? 0.06 : g.long ? 0.14 : 0.1;
+    let end = null, endMark = null;
+    const stop = dash != null ? dashStops.find(s => s.num === dash && s.t > t + eps) : null;
+    if (stop) end = stop.t;
+    else {
+      const lim = addBars(t, g.long ? 8 : 4);
+      endMark = dynMarks.find(d => d.t > t + eps && d.t <= lim + eps && isLevel(d) && d.mark !== "_w") || null;
+      const nextGrad = acts.slice(i + 1).find(x => x.a.grad && x.t > t + eps);
+      const nextPin = hairpins.find(w => w.start > t + eps);
+      end = endMark ? endMark.t : addBars(t, g.long ? 4 : 2);
+      for (const c of [nextGrad && nextGrad.t, nextPin && nextPin.start]) if (c != null && c < end - eps) { end = c; endMark = null; }
+    }
+    end = Math.min(end, endT);
+    if (end <= t + eps) continue;
+    if (!endMark) endMark = dynMarks.find(d => Math.abs(d.t - end) < eps && isLevel(d) && d.mark !== "_w") || null;
+    let target = g.target ? LV[g.target] : cur + sign * amt;
+    if (g.fade && !g.target) target = Math.max(Math.min(cur, LV.pp), cur - amt);
+    if (!g.target && endMark && !endMark.subito && (lvOf(endMark) - cur) * sign > 0.01) target = lvOf(endMark);
+    target = clampLv(target);
+    wedges.push({ start: t, end, dir: g.dir, target, text: true });
+    // 結束處沒有力度記號:補一個,讓音量停在新的大小(不然漸強完又掉回原本的大小)
+    if (!endMark) { dynMarks.push({ t: end, mark: "_w", level: target, text: true }); sortMarks(); }
+  }
+  if (cordaStart != null && endT > cordaStart + eps) offsets.push({ start: cordaStart, end: endT, delta: -0.05 });
+  return offsets;
 }
 function inRanges(t, ranges){
   for (const r of ranges) if (t >= r.start && t < r.end) return true;
@@ -4151,14 +4371,23 @@ function getDrumKey(n, tWhole){
    4) 每小節再加一點點緩慢的隨機起伏,長歌不會從頭到尾死板一個音量 */
 const DYN_MARK_LEVEL = { pppp: -0.34, ppp: -0.3, pp: -0.24, p: -0.16, mp: -0.08, mf: 0, f: 0.1, ff: 0.18, fff: 0.24, ffff: 0.28, sf: 0.1, sfz: 0.1, fz: 0.1, rf: 0.06, rfz: 0.06, fp: 0 };
 const DRUM_TOM_KEYS = new Set([41, 43, 45, 47, 48, 50]);
+/* 譜上某個位置的力度(−0.34 = pppp … 0 = mf … 0.28 = ffff):力度記號(含文字換算的數值記號 d.level)+ 髮夾內插。
+   sf/fz/rf 這類瞬間重音不算(只影響當下那個音,見 PIANO_MOMENTARY);fp/sfp 之後是 p。
+   髮夾:文字髮夾有 w.target;一般髮夾接到結尾處的下一個記號,下一個記號方向相反或是 subito 時照預設幅度 ±0.1 */
+function dynMarkIsLevel(d){ return d.level != null || (d.mark in DYN_MARK_LEVEL && !(d.mark in PIANO_MOMENTARY)) || d.mark === "fp" || d.mark === "sfp"; }
+function dynMarkLevel(d){ return d.level != null ? d.level : (d.mark === "fp" || d.mark === "sfp") ? DYN_MARK_LEVEL.p : DYN_MARK_LEVEL[d.mark]; }
 function scoreDynamicLevelAt(t){
   if (!scoreDynMarks.length || t == null) return 0;
-  const levelAt = x => { let lv = 0; for (const d of scoreDynMarks) { if (d.t <= x + 1e-6 && d.mark in DYN_MARK_LEVEL) lv = DYN_MARK_LEVEL[d.mark]; } return lv; };
+  const levelAt = x => { let lv = 0; for (const d of scoreDynMarks) if (d.t <= x + 1e-6 && dynMarkIsLevel(d)) lv = dynMarkLevel(d); return lv; };
   for (const w of scoreWedges) {
     if (t >= w.start && t < w.end && w.end > w.start) {
-      const a = levelAt(w.start);
-      const next = scoreDynMarks.find(d => d.t >= w.end - 1e-6 && d.mark in DYN_MARK_LEVEL);
-      const b = next ? DYN_MARK_LEVEL[next.mark] : a + (w.dir === "cresc" ? 0.1 : -0.1);
+      const a = levelAt(w.start), sign = w.dir === "cresc" ? 1 : -1;
+      let b = w.target;
+      if (b == null) {
+        const next = scoreDynMarks.find(d => d.t >= w.end - 1e-6 && dynMarkIsLevel(d));
+        b = next && !next.subito ? dynMarkLevel(next) : null;
+        if (b == null || (b - a) * sign <= 0.01) b = a + sign * 0.1;
+      }
       return a + (b - a) * (t - w.start) / (w.end - w.start);
     }
   }
@@ -5961,19 +6190,10 @@ const PIANO_MAX_VOICES = (isIOSDevice() || (navigator.deviceMemory && navigator.
    所有隨機都以位置為種子,同一首曲子每次播放/匯出都一樣 */
 const PIANO_MOMENTARY = { sf: 14, sfz: 16, sffz: 20, fz: 14, rf: 8, rfz: 10, sfp: 16, fp: 14 };
 function pianoLevelAt(t){
-  if (!scoreDynMarks.length || t == null) return 0;
-  const isLevel = d => d.mark in DYN_MARK_LEVEL && !(d.mark in PIANO_MOMENTARY) || d.mark === "fp" || d.mark === "sfp";
-  const lvOf = d => (d.mark === "fp" || d.mark === "sfp") ? DYN_MARK_LEVEL.p : DYN_MARK_LEVEL[d.mark];
-  const levelAt = x => { let lv = 0; for (const d of scoreDynMarks) if (d.t <= x + 1e-6 && isLevel(d)) lv = lvOf(d); return lv; };
-  for (const w of scoreWedges) {
-    if (t >= w.start && t < w.end && w.end > w.start) {
-      const a = levelAt(w.start);
-      const next = scoreDynMarks.find(d => d.t >= w.end - 1e-6 && isLevel(d));
-      const b = next ? lvOf(next) : a + (w.dir === "cresc" ? 0.1 : -0.1);
-      return a + (b - a) * (t - w.start) / (w.end - w.start);
-    }
-  }
-  return levelAt(t);
+  if (t == null) return 0;
+  let off = 0;   // una corda(弱音踏板)整段小聲一點
+  for (const o of scoreDynOffsets) if (t >= o.start - 1e-6 && t < o.end) off += o.delta;
+  return scoreDynamicLevelAt(t) + off;
 }
 /* 整首的段落起伏:很多 MusicXML(尤其網路上的古典曲譜)完全沒寫力度記號,只靠拍子輕重與小起伏的話,
    整首的力度只在 62~78 之間(約 4dB),聽起來從頭平到尾。這裡套用演奏研究常用的規則(KTH performance rules):

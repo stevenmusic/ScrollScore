@@ -25,3 +25,9 @@ Guitar Pro 測試檔:alphaTab repo(github.com/CoderLine/alphaTab)packages/alphat
 鋼琴測試曲:ASAP dataset(github.com/fosfrancesco/asap-dataset)的 xml_score.musicxml,只拿來測試,不放進 repo。
 
 注意:離線渲染大約是即時的 1~5 倍時間(越密的曲子越慢);渲染時不要同時改 index.html(用 `--root` 指向快照)。
+
+## 力度文字(dynamicWordActions)
+- 覆蓋率檢查:把 ASAP 所有 xml_score.musicxml 的 <words> 抽出來(`grep -ho "<words[^>]*>[^<]*</words>"` | 去標籤 | sort | uniq -c),
+  用 node 把 index.html 裡 DYN_LEVEL_STEPS ~ dynamicWordActions 那段 eval 出來逐行跑,看命中與漏掉的。2026-10:cresc. 238、dim. 89、decresc. 29、dolce 27、smorz. 18、poco cresc. 14、marcato 13、una corda 12 …全部命中;漏掉的都是速度、踏板、指法、標題
+- 行為檢查:做一份每小節一個文字的測試譜(soft / cresc. / loud / dolce / più forte / sotto voce / dim.+虛線 / subito ff / una corda / fade out / 漸強 / 強 / sehr leise / cresc. al ff),載入後印 pianoLevelAt() 與每拍 n.pvel
+
