@@ -3585,6 +3585,9 @@ function parseXmlTimeline(xmlText){
               const key = noteCursor.toFixed(6);
               const existing = articMap[key] || {};
               articMap[key] = Object.assign(existing, flags);
+              // 各譜表(左右手)自己的記號:右手的重音/斷音不能套到左手(以前整個時間點的所有音都一起加重、一起縮短)
+              const bs = existing.byStaff || (existing.byStaff = {});
+              bs[staffNumEarly] = Object.assign(bs[staffNumEarly] || {}, flags);
             }
             // 分解和弦(琶音)記號:MusicXML是逐音符標記的,同一個和絃裡可能只有部分音符要滾奏,
             // 其他音符(例如同時按住的持續音)不標記、應該正常發聲,所以要記錄「哪些確切音高」有標記,
@@ -4253,6 +4256,14 @@ function buildTimeline(){
     const coChordEnd = ev.tWhole + maxDurWhole;
     ev.harmonyEndWhole = rangeEnd != null ? Math.max(rangeEnd, coChordEnd) : coChordEnd;
     ev.artic = findNearestEntry(articEntries, sT, MARK_MATCH_EPSILON) || null;
+    // 每個音自己那一手的記號(n.artic);延長記號整個時間點都算(常常只寫在一個譜表)
+    // (譜表編號對不上——例如多聲部檔案——就退回整個時間點的記號)
+    const bySt = ev.artic && ev.artic.byStaff;
+    const stMatch = bySt && ev.notes.some(n => !n.drum && bySt[n.staff || 1]);
+    for (const n of ev.notes) {
+      if (n.drum) continue;
+      n.artic = !ev.artic ? null : stMatch ? Object.assign({}, bySt[n.staff || 1] || {}, ev.artic.fermata ? { fermata: true } : {}) : ev.artic;
+    }
     ev.guitarTech = findNearestEntry(guitarTechEntries, sT, MARK_MATCH_EPSILON) || null;
     ev.vibrato = inRanges(sT, vibratoRanges);
   }
@@ -6044,7 +6055,7 @@ function startAudioFrom(fromSec){
         const noteTech = (isGuitar && n.glissTargetFreq != null) ? Object.assign({}, tech, { glissTargetFreq: n.glissTargetFreq }) : tech;
         // 人性化的時間偏移可能是負的(提早一點點):第一拍剛好在 currentTime 時會變成過去的時間而整個被丟掉,所以不早於現在
         if (n.drum) { const h = humanizeDrumHit(ev, n), w = Math.max(audioCtx.currentTime, startCtxTime + t + rollT + h.dt); scheduleDrum(n.key, w, h, n.choke ? drumChokeAt(w, durSec) : null); }
-        else scheduleNote(n.freq, Math.max(audioCtx.currentTime, startCtxTime + t + rollT + ((isGuitar ? n.gdt : n.pdt) || 0)), durSec, ev.legato, ev.pedalOn, chordAnchors, noteHarmonyEndSec, ev.artic, noteTech, n.staff, isGuitar ? n.gvel : n.pvel, n);
+        else scheduleNote(n.freq, Math.max(audioCtx.currentTime, startCtxTime + t + rollT + ((isGuitar ? n.gdt : n.pdt) || 0)), durSec, ev.legato, ev.pedalOn, chordAnchors, noteHarmonyEndSec, n.artic !== undefined ? n.artic : ev.artic, noteTech, n.staff, isGuitar ? n.gvel : n.pvel, n);
       } catch (e) {
         errCount++; lastErr = e;
         console.error("排程音符失敗:", e);
@@ -6224,6 +6235,7 @@ const PIANO_MAX_VOICES = (isIOSDevice() || (navigator.deviceMemory && navigator.
    6) 重音/強音記號、長音稍重、很短的音稍輕
    7) 左右手各自緩慢的起伏(AR(1))+ 每個音一點點隨機,和弦的音不會完全同時(最多晚 7ms)
    所有隨機都以位置為種子,同一首曲子每次播放/匯出都一樣 */
+const PIANO_ACCENT = { accent: 7, strong: 10, soft: 3 };   // 重音記號加的力度(以前 11/16/5,整個時間點兩手一起加)
 const PIANO_MOMENTARY = { sf: 14, sfz: 16, sffz: 20, fz: 14, rf: 8, rfz: 10, sfp: 16, fp: 14 };
 function pianoLevelAt(t){
   if (t == null) return 0;
@@ -6286,8 +6298,6 @@ function computePianoDynamics(){
     let base = 70 + 150 * pianoLevelAt(ev.srcT);
     const mom = ev.srcT != null && scoreDynMarks.find(d => d.mark in PIANO_MOMENTARY && Math.abs(d.t - ev.srcT) < 1e-4);
     if (mom) base += PIANO_MOMENTARY[mom.mark];
-    const a = ev.artic;
-    if (a) base += a.strongAccent ? 16 : a.accent ? 11 : a.softAccent ? 5 : 0;
     if (ev.barPos != null && ev.beatLen > 0) {
       const bf = ev.barPos / ev.beatLen, frac = Math.abs(bf - Math.round(bf));
       if (ev.barPos < 1e-4) base += 3;
@@ -6312,6 +6322,9 @@ function computePianoDynamics(){
       for (const n of ns) {
         const m = freqToMidi(n.freq);
         let v = base + drift[rh ? 1 : 2];
+        // 重音只加在有標記的那一手(n.artic);約小半級力度(使用者反映太重:以前 +11/+16 而且兩手一起加)
+        const na = n.artic || ev.artic;
+        if (na) v += na.strongAccent ? PIANO_ACCENT.strong : na.accent ? PIANO_ACCENT.accent : na.softAccent ? PIANO_ACCENT.soft : 0;
         if (rh) {
           if (n === top) {
             v += ns.length > 1 ? 6 : 4;
@@ -9464,7 +9477,7 @@ function scheduleExportRange(rangeStart, rangeEnd, calib){
         : harmonyEndSec;
       const noteTech = (isGuitar && n.glissTargetFreq != null) ? Object.assign({}, tech, { glissTargetFreq: n.glissTargetFreq }) : tech;
       if (n.drum) { const h = humanizeDrumHit(ev, n), w = startCtxTime + (t - rangeStart) + rollT + h.dt; scheduleDrum(n.key, w, h, n.choke ? drumChokeAt(w, durSec) : null); }
-      else scheduleNote(n.freq, startCtxTime + (t - rangeStart) + rollT + ((isGuitar ? n.gdt : n.pdt) || 0), durSec, ev.legato, ev.pedalOn, chordAnchors, noteHarmonyEndSec, ev.artic, noteTech, n.staff, isGuitar ? n.gvel : n.pvel, n);
+      else scheduleNote(n.freq, startCtxTime + (t - rangeStart) + rollT + ((isGuitar ? n.gdt : n.pdt) || 0), durSec, ev.legato, ev.pedalOn, chordAnchors, noteHarmonyEndSec, n.artic !== undefined ? n.artic : ev.artic, noteTech, n.staff, isGuitar ? n.gvel : n.pvel, n);
     }
   }
 }
