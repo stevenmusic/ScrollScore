@@ -8694,13 +8694,16 @@ async function showExportPreview(cfg){
 $("fmtLandscape").addEventListener("click", () => {
   showExportPreview(Object.assign({ W: 1920, H: 1080, scoreH: 440, align: chosenAlign, bitrate: 5000000, fps: exportFps, includeKeyboard: chosenIncludeKeyboard, startSec: chosenStartSec, endSec: chosenEndSec }, watermarkCfg()));
 });
+// 直式/方形的鋼琴譜放大(直式 380 → 560、方形 400 → 500;直式再大會一次只看得到 1.5 小節、捲動太快):手機直立看影片時樂譜太小看不清楚,
+// 而且只占畫面 1/5、上下大片空白(使用者反映)。鼓譜照舊(另外乘 DRUM_EXPORT_SCORE_SCALE)
+const EXPORT_PORTRAIT_SCORE_H = 560, EXPORT_SQUARE_SCORE_H = 500;
 $("fmtPortrait").addEventListener("click", () => {
-  showExportPreview(Object.assign({ W: 1080, H: 1920, scoreH: 380, align: chosenAlign, bitrate: 5000000, fps: exportFps, includeKeyboard: chosenIncludeKeyboard, startSec: chosenStartSec, endSec: chosenEndSec }, watermarkCfg()));
+  showExportPreview(Object.assign({ W: 1080, H: 1920, scoreH: isDrumScore ? 380 : EXPORT_PORTRAIT_SCORE_H, align: chosenAlign, bitrate: 5000000, fps: exportFps, includeKeyboard: chosenIncludeKeyboard, startSec: chosenStartSec, endSec: chosenEndSec }, watermarkCfg()));
 });
 // 正方形:高度介於橫式(1080)與直式(1920)之間,樂譜高度取 400 —— 比橫式略高一點點,
 // 因為正方形沒有橫式那麼寬,同樣的樂譜高度看起來會相對小
 $("fmtSquare").addEventListener("click", () => {
-  showExportPreview(Object.assign({ W: 1080, H: 1080, scoreH: 400, align: chosenAlign, bitrate: 5000000, fps: exportFps, includeKeyboard: chosenIncludeKeyboard, startSec: chosenStartSec, endSec: chosenEndSec }, watermarkCfg()));
+  showExportPreview(Object.assign({ W: 1080, H: 1080, scoreH: isDrumScore ? 400 : EXPORT_SQUARE_SCORE_H, align: chosenAlign, bitrate: 5000000, fps: exportFps, includeKeyboard: chosenIncludeKeyboard, startSec: chosenStartSec, endSec: chosenEndSec }, watermarkCfg()));
 });
 $("previewBackBtn").addEventListener("click", () => {
   $("previewOverlay").classList.remove("show");
@@ -8947,9 +8950,15 @@ function computeExportLayout(cfg){
       : wmPadY + subtitleFontSize;
   }
   const minTopY = titleBlockBottom > 0 ? titleBlockBottom + Math.round(H * 0.02) : 0;
-  const topY = Math.max(rawTopY, minTopY);
+  let topY = Math.max(rawTopY, minTopY), kbY = H - kbH;
   const plX = W * PLAYLINE_RATIO;
-  return { W, H, SCORE_H, margin, kbH, scoreAreaH, topY, plX, minTopY };
+  /* 直式/方形 + 鋼琴鍵盤:鍵盤一樣貼底(鋼琴、鼓組都貼底),樂譜往下靠、緊貼在鍵盤上方。
+     以前樂譜在「標題到鍵盤」之間置中,直式時樂譜和鍵盤中間空了將近半個畫面(使用者反映),眼睛要上下跳很遠。
+     選「靠上」時照舊放在標題下方。橫式、鼓組維持原本的排法 */
+  if (cfg.includeKeyboard && H >= W && currentInstrument() !== "drum" && cfg.align !== "top") {
+    topY = Math.max(minTopY, Math.round(kbY - H * 0.03 - SCORE_H));
+  }
+  return { W, H, SCORE_H, margin, kbH, kbY, scoreAreaH, topY, plX, minTopY };
 }
 /* 匯出畫面的樂譜底色是亮米色(#FFFDF6),使用者挑的游標顏色如果偏亮(預設的淡金色就是),
    直接畫上去會幾乎看不見。這裡在亮度過高時等比壓暗到安全範圍,色相維持不變 */
@@ -9053,7 +9062,7 @@ function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
     const e = exportStaffExtent, pad = e.sp * (cfg.includeKeyboard ? PLAYLINE_PAD_SPACES_WITH_PANEL : PLAYLINE_PAD_SPACES_SCORE_ONLY);
     // 可以超出樂譜圖的上下邊(上下才會一樣多),但不碰到標題、不壓到下方的樂器面板
     plTop = Math.max(layout.minTopY || 0, topY + SCORE_H * (e.top - pad));
-    plBottom = Math.min(cfg.includeKeyboard ? H - kbH - H * 0.01 : H, topY + SCORE_H * (e.bottom + pad));
+    plBottom = Math.min(cfg.includeKeyboard ? layout.kbY - H * 0.01 : H, topY + SCORE_H * (e.bottom + pad));
   }
   const curCol = exportInkColor(hlCursorColor()); // 米色譜面上要換成深色版本,見函式上方說明
   ctx.save();
@@ -9066,7 +9075,7 @@ function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
   ctx.closePath(); ctx.fill();
   ctx.restore();
   if (cfg.includeKeyboard) {
-    const kbY = H - kbH;
+    const kbY = layout.kbY;
     if (currentInstrument() === "drum") {
       const active = getActiveDrumHitsAt(songSec + KB_LOOKAHEAD_SEC, calib);
       drawDrumKit(ctx, 0, kbY, W, kbH, active);
@@ -9119,7 +9128,7 @@ function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
       // 直接貼鍵盤上緣定位會讓文字疊到樂譜最後幾行音符,所以要以樂譜下緣為準,
       // 並且不能低於鍵盤上緣(沒有鍵盤面板時就以畫面底部為準)
       const scoreBottomY = topY + SCORE_H;
-      const floorY = cfg.includeKeyboard ? (H - kbH) : H;
+      const floorY = cfg.includeKeyboard ? layout.kbY : H;
       // 正常情況(樂譜下緣離鍵盤還有空間)用貼近鍵盤上緣的位置;萬一樂譜靠太近鍵盤、
       // 空間不夠,改成貼樂譜下緣往下推,寧可靠近鍵盤一點,也不要疊到樂譜本身
       const channelY = Math.max(floorY - wmPadY, scoreBottomY + wmPadY + channelFontSize);
