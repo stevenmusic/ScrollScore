@@ -294,12 +294,12 @@ input[type=range]::-webkit-slider-thumb{
 }
 .settings-group input[type=range]{flex:1;min-width:90px;width:auto}
 .settings-group .tempo-box b{min-width:2.6em;text-align:right}
-/* 「尚未匯入音檔(播放樂器合成音)」這類狀態文字很長,會把後面的「移除」擠到下一行變成孤兒。
+/* 背景圖的檔名可能很長,會把後面的「移除」擠到下一行變成孤兒。
    讓它吃掉剩餘寬度並在過長時截斷,整列就能維持一行 */
-#audioImportStatus,#bgImageStatus{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#bgImageStatus{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* 還沒匯入時只顯示「匯入」按鈕;匯入後才出現檔名與「移除」(以前是「未匯入」+ 灰掉的移除鈕在佔位置) */
-#audioImportClearBtn:disabled,#bgImageClearBtn:disabled{display:none}
-.tempo-box:has(#audioImportClearBtn:disabled) #audioImportStatus,.tempo-box:has(#bgImageClearBtn:disabled) #bgImageStatus{visibility:hidden}
+#bgImageClearBtn:disabled{display:none}
+.tempo-box:has(#bgImageClearBtn:disabled) #bgImageStatus{visibility:hidden}
 /* 開關兩個一列。先前為了對齊改成一列一個,結果面板在手機上變成 1.27 個畫面高;
    用等寬的 flex 基準排成兩欄,既維持左緣對齊又省掉一半高度,窄螢幕放不下時自動退回一欄。
    min-width 取 108px:軌道 38 + 間距 10 + 四個中文字約 52 = 100,留一點餘裕,
@@ -919,12 +919,6 @@ body.exporting-active .empty-card{
   <details class="settings-group settings-collapse">
     <summary class="settings-group-title"><span data-i18n="advancedSummary">進階</span><span class="chev">›</span></summary>
     <div class="collapse-body">
-      <div class="tempo-box"><span class="row-label" data-i18n="audioRowLabel">音檔</span>
-        <button class="btn" id="audioImportBtn" data-i18n="audioImportBtn">匯入音檔</button>
-        <input type="file" id="audioImportFile" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.flac">
-        <span id="audioImportStatus" style="font-size:12px;opacity:0.75" data-i18n="audioImportStatusDefault">未匯入</span>
-        <button class="btn" id="audioImportClearBtn" style="padding:4px 10px" disabled data-i18n="removeBtn">移除</button>
-      </div>
       <div class="tempo-box" data-i18n-attr="title:reverbTitle"><span class="row-label" data-i18n="reverbLabel">空間感</span>
         <input type="range" id="reverbAmount" min="0" max="100" value="30"><b id="reverbAmountVal">30</b>
       </div>
@@ -1196,10 +1190,6 @@ const I18N = {
     measureHlLabel: "小節高亮",
 
     advancedSummary: "進階",
-    audioRowLabel: "音檔",
-    audioImportBtn: "匯入音檔",
-    audioImportStatusDefault: "未匯入",
-    audioImportedStatus: "已匯入:{name}(靜音樂器合成音)",
     removeBtn: "移除",
     reverbTitle: "模擬鋼琴在真實空間裡的殘響與左右聲像。取樣本身是近距離收音的乾聲,加一點空間感才不會聽起來貼在臉上",
     reverbLabel: "空間感",
@@ -1332,11 +1322,6 @@ const I18N = {
     statusLoadingInstrument: "載入{inst}真實音色中…",
     statusInstrumentReady: "音色就緒({n} 個取樣)",
     statusInstrumentFailed: "真實音色載入失敗,暫用合成音色備援",
-    statusReadingAudio: "讀取音檔中…",
-    statusAudioReady: "音檔已就緒,播放/匯出時改用這個音檔,不再播放樂器合成音",
-    tempoLockedTitle: "已匯入音檔,速度固定使用音檔原始速度,不受此滑桿影響",
-    statusAudioReadFailed: "音檔讀取失敗:{msg}",
-    statusAudioRemoved: "已移除音檔,恢復播放樂器合成音",
     statusReadingBg: "讀取背景圖片中…",
     errImageLoadFailed: "圖片讀取失敗",
     bgAppliedManual: "背景圖片已套用,可用「背景透明度」調整深淺",
@@ -1409,10 +1394,6 @@ const I18N = {
     measureHlLabel: "Highlight",
 
     advancedSummary: "More",
-    audioRowLabel: "Audio",
-    audioImportBtn: "Import Audio",
-    audioImportStatusDefault: "None",
-    audioImportedStatus: "Imported: {name} (instrument synthesis muted)",
     removeBtn: "Remove",
     reverbTitle: "Simulates the piano's reverb and stereo image in a real room. The samples themselves are dry, close-mic'd recordings — a touch of space keeps it from sounding too in-your-face",
     reverbLabel: "Reverb",
@@ -1544,11 +1525,6 @@ const I18N = {
     statusLoadingInstrument: "Loading real {inst} samples…",
     statusInstrumentReady: "Samples ready ({n} samples)",
     statusInstrumentFailed: "Failed to load real samples — falling back to synthesized sound",
-    statusReadingAudio: "Reading audio file…",
-    statusAudioReady: "Audio ready — playback/export will use this file instead of synthesized sound",
-    tempoLockedTitle: "Audio imported — tempo is locked to the file's original speed and unaffected by this slider",
-    statusAudioReadFailed: "Failed to read audio file: {msg}",
-    statusAudioRemoved: "Audio removed — back to synthesized instrument sound",
     statusReadingBg: "Reading background image…",
     errImageLoadFailed: "Failed to load image",
     bgAppliedManual: 'Background applied — adjust with "Background Opacity"',
@@ -1602,7 +1578,7 @@ function T(key, vars){
   return s;
 }
 /* applyLanguage(lang):套用一套純靜態的文字/屬性(data-i18n / data-i18n-attr),
-   不碰任何執行期狀態(播放中/已載入樂譜/已匯入音檔…)。頁面剛載入、還沒有任何
+   不碰任何執行期狀態(播放中/已載入樂譜…)。頁面剛載入、還沒有任何
    使用者互動時,靜態預設值本來就跟這些狀態的預設顯示一致,所以早期呼叫是安全的
    ——不會踩到後面才宣告的 let/const(暫時性死區)。使用者互動後才需要重新反映
    狀態的文字(移調標籤、播放/暫停字樣、已匯入檔名…)由 refreshDynamicI18nText()
@@ -1666,8 +1642,6 @@ function metronomeUnitLabel(beatUnit, dotCount){
   const dotPrefix = dotCount === 1 ? T("dotPrefixSingle") : dotCount === 2 ? T("dotPrefixDouble") : "";
   return "(" + dotPrefix + base + ")";
 }
-let importedAudioBuffer = null; // 使用者匯入的音檔(解碼後),有值時播放/匯出都改用這個,不再合成/取樣
-let importedAudioName = null;
 let scoreDynMarks = [], scoreWedges = []; // 力度記號與髮夾(記譜位置),鼓的整首力度用
 let scoreTempoWords = [];   // 速度文字 {t: 記譜位置, kind: "rit" | "accel" | "atempo"}(rit./rall./a tempo…,彈性速度模型用)
 let ghostNoteheadEntries = {}; // 同上,記錄括號符頭(鬼音 ghost note,輕輕帶過的小鼓等),播放時用最輕的力度層
@@ -4502,12 +4476,9 @@ function useCalib(){ return $("useCalibration").checked && calibrationMap.length
    rubatoMap 存的是「彈性速度換算後的等效全音符座標」而非秒數,實際秒數仍透過 wholeToSec()
    依目前的tempo滑桿計算,所以调整tempo不需要重建這張表。 */
 let rubatoMap = []; // [{orig: 原始tWhole, warped: 換算後的等效全音符座標}],依orig遞增排序
-/* 匯入音檔時一律關掉彈性速度,理由跟速度滑桿被鎖住一樣:音檔是照它自己的原始速度線性播放的,
-   而彈性速度只會扭曲樂譜捲動/游標/鍵盤高亮的時間軸,兩邊會愈走愈開(實測使用者的曲子最多差
-   2.6 秒)。要跟真實錄音對齊應該用「校準」tap-along 功能,而不是彈性速度。 */
-/* 彈性速度一律開啟(使用者要求,沒有開關);匯入音檔、鼓組(律動要穩)時不套用 */
+/* 彈性速度一律開啟(使用者要求,沒有開關);鼓組不套用(律動要穩) */
 function rubatoEnabled(){
-  return !importedAudioBuffer && rubatoMap.length >= 2 && currentInstrument() !== "drum";
+  return rubatoMap.length >= 2 && currentInstrument() !== "drum";
 }
 
 /* Local Boundary Detection Model(LBDM,Cambouropoulos 2001):針對音高音程、IOI(音符間距)、
@@ -5049,7 +5020,7 @@ for (const id of ["cursorColor","cursorOpacity"]) {
   $(id).addEventListener("input", applyHighlightStyles);
 }
 $("reverbAmount").addEventListener("input", applyReverbAmount);
-$("reverbAmount").addEventListener("input", () => { if (drumVerbWet) drumVerbWet.gain.value = drumVerbWetTarget(); });
+$("reverbAmount").addEventListener("input", () => { if (drumVerbWet) drumVerbWet.gain.value = drumVerbWetTarget(); if (drumRoomWet) drumRoomWet.gain.value = drumRoomWetTarget(); });
 $("measureHl").addEventListener("change", applyHighlightStyles);
 $("lightTheme").addEventListener("change", applyTheme);
 $("lightTheme").addEventListener("change", () => {
@@ -5075,15 +5046,6 @@ function refreshDynamicI18nText(){
   if (typeof updateActionButtonTitles === "function") updateActionButtonTitles();
   if (typeof syncTempoDisplay === "function") syncTempoDisplay();
   if (typeof setPlayBtnState === "function" && typeof lastPlayBtnIsPlaying !== "undefined") setPlayBtnState(lastPlayBtnIsPlaying);
-  if (typeof importedAudioName !== "undefined") {
-    $("audioImportStatus").textContent = importedAudioName
-      ? T("audioImportedStatus", { name: importedAudioName })
-      : T("audioImportStatusDefault");
-    if ($("tempo").disabled) {
-      $("tempo").title = T("tempoLockedTitle");
-      $("tempoVal").title = T("tempoLockedTitle");
-    }
-  }
   if (typeof importedBgImageName !== "undefined") {
     $("bgImageStatus").textContent = importedBgImageName
       ? T("bgImportedStatus", { name: importedBgImageName })
@@ -5789,25 +5751,9 @@ async function beginPlayback(fromSec){
   startPlayback(fromSec);
 }
 
-/* 匯入音檔取代合成音時,直接整段排程播放這個音檔本身,不再逐音符觸發樂器/鼓組音色。
-   假設音檔的開頭對齊樂譜的起點(tWhole=0),跟現有的捲動/計時邏輯共用同一個 startCtxTime,
-   所以中途暫停、拖動進度都不用特別處理,直接用 offsetSec 從音檔對應位置接著播即可 */
-function scheduleImportedAudio(startTime, offsetSec){
-  if (!importedAudioBuffer || offsetSec >= importedAudioBuffer.duration) return;
-  const src = audioCtx.createBufferSource();
-  src.buffer = importedAudioBuffer;
-  src.connect(masterGain);
-  src.start(startTime, offsetSec);
-  scheduled.push(src);
-}
-
 function startAudioFrom(fromSec){
   startCtxTime = audioCtx.currentTime - fromSec;
   scheduled = [];
-  if (importedAudioBuffer) {
-    scheduleImportedAudio(audioCtx.currentTime, fromSec);
-    return;
-  }
   const calib = useCalib();
   computeDrumPerformance(); // 依目前的速度重算(速度會影響「越快越輕」)
   pianoResetVoices(); gtrRR = {};
@@ -7622,45 +7568,6 @@ $("instrument").addEventListener("change", () => {
   updateTransposeAvailability();
 });
 
-/* ── 匯入音檔取代合成音色 ─────────────────── */
-$("audioImportBtn").addEventListener("click", () => $("audioImportFile").click());
-$("audioImportFile").addEventListener("change", async e => {
-  const file = e.target.files[0];
-  e.target.value = "";
-  if (!file) return;
-  ensureAudio();
-  setStatus(T("statusReadingAudio"));
-  try {
-    const arr = await file.arrayBuffer();
-    importedAudioBuffer = await audioCtx.decodeAudioData(arr);
-    importedAudioName = file.name;
-    $("audioImportStatus").textContent = T("audioImportedStatus", { name: file.name });
-    $("audioImportClearBtn").disabled = false;
-    setStatus(T("statusAudioReady"));
-    // 匯入的音檔永遠用原始速度播放,不會跟著這個滑桿變速——調速度只會讓樂譜/鍵盤高亮
-    // 跟音檔漸漸不同步,乾脆直接鎖住,真的需要對齊時應該用下面的「校準」tap-along 功能
-    $("tempo").disabled = true;
-    $("tempo").title = T("tempoLockedTitle");
-    $("tempoVal").disabled = true;
-    $("tempoVal").title = $("tempo").title;
-    if (playing) { stopAudioOnly(); startAudioFrom(currentSec()); }
-  } catch (err) {
-    setStatus(T("statusAudioReadFailed", { msg: err.message || err }));
-  }
-});
-$("audioImportClearBtn").addEventListener("click", () => {
-  importedAudioBuffer = null;
-  importedAudioName = null;
-  $("audioImportStatus").textContent = T("audioImportStatusDefault");
-  $("audioImportClearBtn").disabled = true;
-  setStatus(T("statusAudioRemoved"));
-  $("tempo").disabled = false;
-  $("tempo").title = "";
-  $("tempoVal").disabled = false;
-  $("tempoVal").title = "";
-  if (playing) { stopAudioOnly(); startAudioFrom(currentSec()); }
-});
-
 /* ── 匯入背景圖片:放在樂譜後面,跟現有「背景透明度」共用同一個透明度控制,現場畫面跟匯出影片都會用到 ── */
 let customBgImage = null; // 解碼完成的 Image 物件,匯出時直接畫進 canvas
 
@@ -7904,6 +7811,8 @@ function loadDrumKit(){
   kitLoading = (async () => {
     const { base, man } = await loadDrumManifest();
     drumManifest = man;
+    if (man && !drumRoomBuf) fetchSample(base + "room.flac").then(r => r.ok ? r.arrayBuffer() : null)
+      .then(a => a && audioCtx.decodeAudioData(a)).then(b => { if (b) { drumRoomBuf = b; drumUseRoom(); } }).catch(() => {});
     if (man) {
       const budget = drumMemoryBudgetBytes();
       let used = 0;
@@ -8000,14 +7909,20 @@ function pickDrumLayer(name, s){
       送出端先濾掉 250Hz 以下(大鼓送進去會糊),預延遲 12ms 讓擊打先清楚出來;主要送小鼓與中鼓,
       銅鈸送一點點。殘響量跟著設定裡的「殘響」滑桿走
    4) 匯流排輕微 EQ:350Hz 附近稍微挖一點(悶箱聲),10kHz 以上稍微提亮
+   5) 鼓房(房間麥克風,2026-10):drums/room.flac(drums/build/room_ir.py,跟鋼琴音樂廳同一套幾何聲學模擬:
+      8.5×6.5×3.6m 錄音室、RT60 約 0.55 秒、早期反射與各頻率衰減是物理算的),每一擊都同樣送進去(房間麥克風
+      收得到整組鼓),跟 plate 並聯:鼓房給「鼓在房間裡」的真實感,plate 保留延音與亮度。殘響滑桿一起控制
+   plate 的低頻左右相關性修正成約 0.6(以前左右是各自獨立的亂數,低頻會飄、有相位感;真實殘響低頻左右幾乎一樣)
    整條路徑繞過主輸出的響度壓縮器(那是給鋼琴的),只有主限幅器當安全網。
    參數由自動量測挑出來:小鼓餘韻長度、殘響/直接音比、立體聲寬度、力度傳遞、響度與峰值 */
 const DRUM_BUS = {
   makeup: 0.70,   // 0.62 → 0.70:補回舊限幅器自動加的 +1.1dB。試過再大 3dB:響度只多 1.5~2dB、LRA 少 1.5LU(力度被限幅器吃掉),不划算
   parallel: 0.35, compThreshold: -32, compRatio: 8, compAttack: 0.003, compRelease: 0.12,
   verb: 3.5, verbSeconds: 2.6, verbRT60: 2.2, verbPreDelay: 0.012, verbHighpass: 250,
-  eqBoxFreq: 350, eqBoxGain: -1.5, eqAirGain: 1.5
+  eqBoxFreq: 350, eqBoxGain: -1.5, eqAirGain: 1.5,
+  roomSend: 0.9, roomWet: 1.0, roomHighpass: 70   // roomSend 0.9:鼓房比乾聲小約 12dB(小鼓)~14dB(大鼓、hi-hat),真實錄音房間麥克風常見 −6~−12dB;0.35 時 −20dB 聽不出來
 };
+let drumRoomBuf = null, drumRoomConv = null, drumRoomWet = null, drumRoomIn = null;
 let drumBus = null, drumVerbIn = null, drumVerbWet = null;
 function buildDrumPlateIR(seconds, rt60){
   const rate = audioCtx.sampleRate, len = Math.max(1, Math.floor(rate * seconds));
@@ -8027,7 +7942,18 @@ function buildDrumPlateIR(seconds, rt60){
       d[i] = lp * env * Math.min(1, tSec / 0.006);
     }
   }
+  // 低頻左右相關性:300Hz 以下往左右平均拉一半(單極低通分出低頻,高頻原封不動)
+  const L = ir.getChannelData(0), R = ir.getChannelData(1), k = 1 - Math.exp(-2 * Math.PI * 300 / rate);
+  let lpL = 0, lpR = 0;
+  for (let i = 0; i < len; i++) {
+    lpL += k * (L[i] - lpL); lpR += k * (R[i] - lpR);
+    const m = 0.5 * (lpL + lpR);
+    L[i] += 0.5 * (m - lpL); R[i] += 0.5 * (m - lpR);
+  }
   return ir;
+}
+function drumUseRoom(){
+  if (drumRoomConv && drumRoomBuf && !drumRoomConv.buffer) drumRoomConv.buffer = drumRoomBuf;
 }
 function getDrumBus(){
   if (drumBus && drumBus.context === audioCtx) return drumBus;
@@ -8055,11 +7981,19 @@ function getDrumBus(){
   const conv = audioCtx.createConvolver(); conv.buffer = buildDrumPlateIR(B.verbSeconds, B.verbRT60);
   drumVerbWet = audioCtx.createGain(); drumVerbWet.gain.value = drumVerbWetTarget();
   drumVerbIn.connect(hp); hp.connect(pre); pre.connect(conv); conv.connect(drumVerbWet); drumVerbWet.connect(out);
+  // 5) 鼓房:每一擊都送(drumRoomIn 的增益就是送出量),IR 載到才接上
+  drumRoomIn = audioCtx.createGain(); drumRoomIn.gain.value = B.roomSend;
+  const rhp = audioCtx.createBiquadFilter(); rhp.type = "highpass"; rhp.frequency.value = B.roomHighpass;
+  drumRoomConv = audioCtx.createConvolver();
+  drumRoomWet = audioCtx.createGain(); drumRoomWet.gain.value = drumRoomWetTarget();
+  drumRoomIn.connect(rhp); rhp.connect(drumRoomConv); drumRoomConv.connect(drumRoomWet); drumRoomWet.connect(out);
+  drumUseRoom();
   drumBus = input;
   return drumBus;
 }
 // 殘響量跟著設定裡的「殘響」滑桿(預設 30)走:滑桿 30 = DRUM_BUS.verb
 function drumVerbWetTarget(){ return DRUM_BUS.verb * reverbAmount() / 0.3; }
+function drumRoomWetTarget(){ return DRUM_BUS.roomWet * reverbAmount() / 0.3; }
 
 /* sustainSec:銅鈸/開放 hi-hat 的真實錄音自然延音長達 5~8 秒,快速段落直接整段播會糊成一片,
    要主動包一個振幅包絡收尾;鼓皮類不傳,讓它自然結束。
@@ -8098,6 +8032,7 @@ function playSample(name, when, gain, rate, sustainSec, strength, pan, send){
     g.connect(p); out = p;
   }
   out.connect(getDrumBus());
+  if (drumRoomIn) out.connect(drumRoomIn);
   if (send && drumVerbIn) {
     const sg = audioCtx.createGain();
     sg.gain.value = send;
@@ -9184,11 +9119,11 @@ function solveExportGain(E, P, block, releaseSec){
   if (g > 1 && !lraOk(g)) g = Math.max(1, bisect(lraOk, 1, g));   // 要調大才到得了 −14,但會把大小聲壓掉太多 → 停在保護線
   return g;
 }
-function exportHasDrums(){ return !importedAudioBuffer && events.some(ev => ev.notes.some(n => n.drum)); }
+function exportHasDrums(){ return events.some(ev => ev.notes.some(n => n.drum)); }
 async function measureExportGain(rangeStart, rangeEnd, onProgress){
   if (typeof OfflineAudioContext === "undefined" || typeof AudioWorkletNode === "undefined") return null;
   const KEEP = ["audioCtx", "masterGain", "masterLimiter", "masterOut", "masterBus", "masterLimiterNode", "masterReady", "reverbBus", "reverbConvolver", "reverbWet", "reverbPreDelay",
-    "pianoRoomBus", "pianoBusIn", "pianoBusCtx", "pianoVerbIn", "pianoVerbWet", "pianoVerbCtx", "pianoVerbConv", "pianoVerbPre", "pianoVerbHp", "pianoVerbHall", "pianoResIn", "pianoResGate", "pianoResCtx", "gtrVerbIn", "gtrVerbWet", "gtrVerbCtx", "drumBus", "drumVerbIn", "drumVerbWet",
+    "pianoRoomBus", "pianoBusIn", "pianoBusCtx", "pianoVerbIn", "pianoVerbWet", "pianoVerbCtx", "pianoVerbConv", "pianoVerbPre", "pianoVerbHp", "pianoVerbHall", "pianoResIn", "pianoResGate", "pianoResCtx", "gtrVerbIn", "gtrVerbWet", "gtrVerbCtx", "drumBus", "drumVerbIn", "drumVerbWet", "drumRoomConv", "drumRoomWet", "drumRoomIn",
     "scheduled", "startCtxTime", "ringingOpenHat", "pianoVoices", "pianoLastByKey", "pianoRRFlip", "gtrRR"];
   const saved = {};
   for (const k of KEEP) saved[k] = eval(k);
@@ -9224,30 +9159,26 @@ async function measureExportGain(rangeStart, rangeEnd, onProgress){
 /* 匯出區間的所有音符排程到目前的 audioCtx(以 startCtxTime 為曲子 rangeStart 的時間點)。
    即時匯出與匯出前的離線響度分析共用,兩邊排的音完全一樣 */
 function scheduleExportRange(rangeStart, rangeEnd, calib){
-  if (importedAudioBuffer) {
-    scheduleImportedAudio(startCtxTime, rangeStart); // 有匯入音檔就整段用它,不逐音符排程合成/取樣音色
-  } else {
-    gtrRR = {};
-    if (currentInstrument() === "piano") pianoSchedulePedalNoise(rangeStart, rangeEnd, sec => startCtxTime + sec - rangeStart);
-    const isGuitar = currentInstrument() === "guitar" || currentInstrument() === "guitarnylon";
-    for (const ev of events) {
-      const t = posToSec(ev.tWhole, calib);
-      if (t < rangeStart - 0.02 || t >= rangeEnd + 0.02) continue; // 只排程落在匯出區間內的音符
-      const chordAnchors = {};
-      const harmonyEndSec = ev.harmonyEndWhole != null
-        ? startCtxTime + ((posToSec(ev.harmonyEndWhole, calib)) - rangeStart)
-        : null;
-      const tech = (isGuitar && ev.guitarTech) ? Object.assign({}, ev.guitarTech, { vibrato: ev.vibrato }) : (isGuitar && ev.vibrato ? { vibrato: true } : null);
-      for (const n of ev.notes) {
-        const rollT = computeArpNoteOffsetSec(ev, n, t, calib);
-        const durSec = calib ? Math.max(calibToSec(ev.tWhole + n.durWhole) - t, 0.05) : spanSec(ev.tWhole, n.durWhole);
-        const noteHarmonyEndSec = (isGuitar && n.guitarRingEndWhole != null)
-          ? startCtxTime + ((posToSec(n.guitarRingEndWhole, calib)) - rangeStart)
-          : harmonyEndSec;
-        const noteTech = (isGuitar && n.glissTargetFreq != null) ? Object.assign({}, tech, { glissTargetFreq: n.glissTargetFreq }) : tech;
-        if (n.drum) { const h = humanizeDrumHit(ev, n); scheduleDrum(n.key, startCtxTime + (t - rangeStart) + rollT + h.dt, h); }
-        else scheduleNote(n.freq, startCtxTime + (t - rangeStart) + rollT + ((isGuitar ? n.gdt : n.pdt) || 0), durSec, ev.legato, ev.pedalOn, chordAnchors, noteHarmonyEndSec, ev.artic, noteTech, n.staff, isGuitar ? n.gvel : n.pvel, n);
-      }
+  gtrRR = {};
+  if (currentInstrument() === "piano") pianoSchedulePedalNoise(rangeStart, rangeEnd, sec => startCtxTime + sec - rangeStart);
+  const isGuitar = currentInstrument() === "guitar" || currentInstrument() === "guitarnylon";
+  for (const ev of events) {
+    const t = posToSec(ev.tWhole, calib);
+    if (t < rangeStart - 0.02 || t >= rangeEnd + 0.02) continue; // 只排程落在匯出區間內的音符
+    const chordAnchors = {};
+    const harmonyEndSec = ev.harmonyEndWhole != null
+      ? startCtxTime + ((posToSec(ev.harmonyEndWhole, calib)) - rangeStart)
+      : null;
+    const tech = (isGuitar && ev.guitarTech) ? Object.assign({}, ev.guitarTech, { vibrato: ev.vibrato }) : (isGuitar && ev.vibrato ? { vibrato: true } : null);
+    for (const n of ev.notes) {
+      const rollT = computeArpNoteOffsetSec(ev, n, t, calib);
+      const durSec = calib ? Math.max(calibToSec(ev.tWhole + n.durWhole) - t, 0.05) : spanSec(ev.tWhole, n.durWhole);
+      const noteHarmonyEndSec = (isGuitar && n.guitarRingEndWhole != null)
+        ? startCtxTime + ((posToSec(n.guitarRingEndWhole, calib)) - rangeStart)
+        : harmonyEndSec;
+      const noteTech = (isGuitar && n.glissTargetFreq != null) ? Object.assign({}, tech, { glissTargetFreq: n.glissTargetFreq }) : tech;
+      if (n.drum) { const h = humanizeDrumHit(ev, n); scheduleDrum(n.key, startCtxTime + (t - rangeStart) + rollT + h.dt, h); }
+      else scheduleNote(n.freq, startCtxTime + (t - rangeStart) + rollT + ((isGuitar ? n.gdt : n.pdt) || 0), durSec, ev.legato, ev.pedalOn, chordAnchors, noteHarmonyEndSec, ev.artic, noteTech, n.staff, isGuitar ? n.gvel : n.pvel, n);
     }
   }
 }
@@ -9271,7 +9202,7 @@ async function exportVideo(cfg){
       const rs = cfg.startSec != null ? Math.max(0, cfg.startSec) : 0, re = cfg.endSec != null ? Math.min(totalSec(), cfg.endSec) : totalSec();
       $("exportOverlayTitle").textContent = T("exportAnalyzingPct", { pct: 0 });
       $("exportFill").style.width = "0%";
-      const g = importedAudioBuffer ? null : await measureExportGain(rs, re, pct => {
+      const g = await measureExportGain(rs, re, pct => {
         $("exportOverlayTitle").textContent = T("exportAnalyzingPct", { pct });
         $("exportFill").style.width = pct + "%";
       });
