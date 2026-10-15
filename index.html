@@ -887,7 +887,7 @@ body.exporting-active .empty-card{
         <span class="switch"><input type="checkbox" id="measureHl"><span class="switch-track"></span></span><span data-i18n="measureHlLabel">小節高亮</span>
       </label>
       <label class="switch-row" id="rubatoRow" data-i18n-attr="title:rubatoTitle">
-        <span class="switch"><input type="checkbox" id="useRubato"><span class="switch-track"></span></span><span data-i18n="rubatoLabel">彈性速度</span>
+        <span class="switch"><input type="checkbox" id="useRubato" checked><span class="switch-track"></span></span><span data-i18n="rubatoLabel">彈性速度</span>
       </label>
       <label class="switch-row" data-i18n-attr="title:showTempoMarksTitle">
         <span class="switch"><input type="checkbox" id="showTempoMarks" checked><span class="switch-track"></span></span><span data-i18n="showTempoMarksLabel">速度記號</span>
@@ -1655,6 +1655,7 @@ function metronomeUnitLabel(beatUnit, dotCount){
 let importedAudioBuffer = null; // 使用者匯入的音檔(解碼後),有值時播放/匯出都改用這個,不再合成/取樣
 let importedAudioName = null;
 let scoreDynMarks = [], scoreWedges = []; // 力度記號與髮夾(記譜位置),鼓的整首力度用
+let scoreTempoWords = [];   // 速度文字 {t: 記譜位置, kind: "rit" | "accel" | "atempo"}(rit./rall./a tempo…,彈性速度模型用)
 let ghostNoteheadEntries = {}; // 同上,記錄括號符頭(鬼音 ghost note,輕輕帶過的小鼓等),播放時用最輕的力度層
 let crossNoteheadEntries = {}; // midi(取整數) -> 已排序的 {t,v} 陣列,記錄哪些時間點是打叉符頭(rim click等特殊擊法),用 findNearestEntry 容許誤差比對
 let articEntries = [], arpEntries = [];
@@ -2112,6 +2113,7 @@ async function loadScoreFile(file){
       crossNoteheadEntries[mk] = buildSortedEntries(parsed.crossNoteheadMap[mk]);
     }
     scoreDynMarks = parsed.dynMarks || [];
+    scoreTempoWords = parsed.tempoWords || [];
     scoreWedges = parsed.wedges || [];
     ghostNoteheadEntries = {};
     for (const mk of Object.keys(parsed.ghostNoteheadMap || {})) {
@@ -3421,6 +3423,7 @@ function parseXmlTimeline(xmlText){
     const outPedals = [];
     const measureBoundaries = []; // 每個小節開始時的 cursor(全音符定位),給吉他同弦延音判斷用
     const dynMarks = [];   // 力度記號 {t: 記譜位置(全音符), mark: "p"/"mf"/"ff"...}
+    const tempoWords = []; // 速度文字 {t, kind}:rit./rall./ritenuto/allarg./smorz.… = rit、accel./string. = accel、a tempo/Tempo I = atempo
     const wedges = [];     // 漸強/漸弱髮夾 {start, end, dir: "cresc"|"dim"}
     const openWedges = {};
     const staffOnsets = {}; // staffNum -> [{tWhole, durWhole, pcs:Set}], 給重複音型偵測用
@@ -3486,6 +3489,10 @@ function parseXmlTimeline(xmlText){
           const dynEl = child.getElementsByTagName("dynamics")[0];
           // gp-default-dynamics:Guitar Pro 匯入時第一個預設 f 只是顯示(見 gpToMusicXML),不當成力度記號
           if (dynEl && dynEl.children[0] && child.getAttribute("id") !== "gp-default-dynamics") dynMarks.push({ t: cursor, mark: dynEl.children[0].tagName.toLowerCase() });
+          for (const wEl of Array.from(child.getElementsByTagName("words"))) {
+            const kind = tempoWordKind(wEl.textContent);
+            if (kind) tempoWords.push({ t: cursor, kind });
+          }
           for (const w of Array.from(child.getElementsByTagName("wedge"))) {
             const type = w.getAttribute("type"), num = w.getAttribute("number") || "1";
             if (type === "crescendo" || type === "diminuendo") openWedges[num] = { start: cursor, dir: type === "crescendo" ? "cresc" : "dim" };
@@ -3676,7 +3683,7 @@ function parseXmlTimeline(xmlText){
     const measureRanges = measureBoundaries.map((start, i) => ({
       start, end: i + 1 < measureBoundaries.length ? measureBoundaries[i + 1] : cursor
     }));
-    return { slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges, articMap, arpMap, soundTempo, metronomeDisplay, timeSig, isDrumScore, crossNoteheadMap, ghostNoteheadMap, dynMarks, wedges, measureRanges, guitarTechMap, vibratoRanges: outWavyLines, scoreTitle };
+    return { slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges, articMap, arpMap, soundTempo, metronomeDisplay, timeSig, isDrumScore, crossNoteheadMap, ghostNoteheadMap, dynMarks, tempoWords, wedges, measureRanges, guitarTechMap, vibratoRanges: outWavyLines, scoreTitle };
   } catch (e) {
     console.error("讀取踏板/圓滑線資訊失敗:", e);
     return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, arpMap: {}, soundTempo: null, metronomeDisplay: null, timeSig: null, isDrumScore: false, crossNoteheadMap: {}, measureRanges: [], guitarTechMap: {}, vibratoRanges: [], scoreTitle: null };
@@ -3810,6 +3817,15 @@ function buildAutoPedalRanges(ranges, capWhole){
   const split = [];
   for (const r of out) for (let a = r.start; a < r.end - 1e-6; a += capWhole) split.push({ start: a, end: Math.min(r.end, a + capWhole) });
   return split.filter(r => r.end - r.start > 1e-6);
+}
+/* 譜上的速度文字分類(大小寫、句點、poco/molto 前綴都不影響);不是速度文字回傳 null */
+function tempoWordKind(text){
+  const s = (text || "").toLowerCase().replace(/\s+/g, " ").trim();
+  if (!s) return null;
+  if (/\b(a tempo|tempo i\b|tempo primo|tempo 1\b|in tempo|tempo giusto)/.test(s)) return "atempo";
+  if (/\b(rit|ritard|ritardando|riten|ritenuto|rall|rallent|rallentando|allarg|allargando|smorz|smorzando|calando|morendo|slentando|stentato)\b/.test(s) && !/ritmico/.test(s)) return "rit";
+  if (/\b(accel|accelerando|string|stringendo|incalzando|affrettando|precipitando)\b/.test(s)) return "accel";
+  return null;
 }
 function inRanges(t, ranges){
   for (const r of ranges) if (t >= r.start && t < r.end) return true;
@@ -4467,35 +4483,8 @@ function calibSecToWhole(sec){
 function useCalib(){ return $("useCalibration").checked && calibrationMap.length >= 2; }
 
 /* ── 彈性速度(Rubato)──────────────────────────────────────────────
-   套用已知的演奏學研究資料,模擬全曲的節奏彈性,而非機械式的固定拍點:
-   0) 樂句邊界偵測(phrase segmentation):不是用單一固定的休止長度去猜,而是採用
-      Local Boundary Detection Model(LBDM,Cambouropoulos 2001)——這是GTTM
-      (Lerdahl & Jackendoff《A Generative Theory of Tonal Music》1983)分組偏好
-      規則(Grouping Preference Rules,GPR2鄰近/GPR3改變)的數學形式化版本。同時
-      直接採用樂譜上明確的圓滑線(slur)結尾、fermata記號,這些是比數值模型更可靠、
-      直接來自樂譜本身的證據,優先權最高。細節見下方 detectPhraseBoundaries()。
-   1) 樂句拱形(phrase arch):Todd(1985)、KTH規則系統(Friberg/Bresin/Sundberg)的Phrase Arch
-      規則——樂句中段稍微加快,結尾則有明確的漸慢(Repp 1992分析Träumerei發現「每個樂段結尾」
-      都有明顯漸慢,不是只有整曲最後一個音才變慢),結尾約原速的80%。
-      注意:樂句結尾漸慢對本身已經是長音的音符會按比例打折——長音自己的時值已經有呼吸感,
-      不該再疊加百分比式的漸慢(百分比乘在本來就大的間距上,增加的絕對秒數會遠大於短音,
-      造成「只要是長音就被拉得特別長」的失真,長音不代表一定是樂句結尾)。
-   2) 結尾漸慢(final ritardando):Friberg & Sundberg(1999)用跑者煞停的運動學實測,推導出結尾
-      漸慢近似冪次曲線 v(x)=(1-x)^q,套用在整首曲子結尾以及樂譜上的fermata記號前。
-   3) 音值重音(agogic accent):Repp(1992)分析Schumann《夢幻曲》28個錄音版本,發現重拍或被
-      強調(tenuto/accent/fermata)的音符常被演奏者稍微拉長。
-   4) 微幅隨機抖動:Repp的研究也發現即使同一位演奏者反覆彈奏同一段落,時值仍有小幅自然差異,
-      這裡疊加極小幅度的偽隨機抖動(用既有的seededRand01,可重現、非每次播放都不同)。
-   5) 主旋律/伴奏差異化:以上1)、2)提到的樂句拱形跟樂句結尾漸慢,原本是從古典獨奏曲的演奏
-      研究(Todd、Repp的素材都是古典曲目)歸納出來的,套用在流行歌編曲(常見右手主旋律+左手
-      分解和絃/固定伴奏音型的織度)上會有落差——伴奏教材與實務上一致的共識是伴奏聲部要負責
-      撐住穩定的律動(groove),不能跟著旋律一起大幅度伸縮,不然律動感會不見;另外groove/
-      微時間差研究(microtiming)顯示流行、放克這類節奏導向音樂裡人類自然的時間差通常只有
-      ±50毫秒等級,遠比古典浪漫派的樂句彈性小得多。因此樂句拱形、樂句結尾漸慢在「這個時間點
-      沒有主旋律音、純伴奏」時只保留三成幅度,大部分時間讓伴奏維持穩定律動,主旋律(右手/
-      staff1)則保留完整幅度,像人聲一樣自由呼吸。全曲結尾/fermata的結構性大漸慢不受此限制,
-      因為那是雙手一起放慢的完整停止動作,不是樂句呼吸。
-   這套模型只調整整個樂團共用的主時間軸,所有樂器/雙手一起呼吸伸縮,不會各自獨立飄移脫拍。
+   模型與特徵見 buildRubatoMap() / rubatoFeatures()(ASAP 真人演奏資料訓練)。
+   只調整整個樂團共用的主時間軸,所有樂器/雙手一起呼吸伸縮,不會各自獨立飄移脫拍。
    rubatoMap 存的是「彈性速度換算後的等效全音符座標」而非秒數,實際秒數仍透過 wholeToSec()
    依目前的tempo滑桿計算,所以调整tempo不需要重建這張表。 */
 let rubatoMap = []; // [{orig: 原始tWhole, warped: 換算後的等效全音符座標}],依orig遞增排序
@@ -4504,7 +4493,7 @@ let rubatoMap = []; // [{orig: 原始tWhole, warped: 換算後的等效全音符
    2.6 秒)。要跟真實錄音對齊應該用「校準」tap-along 功能,而不是彈性速度。 */
 function rubatoEnabled(){
   const el = $("useRubato");
-  return !!(el && el.checked && !importedAudioBuffer && rubatoMap.length >= 2);
+  return !!(el && el.checked && !importedAudioBuffer && rubatoMap.length >= 2 && currentInstrument() !== "drum");   // 鼓組律動要穩
 }
 
 /* Local Boundary Detection Model(LBDM,Cambouropoulos 2001):針對音高音程、IOI(音符間距)、
@@ -4522,7 +4511,8 @@ function rubatoEnabled(){
    做法:同一個窗口(MIN_PHRASE_LEN)內只留邊界強度最高的一個,不會讓真的很短的樂句(強度
    夠突出)被壓掉,但擋掉密集出現、強度普通的邊界。樂譜上明確的證據(fermata/圓滑線結尾)
    不受這個窗口限制,因為那是直接來自樂譜本身、比任何數值強度都可靠。 */
-function detectPhraseBoundaries(){
+/* LBDM 句讀強度(每個事件「在它之前斷開」的強度,0~1);detectPhraseBoundaries 與彈性速度特徵共用 */
+function phraseBoundaryStrength(){
   const n = events.length;
   const topMidi = events.map(ev => {
     const pitched = ev.notes.filter(nn => nn.freq); // 和絃取最高音(旋律音)代表這個時間點的音高
@@ -4551,6 +4541,11 @@ function detectPhraseBoundaries(){
   const W_PITCH = 0.25, W_IOI = 0.5, W_REST = 0.25;
   const S = new Array(n).fill(0);
   for (let i = 0; i < n; i++) S[i] = W_PITCH * sPitch[i] + W_IOI * sIoi[i] + W_REST * sRest[i];
+  return S;
+}
+function detectPhraseBoundaries(){
+  const n = events.length;
+  const S = phraseBoundaryStrength();
 
   const slurEndAt = new Set(); // 樂譜上明確的圓滑線結尾:直接證據,不用猜
   for (let i = 0; i < n - 1; i++) {
@@ -4623,119 +4618,100 @@ function pinkNoiseAt(tWhole){
   return v / norm; // 約 [-0.5, 0.5]
 }
 
+/* 彈性速度模型的輸入特徵(每個事件一列,全部從樂譜算得出來;訓練與網頁執行共用這個函式,特徵保證一致)。
+   模型(RUBATO_MODEL)用 ASAP 資料集真人演奏的拍點訓練,預測「這個事件的局部速度 / 整首中位速度」的 log */
+const RUBATO_FEATURES = ["ioiNext", "ioiPrev", "dur", "restAfter", "bndHere", "bndNext", "barPhase", "downbeat", "toEnd", "fermata", "fermataNext",
+  "accent", "tenuto", "dynLevel", "dynSlope", "wedge", "pitchZ", "leapNext", "contour", "chord", "density", "slurEnd",
+  "phraseX", "phraseLen", "toPhraseEnd", "rit", "ritAge", "accel", "atempo", "beatsPerBar", "bpm"];
+function rubatoFeatures(){
+  const n = events.length;
+  if (n < 2) return null;
+  const T = events.map(ev => ev.tWhole), src = events.map(ev => ev.srcT != null ? ev.srcT : ev.tWhole);
+  const barLenAt = i => events[i].barLen > 0 ? events[i].barLen : 1;
+  const dur = events.map(ev => ev.notes.length ? Math.max(...ev.notes.map(nn => nn.durWhole || 0)) : 0);
+  const top = events.map(ev => { const p = ev.notes.filter(nn => nn.freq); return p.length ? Math.max(...p.map(nn => freqToMidi(nn.freq))) : null; });
+  const med = a => { const b = a.filter(x => x > 0).sort((x, y) => x - y); return b.length ? b[Math.floor(b.length / 2)] : 0.125; };
+  const iois = T.slice(1).map((t, i) => t - T[i]);
+  const medIoi = med(iois), medDur = med(dur);
+  const lg = x => Math.log2(Math.max(1e-3, x));
+  const S = phraseBoundaryStrength();
+  const tops = top.filter(x => x != null), mTop = tops.length ? tops.reduce((a, b) => a + b, 0) / tops.length : 60;
+  const sdTop = tops.length ? Math.sqrt(tops.reduce((a, b) => a + (b - mTop) ** 2, 0) / tops.length) || 1 : 1;
+  // 局部密度:前後半小節內的事件數
+  const dens = new Array(n); { let lo = 0, hi = 0; for (let i = 0; i < n; i++) { const h = barLenAt(i) / 2; while (hi < n && T[hi] <= T[i] + h) hi++; while (T[lo] < T[i] - h) lo++; dens[i] = hi - lo; } }
+  const medDens = med(dens);
+  // 樂句(跟舊的 buildRubatoMap 一樣合併太短的段落)
+  const ps = detectPhraseBoundaries(), phX = new Array(n).fill(0), phLen = new Array(n).fill(1), phEnd = new Array(n).fill(1);
+  { const merged = []; for (let k = 0; k < ps.length - 1; k++) { const s0 = ps[k], e0 = ps[k + 1], span = (e0 < n ? T[e0] : totalWhole) - T[s0];
+      if (merged.length && ((e0 - s0) < 3 || span < barLenAt(s0) * 0.5)) merged[merged.length - 1][1] = e0; else merged.push([s0, e0]); }
+    for (const [s0, e0] of merged) { const t0 = T[s0], t1 = e0 < n ? T[e0] : totalWhole; for (let i = s0; i < Math.min(e0, n); i++) { phX[i] = (T[i] - t0) / Math.max(1e-6, t1 - t0); phLen[i] = (t1 - t0) / barLenAt(i); phEnd[i] = (t1 - T[i]) / barLenAt(i); } } }
+  const words = [...(scoreTempoWords || [])].sort((a, b) => a.t - b.t);
+  const lvl = t => { try { return pianoLevelAt(t); } catch (e) { return 0; } };
+  const X = [];
+  for (let i = 0; i < n; i++) {
+    const ev = events[i], bl = barLenAt(i), a = ev.artic || {}, an = (events[i + 1] && events[i + 1].artic) || {};
+    const ioiN = i + 1 < n ? T[i + 1] - T[i] : (dur[i] || medIoi), ioiP = i > 0 ? T[i] - T[i - 1] : medIoi;
+    let wedge = 0; for (const w of scoreWedges || []) if (src[i] >= w.start && src[i] < w.end) { wedge = w.dir === "cresc" ? 1 : -1; break; }
+    let localSum = 0, localN = 0; for (let j = i; j >= 0 && T[j] >= T[i] - bl; j--) if (top[j] != null) { localSum += top[j]; localN++; }
+    for (let j = i + 1; j < n && T[j] <= T[i] + bl; j++) if (top[j] != null) { localSum += top[j]; localN++; }
+    let w = null; for (const x of words) { if (x.t <= src[i] + 1e-6) w = x; else break; }
+    const age = w ? (src[i] - w.t) / bl : 99;
+    const slurEnd = i + 1 < n && inRanges(src[i], slurRanges) && !inRanges(src[i + 1], slurRanges) ? 1 : 0;
+    const bpmHere = (scoreSoundTempo > 0 ? scoreSoundTempo : 100) * localTempoRatio(T[i]);   // 譜上寫的速度(跟速度滑桿無關;沒寫速度當 100)
+    X.push([lg(ioiN / medIoi), lg(ioiP / medIoi), lg((dur[i] || medDur) / medDur), Math.max(0, (i + 1 < n ? T[i + 1] : totalWhole) - T[i] - dur[i]) / bl,
+      S[i] || 0, i + 1 < n ? S[i + 1] || 0 : 1, ev.barPos != null ? ev.barPos / bl : 0, ev.barPos != null && ev.barPos < 1e-6 ? 1 : 0,
+      lg(1 + (totalWhole - T[i]) / bl), a.fermata ? 1 : 0, an.fermata ? 1 : 0, a.accent || a.strongAccent ? 1 : 0, a.tenuto ? 1 : 0,
+      lvl(src[i]), lvl(src[i] + bl) - lvl(src[i] - bl), wedge, top[i] != null ? (top[i] - mTop) / sdTop : 0,
+      top[i] != null && i + 1 < n && top[i + 1] != null ? Math.abs(top[i + 1] - top[i]) / 12 : 0, top[i] != null && localN ? (top[i] - localSum / localN) / 12 : 0,
+      ev.notes.filter(nn => nn.freq).length / 4, lg(dens[i] / medDens), slurEnd, phX[i], lg(phLen[i]), Math.min(8, phEnd[i]),
+      w && w.kind === "rit" && age < 4 ? 1 : 0, w && w.kind === "rit" ? Math.min(4, age) : 4, w && w.kind === "accel" && age < 4 ? 1 : 0,
+      w && w.kind === "atempo" && age < 1 ? 1 : 0, scoreTimeSig && scoreTimeSig.beats ? scoreTimeSig.beats : 4, lg(bpmHere / 100)]);
+  }
+  return X;
+}
+/* 彈性速度(預設開啟,2026-10 改成資料驅動):
+   用 ASAP 資料集(MAESTRO 等真人鋼琴家演奏,每一拍都有標注)訓練的梯度提升樹(tools/audiotest/rubato_train.py),
+   從樂譜特徵(rubatoFeatures:音長與密度、句讀強度、休止、小節內位置、力度記號/髮夾、旋律高低與走向、
+   延長記號、離句尾/曲尾多遠、rit./accel./a tempo 文字、譜上速度)預測每個音「局部速度 / 整首中位速度」。
+   不同鋼琴家彈同一首的速度曲線相關係數 0.75~0.86(在哪裡放慢、哪裡往前推大多由樂譜決定),
+   所以模型學的是多位鋼琴家的共識。舊的規則模型(Todd 樂句拱形 + 句尾漸慢)量出來跟真人放慢的位置幾乎無關,已移除。
+   預測值在約半拍內做時間加權平滑(模型是逐拍訓練的,一拍內不該逐音跳動),中位數歸零(整首平均速度 = 速度滑桿),
+   乘 RUBATO_AMOUNT 後換算成速度倍率。純鼓譜、鼓組不套用(律動要穩)。所有樂器/雙手共用同一條時間軸一起呼吸 */
+const RUBATO_AMOUNT = 1.0, RUBATO_SMOOTH_WHOLE = 0.125, RUBATO_MULT_RANGE = [0.45, 1.6];
+const RUBATO_MODEL = null;   // RUBATO_MODEL_JSON(由 rubato_train.py 產生)
+function rubatoPredict(x){
+  const M = RUBATO_MODEL; let v = M.init;
+  for (const [f, thr, L, R, val] of M.trees) { let k = 0; while (L[k] !== -1) k = x[f[k]] <= thr[k] ? L[k] : R[k]; v += val[k]; }
+  return v;
+}
 function buildRubatoMap(){
   rubatoMap = [];
-  if (!events.length) return;
-  const ARCH_AMOUNT = 0.12;        // 樂句拱形中段加速幅度(+12%)。實測發現前一版(7%)疊加伴奏
-                                    // 打三折、長音打折後,相鄰音符間隔的變化中位數只剩約5毫秒,
-                                    // 遠低於時間知覺研究裡「單一音符時間位移」的最基本可察覺
-                                    // 門檻(約10毫秒),等於大部分音符聽起來跟沒開沒兩樣,故調高
-  const PHRASE_END_MIN_MULT = 0.80;  // 每個樂句結尾漸慢到原速的80%(原本87.5%,同樣理由調深)
-  const PHRASE_END_EASE_POW = 3;     // 冪次越大,漸慢越集中在樂句最後一小段,不會整句都在慢
-  // 長音本身的時值已經帶有「呼吸感」,樂句結尾漸慢不該再疊加在已經很長的音上,否則長音會被
-  // 不成比例地拉得更長(百分比乘在本來就大的間距上,增加的絕對秒數自然遠大於短音)。用這首曲子
-  // 自己的音符時值中位數當基準,音符比基準長就按比例調降漸慢幅度,基準以下(一般短音)不受影響
-  const noteDurs = events.map(ev => ev.notes.length ? Math.max(...ev.notes.map(n => n.durWhole || 0)) : 0).filter(d => d > 0).sort((a, b) => a - b);
-  const medianDurWhole = noteDurs.length ? noteDurs[Math.floor(noteDurs.length / 2)] : 0.125;
-  const RITARD_Q = 2.2;        // 跑者煞停模型的冪次(Friberg & Sundberg論文常見範圍1.5~2.7)
-  const RITARD_SPAN_WHOLE = 1; // 結尾/fermata前多少全音符範圍內開始漸慢(約一小節)
-  const RITARD_MIN_MULT = 0.4; // 全曲結尾/fermata的結構性漸慢,最多放慢到原速的40%
-  const AGOGIC_AMOUNT = 0.08;  // 重音/延長記號的音值重音幅度(同樣理由調高)
-  const JITTER_AMOUNT = 0.015; // 微幅隨機抖動(±1.5%)
-  // 流行歌編曲常見的織度是:右手主旋律像人聲一樣自由伸縮,左手則是分解和絃/固定音型負責撐住
-  // 律動(groove)。伴奏聲部如果跟著旋律的樂句呼吸一起大幅度伸縮,律動感就會不見,聽起來不像
-  // 流行歌伴奏,反而更像古典獨奏會全部聲部一起呼吸的彈法。這裡讓「這個時間點沒有旋律音、
-  // 純伴奏」的樂句拱形/樂句結尾漸慢幅度打折,只留三成,律動大部分時間維持穩定;有主旋律音的
-  // 時間點(通常也是雙手同時落下的時候)才用完整幅度,讓主旋律保有像人聲一樣的表情空間。
-  // 全曲結尾/fermata的結構性大漸慢不受此限制,因為那是整個樂團(雙手)一起放慢的完整停止動作。
-  const MELODY_STAFF = 1;
-  const ACCOMP_DAMPEN = 0.3;
-  // 但「這個時間點有沒有旋律音」是個 0/1 的訊號,而且翻轉得很頻繁(實測使用者的曲子有 23%
-  // 的相鄰事件會翻轉)。直接拿它當權重,等於樂句拱形與樂句結尾漸慢的幅度在音符之間反覆開關,
-  // 在漸慢區段裡會產生 0.80 ↔ 1.00 的來回跳動,那不是伴奏穩住律動,是一跛一跛。
-  // 真實演奏裡雙手是一起呼吸的,只是伴奏織度為主的段落整體伸縮幅度比較小——所以改成在
-  // ±MELODY_SMOOTH_WHOLE 的時間窗內取旋律音出現的比例:整段有旋律的地方權重接近 1,
-  // 純伴奏的過門/間奏才降到 ACCOMP_DAMPEN,中間平滑過渡,不會逐音切換。
-  const MELODY_SMOOTH_WHOLE = 0.5; // 約兩拍(4/4)
-  const melodyRaw = events.map(ev => ev.notes.some(nn => nn.freq && (nn.staff || 1) === MELODY_STAFF) ? 1 : 0);
-  const melodyWeights = new Array(events.length);
-  {
-    let lo = 0, hi = 0, sum = 0;
-    for (let i = 0; i < events.length; i++) {
-      const t = events[i].tWhole;
-      while (hi < events.length && events[hi].tWhole <= t + MELODY_SMOOTH_WHOLE) { sum += melodyRaw[hi]; hi++; }
-      while (lo < hi && events[lo].tWhole < t - MELODY_SMOOTH_WHOLE) { sum -= melodyRaw[lo]; lo++; }
-      const frac = hi > lo ? sum / (hi - lo) : melodyRaw[i];
-      melodyWeights[i] = ACCOMP_DAMPEN + (1 - ACCOMP_DAMPEN) * frac;
-    }
+  if (events.length < 2 || !RUBATO_MODEL) return;
+  if (events.every(ev => ev.notes.every(nn => nn.drum))) return;   // 純鼓譜:律動要穩,不做彈性速度
+  const X = rubatoFeatures();
+  if (!X) return;
+  const raw = X.map(rubatoPredict), n = events.length, T = events.map(ev => ev.tWhole);
+  // 時間加權平滑(±RUBATO_SMOOTH_WHOLE)
+  const y = new Array(n);
+  for (let i = 0, lo = 0, hi = 0; i < n; i++) {
+    while (T[lo] < T[i] - RUBATO_SMOOTH_WHOLE) lo++;
+    while (hi < n && T[hi] <= T[i] + RUBATO_SMOOTH_WHOLE) hi++;
+    let sw = 0, sv = 0;
+    for (let j = lo; j < hi; j++) { const w = Math.max(1e-3, (j + 1 < n ? T[j + 1] : totalWhole) - T[j]); sw += w; sv += w * raw[j]; }
+    y[i] = sw > 0 ? sv / sw : raw[i];
   }
-
-  // 段落太短就併入前一段,避免拱形曲線太誇張。同樣要看音樂時間而不是只看音符個數:
-  // fermata 造成的邊界不受最短長度限制,所以這裡還是可能收到很短的段落
-  const barWholeForPhrase = (scoreTimeSig && scoreTimeSig.beats > 0 && scoreTimeSig.beatType > 0)
-    ? scoreTimeSig.beats / scoreTimeSig.beatType : 1;
-  const phraseStarts = detectPhraseBoundaries();
-  const phrases = [];
-  for (let i = 0; i < phraseStarts.length - 1; i++) {
-    const s = phraseStarts[i], e = phraseStarts[i + 1];
-    const spanWhole = (events[e] ? events[e].tWhole : totalWhole) - events[s].tWhole;
-    const tooShort = (e - s) < 3 || spanWhole < barWholeForPhrase * 0.5;
-    if (phrases.length && tooShort) phrases[phrases.length - 1].end = e;
-    else phrases.push({ start: s, end: e });
-  }
-  // 樂句內的位置要用「音樂時間」算,不能用第幾個音符算。Todd(1985)的樂句拱形模型本來就是
-  // 把速度寫成樂譜時間位置的函數;用音符序號的話,同一個樂句裡只要織度不平均(前半是十六分音符
-  // 跑動、後半是長音),序號的中點就會落在時間上的很前面,拱形的頂點跟結尾漸慢都會落錯位置——
-  // 尤其會讓一整串短音符從中途就開始被漸慢曲線煞車。
-  const posInPhrase = new Array(events.length);
-  for (const ph of phrases) {
-    const t0 = events[ph.start].tWhole;
-    const t1 = events[ph.end] ? events[ph.end].tWhole : totalWhole;
-    const span = Math.max(1e-6, t1 - t0);
-    for (let i = ph.start; i < ph.end; i++) posInPhrase[i] = Math.min(1, (events[i].tWhole - t0) / span);
-  }
-
-  // 結尾漸慢的目標點:曲子真正的結尾,以及樂譜上每一個fermata
-  const ritardTargets = [totalWhole];
-  for (const ev of events) if (ev.artic && ev.artic.fermata) ritardTargets.push(ev.tWhole);
-  ritardTargets.sort((a, b) => a - b);
-  let ritardPtr = 0;
-
-  function localTempoMult(i){
-    const ev = events[i];
-    const x = posInPhrase[i] || 0;
-    const melodyWeight = melodyWeights[i];
-    const archMult = 1 + ARCH_AMOUNT * Math.sin(Math.PI * x) * melodyWeight; // 樂句中段加速
-    const ownDurWhole = ev.notes.length ? Math.max(...ev.notes.map(nn => nn.durWhole || 0)) : medianDurWhole;
-    const lenDampen = Math.min(1, medianDurWhole / Math.max(ownDurWhole, medianDurWhole));
-    const phraseEndRitard = 1 - (1 - PHRASE_END_MIN_MULT) * Math.pow(x, PHRASE_END_EASE_POW) * lenDampen * melodyWeight; // 樂句結尾漸慢(對長音、純伴奏都打折)
-    let mult = archMult * phraseEndRitard;
-    while (ritardPtr < ritardTargets.length - 1 && ritardTargets[ritardPtr] < ev.tWhole) ritardPtr++;
-    const ritardDist = Math.max(0, ritardTargets[ritardPtr] - ev.tWhole);
-    if (ritardDist < RITARD_SPAN_WHOLE) {
-      const rx = 1 - ritardDist / RITARD_SPAN_WHOLE;
-      // 註:曾經改成把曲線縮放進 [RITARD_MIN_MULT, 1](讓收尾在數值上更平滑、沒有突然的落差),
-      // 但實際聽感反而是這個原本的版本比較自然,所以維持原樣不要再「修」它。
-      mult *= Math.max(RITARD_MIN_MULT, Math.pow(1 - rx, RITARD_Q));
-    }
-    const a = ev.artic;
-    if (a && (a.tenuto || a.fermata || a.accent || a.strongAccent)) mult *= (1 - AGOGIC_AMOUNT);
-    const jitter = 1 + pinkNoiseAt(ev.tWhole) * 2 * JITTER_AMOUNT;
-    mult *= jitter;
-    return Math.max(0.4, Math.min(1.7, mult));
-  }
-
-  // warped 用「開頭速度下的等效全音符」:先照樂譜的速度變化(tempoMap)換算,再套彈性速度,樂譜中途換速度也對得上
+  const sorted = [...y].sort((a, b) => a - b), med = sorted[Math.floor(n / 2)];
+  const mult = y.map(v => Math.max(RUBATO_MULT_RANGE[0], Math.min(RUBATO_MULT_RANGE[1], Math.exp((v - med) * RUBATO_AMOUNT))));
+  // warped 用「開頭速度下的等效全音符」:先照樂譜的速度變化(tempoMap)換算,再套彈性速度
   const C = w => wholeToSec(w) * bpm() / 240;
-  let cumWarped = C(events[0].tWhole);
-  rubatoMap.push({ orig: events[0].tWhole, warped: cumWarped });
-  for (let i = 0; i < events.length - 1; i++) {
-    cumWarped += (C(events[i + 1].tWhole) - C(events[i].tWhole)) / localTempoMult(i);
-    rubatoMap.push({ orig: events[i + 1].tWhole, warped: cumWarped });
+  let cumWarped = C(T[0]);
+  rubatoMap.push({ orig: T[0], warped: cumWarped });
+  for (let i = 0; i < n - 1; i++) {
+    cumWarped += (C(T[i + 1]) - C(T[i])) / mult[i];
+    rubatoMap.push({ orig: T[i + 1], warped: cumWarped });
   }
-  const tailWhole = totalWhole - events[events.length - 1].tWhole;
-  if (tailWhole > 0) {
-    cumWarped += (C(totalWhole) - C(events[events.length - 1].tWhole)) / localTempoMult(events.length - 1);
+  if (totalWhole > T[n - 1]) {
+    cumWarped += (C(totalWhole) - C(T[n - 1])) / mult[n - 1];
     rubatoMap.push({ orig: totalWhole, warped: cumWarped });
   }
 }
@@ -4935,6 +4911,17 @@ $("tempo").addEventListener("input", () => {
     startAudioFrom(cur);
   }
   updateTimeLabel(playing ? currentSec() : pausedAtSec);
+});
+
+/* 彈性速度開關:切換前後時間軸不同,用切換前的時間軸算出目前在樂譜的位置,再換成新時間軸的秒數繼續 */
+$("useRubato").addEventListener("change", () => {
+  const el = $("useRubato");
+  el.checked = !el.checked;
+  const w = secToWhole(playing ? currentSec() : pausedAtSec);
+  el.checked = !el.checked;
+  const sec = posToSec(w, useCalib());
+  if (playing) { stopAudioOnly(); startAudioFrom(sec); } else pausedAtSec = sec;
+  updateTimeLabel(sec);
 });
 
 /* 套用一個新的 BPM 數值:同步滑桿/數字框/小按鈕顯示,播放中的話從目前位置以新速度重新排程 */
@@ -5314,7 +5301,7 @@ $("exportTitleInput").addEventListener("input", () => {
    所以這裡只還原數值,不用在頁面載入時就建立 AudioContext(那會被瀏覽器擋下來)。 */
 /* 彈性速度暫時下架的旗標。宣告在這裡是因為 savePrefs() 會用到它,而 const 有暫時性死區,
    放在後面會在存檔時炸掉 */
-const FEATURE_RUBATO = false;
+const FEATURE_RUBATO = false;   // 資料驅動模型訓練完成、RUBATO_MODEL 放進來之後改 true(預設開啟)
 const PREF_KEY = "scrollscore_prefs";
 const PREF_FIELDS = [
   { id: "instrument",        prop: "value" },
