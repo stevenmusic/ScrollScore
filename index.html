@@ -6270,8 +6270,12 @@ const PIANO_MAX_VOICES = (isIOSDevice() || (navigator.deviceMemory && navigator.
    6) 重音/強音記號、長音稍重、很短的音稍輕
    7) 左右手各自緩慢的起伏(AR(1))+ 每個音一點點隨機,和弦的音不會完全同時(最多晚 7ms)
    所有隨機都以位置為種子,同一首曲子每次播放/匯出都一樣 */
-const PIANO_ACCENT = { accent: 7, strong: 10, soft: 3 };   // 重音記號加的力度(以前 11/16/5,整個時間點兩手一起加)
-const PIANO_MOMENTARY = { sf: 14, sfz: 16, sffz: 20, fz: 14, rf: 8, rfz: 10, sfp: 16, fp: 14 };
+/* 重音與 sf 類記號:用「音量多幾 dB」表示,換算成力度倍數 10^(dB/40)(音量 ∝ 力度²)。
+   以前是固定加力度(+11/+16、sf +14…):弱奏時同樣 +11 力度音量多 3dB 以上、2kHz 以上亮 5~7dB,使用者反映重音太重。
+   現在弱奏、強奏都是同樣的 dB(高頻一樣會跟著力度亮一點,這是真鋼琴敲重的音色)。fp/sfp 是「強起再弱」,仍照力度加 */
+const PIANO_ACCENT_DB = { accent: 1.0, strong: 1.8, soft: 0.5 };
+const PIANO_MOMENTARY_DB = { sf: 2, sfz: 2.5, sffz: 3.5, fz: 2, rf: 1.2, rfz: 1.5 };
+const PIANO_MOMENTARY = { sf: 14, sfz: 16, sffz: 20, fz: 14, rf: 8, rfz: 10, sfp: 16, fp: 14 };   // 鋼琴只用 sfp/fp(其他見 PIANO_MOMENTARY_DB);吉他照舊
 function pianoLevelAt(t){
   if (t == null) return 0;
   let off = 0;   // una corda(弱音踏板)整段小聲一點
@@ -6332,7 +6336,8 @@ function computePianoDynamics(){
     k++;
     let base = 70 + 150 * pianoLevelAt(ev.srcT);
     const mom = ev.srcT != null && scoreDynMarks.find(d => d.mark in PIANO_MOMENTARY && Math.abs(d.t - ev.srcT) < 1e-4);
-    if (mom) base += PIANO_MOMENTARY[mom.mark];
+    let momDb = 0;
+    if (mom) { if (mom.mark in PIANO_MOMENTARY_DB) momDb = PIANO_MOMENTARY_DB[mom.mark]; else base += PIANO_MOMENTARY[mom.mark]; }
     if (ev.barPos != null && ev.beatLen > 0) {
       const bf = ev.barPos / ev.beatLen, frac = Math.abs(bf - Math.round(bf));
       if (ev.barPos < 1e-4) base += 3;
@@ -6357,9 +6362,9 @@ function computePianoDynamics(){
       for (const n of ns) {
         const m = freqToMidi(n.freq);
         let v = base + drift[rh ? 1 : 2];
-        // 重音只加在有標記的那一手(n.artic);約小半級力度(使用者反映太重:以前 +11/+16 而且兩手一起加)
+        // 重音只加在有標記的那一手(n.artic),用 dB 換算(PIANO_ACCENT_DB);sf 類兩手都加
         const na = n.artic || ev.artic;
-        if (na) v += na.strongAccent ? PIANO_ACCENT.strong : na.accent ? PIANO_ACCENT.accent : na.softAccent ? PIANO_ACCENT.soft : 0;
+        const accDb = (na ? (na.strongAccent ? PIANO_ACCENT_DB.strong : na.accent ? PIANO_ACCENT_DB.accent : na.softAccent ? PIANO_ACCENT_DB.soft : 0) : 0) + momDb;
         if (rh) {
           if (n === top) {
             v += ns.length > 1 ? 6 : 4;
@@ -6372,6 +6377,7 @@ function computePianoDynamics(){
         }
         if (n.durWhole >= 0.5) v += 2; else if (n.durWhole <= 1 / 16 + 1e-6) v -= 2;
         v += (seededRand01(k * 7.31 + m * 0.137) - 0.5) * 5;
+        if (accDb) v *= Math.pow(10, accDb / 40);
         n.pvel = Math.max(8, Math.min(124, v));
         n.pdt = chord && !(rh && n === top) && n.rollIndex == null ? seededRand01(k * 5.71 + m * 0.291) * 0.007 : 0;
       }
