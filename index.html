@@ -4047,7 +4047,12 @@ function isChokeWord(text){
   return /(^|[^a-z])(mute|muted|mutes|choke|choked|chk|grab|grabbed|damp|damped|dampen|dampened|muffle|muffled|secco|sec|etouffe|etouffez|gedampft|abdampfen|smorzato secco)([^a-z]|$)/.test(s)
     || /止音|悶音|闷音|抓鈸|抓镲|ミュート|チョーク/.test(s);
 }
-const DRUM_CHOKE_KEYS = new Set([49, 57, 55, 52, 51, 59, 53]);   // crash、splash、china、ride(會一直響、可以用手抓住的鈸)
+const DRUM_CHOKE_KEYS = new Set([49, 57, 55, 52, 51, 59, 53]);
+/* 止音的時間:記譜慣例(Weinberg/PAS)是「打完立刻抓住」,不是等到音符時值結束——等到時值結束的話,
+   慢歌一個八分音符就要響 0.3~0.4 秒、殘響也被餵得很滿,聽起來還是一大片(使用者反映太長)。
+   打下去 DRUM_CHOKE_DELAY 秒(手從鼓棒換到抓鈸的時間)就抓,音符比這還短就照時值;抓住後 DRUM_CHOKE_FADE 秒內收掉 */
+const DRUM_CHOKE_DELAY = 0.09, DRUM_CHOKE_FADE = 0.035;
+function drumChokeAt(when, durSec){ return when + Math.max(0.04, Math.min(DRUM_CHOKE_DELAY, durSec || DRUM_CHOKE_DELAY)); }   // crash、splash、china、ride(會一直響、可以用手抓住的鈸)
 /* 標出要止音的鈸(n.choke):
    1) 譜上的止音文字 → 那個位置(或之後一拍內最近一個)有打鈸的事件
    2) 鈸上的斷音點(Guitar Pro 的 choke 技法匯入時就是畫成點;一般記譜鈸上的點也是「打完馬上抓住」) */
@@ -6038,7 +6043,7 @@ function startAudioFrom(fromSec){
           : harmonyEndSec;
         const noteTech = (isGuitar && n.glissTargetFreq != null) ? Object.assign({}, tech, { glissTargetFreq: n.glissTargetFreq }) : tech;
         // 人性化的時間偏移可能是負的(提早一點點):第一拍剛好在 currentTime 時會變成過去的時間而整個被丟掉,所以不早於現在
-        if (n.drum) { const h = humanizeDrumHit(ev, n), w = Math.max(audioCtx.currentTime, startCtxTime + t + rollT + h.dt); scheduleDrum(n.key, w, h, n.choke ? startCtxTime + t + durSec : null); }
+        if (n.drum) { const h = humanizeDrumHit(ev, n), w = Math.max(audioCtx.currentTime, startCtxTime + t + rollT + h.dt); scheduleDrum(n.key, w, h, n.choke ? drumChokeAt(w, durSec) : null); }
         else scheduleNote(n.freq, Math.max(audioCtx.currentTime, startCtxTime + t + rollT + ((isGuitar ? n.gdt : n.pdt) || 0)), durSec, ev.legato, ev.pedalOn, chordAnchors, noteHarmonyEndSec, ev.artic, noteTech, n.staff, isGuitar ? n.gvel : n.pvel, n);
       } catch (e) {
         errCount++; lastErr = e;
@@ -8325,7 +8330,7 @@ function fadeDrumVoice(v, when, tau){
 function chokeCymbal(piece, when){
   const list = ringingCymbals[piece];
   if (!list) return;
-  for (const v of list) fadeDrumVoice(v, when, 0.05);
+  for (const v of list) fadeDrumVoice(v, when, DRUM_CHOKE_FADE);
   ringingCymbals[piece] = list.filter(v => v.when >= when);
 }
 
@@ -8415,7 +8420,7 @@ function scheduleDrum(key, when, hit, chokeAt){
     if (DRUM_CHOKE_KEYS.has(key)) {
       const list = (ringingCymbals[voice.piece] = (ringingCymbals[voice.piece] || []).filter(v => v.when + v.sustainSec > when));
       list.push(played);
-      if (chokeAt != null) chokeCymbal(voice.piece, Math.max(chokeAt, when + 0.04));
+      if (chokeAt != null) chokeCymbal(voice.piece, Math.max(chokeAt, when + 0.04));   // 用實際擊打時間(含人性化偏移)算
     }
     return;
   }
@@ -9458,7 +9463,7 @@ function scheduleExportRange(rangeStart, rangeEnd, calib){
         ? startCtxTime + ((posToSec(n.guitarRingEndWhole, calib)) - rangeStart)
         : harmonyEndSec;
       const noteTech = (isGuitar && n.glissTargetFreq != null) ? Object.assign({}, tech, { glissTargetFreq: n.glissTargetFreq }) : tech;
-      if (n.drum) { const h = humanizeDrumHit(ev, n); scheduleDrum(n.key, startCtxTime + (t - rangeStart) + rollT + h.dt, h, n.choke ? startCtxTime + (t - rangeStart) + durSec : null); }
+      if (n.drum) { const h = humanizeDrumHit(ev, n), w = startCtxTime + (t - rangeStart) + rollT + h.dt; scheduleDrum(n.key, w, h, n.choke ? drumChokeAt(w, durSec) : null); }
       else scheduleNote(n.freq, startCtxTime + (t - rangeStart) + rollT + ((isGuitar ? n.gdt : n.pdt) || 0), durSec, ev.legato, ev.pedalOn, chordAnchors, noteHarmonyEndSec, ev.artic, noteTech, n.staff, isGuitar ? n.gvel : n.pvel, n);
     }
   }
