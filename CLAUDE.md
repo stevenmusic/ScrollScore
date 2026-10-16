@@ -91,7 +91,7 @@
 - iPhone 靜音開關:ensureAudio() 設 navigator.audioSession.type = "playback"(Safari/WKWebView 17+)
 - 匯出影片:deliverExportedVideo()——App 或 iOS 而且 navigator.canShare 支援檔案時跳 #shareOverlay,使用者點「儲存影片」才呼叫 navigator.share(一定要在點擊當下);其他平台照舊 <a download>
 - 設定面板最下面「關於與授權」(#aboutCredits):CC BY 要求在使用者看得到的地方標示來源與「有修改」;鋼琴、鼓、音樂廳殘響、OSMD/VexFlow、alphaTab、JSZip、演奏參考資料(ASAP、MAESTRO、GMD)。新增音色或程式庫要加在這裡。彈性速度模型是用 ASAP(CC BY-NC-SA 4.0)訓練的 200 棵決策樹,不含原始資料,依 CC 的立場訓練通常不算改作,風險低
-- support.html:支援頁(中英;快速開始、匯出影片、常見問題、聯絡信箱 steventsaimusic@gmail.com),App Store 支援網址 https://stevenmusic.github.io/ScrollScore/support.html(審核規則 1.5 要求支援網址有聯絡方式);設定面板「關於與授權」有連結。App 行為改了(按鈕名稱、匯出流程、常見問題)要同步改
+- support.html:支援頁(中英;快速開始、匯出影片、常見問題、聯絡信箱 steventsaimusic@gmail.com;使用者要求:不要請使用者寄樂譜檔,避免讓人覺得要拿他們的譜),App Store 支援網址 https://stevenmusic.github.io/ScrollScore/support.html(審核規則 1.5 要求支援網址有聯絡方式);設定面板「關於與授權」有連結。App 行為改了(按鈕名稱、匯出流程、常見問題)要同步改
 - privacy.html:隱私權政策(中英),網址 https://stevenmusic.github.io/ScrollScore/privacy.html。App 不收集任何資料(App 隱私選「不收集資料」);有新增連線或資料處理要同步改
 - 範例樂譜:開始畫面一排按鈕(小星星內建在 SAMPLE_MUSICXML;歡樂頌、搖滾鼓、放克鼓在 samples/,build_samples.py 產生,標題 {{TITLE}} 依語言替換)。網路上的 MusicXML 多半有排版版權、ASAP 不可商用,所以範例都是自己寫/產生的
 
