@@ -979,9 +979,6 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
   <details class="settings-group settings-collapse">
     <summary class="settings-group-title"><span data-i18n="advancedSummary">進階</span><span class="chev">›</span></summary>
     <div class="collapse-body">
-      <div class="tempo-box" data-i18n-attr="title:reverbTitle"><span class="row-label" data-i18n="reverbLabel">空間感</span>
-        <input type="range" id="reverbAmount" min="0" max="100" value="30"><b id="reverbAmountVal">30</b>
-      </div>
       <div class="tempo-box" data-i18n-attr="title:cursorColorTitle">
         <span class="row-label" data-i18n="cursorColorLabel">游標顏色</span>
         <input type="color" id="cursorColor" value="#E9CB7A" data-i18n-attr="aria-label:cursorColorAria">
@@ -1288,8 +1285,6 @@ const I18N = {
 
     advancedSummary: "進階",
     removeBtn: "移除",
-    reverbTitle: "模擬鋼琴在真實空間裡的殘響與左右聲像。取樣本身是近距離收音的乾聲,加一點空間感才不會聽起來貼在臉上",
-    reverbLabel: "空間感",
     cursorColorTitle: "游標線、上方三角標記、小節色塊、匯出影片的主標題共用這個顏色",
     cursorColorLabel: "游標顏色",
     cursorColorAria: "游標與小節高亮顏色",
@@ -1517,8 +1512,6 @@ const I18N = {
 
     advancedSummary: "More",
     removeBtn: "Remove",
-    reverbTitle: "Simulates the piano's reverb and stereo image in a real room. The samples themselves are dry, close-mic'd recordings — a touch of space keeps it from sounding too in-your-face",
-    reverbLabel: "Reverb",
     cursorColorTitle: "Shared by the cursor line, the triangle marker above it, the measure highlight, and the exported video's title",
     cursorColorLabel: "Cursor Color",
     cursorColorAria: "Cursor and measure highlight color",
@@ -5538,8 +5531,6 @@ function updateMeasureHighlight(sec){
 for (const id of ["cursorColor","cursorOpacity"]) {
   $(id).addEventListener("input", applyHighlightStyles);
 }
-$("reverbAmount").addEventListener("input", applyReverbAmount);
-$("reverbAmount").addEventListener("input", () => { if (drumVerbWet) drumVerbWet.gain.value = drumVerbWetTarget(); if (drumRoomWet) drumRoomWet.gain.value = drumRoomWetTarget(); });
 $("measureHl").addEventListener("change", applyHighlightStyles);
 $("lightTheme").addEventListener("change", applyTheme);
 $("lightTheme").addEventListener("change", () => {
@@ -5808,7 +5799,6 @@ const PREF_FIELDS = [
   // 濃度與「小節高亮」開關屬於使用習慣,照樣記住。
   { id: "cursorOpacity",     prop: "value" },
   { id: "measureHl",         prop: "checked" },
-  { id: "reverbAmount",      prop: "value" },
 ];
 function savePrefs(){
   try {
@@ -6143,14 +6133,15 @@ function buildPianoRoomBus(){
     roomPan.connect(send); send.connect(reverbBus);
   }
 }
-function reverbAmount(){ const el = $("reverbAmount"); return el ? +el.value / 100 : 0.3; }
+/* 空間感(殘響量)固定 0.3(2026-10 使用者要求拿掉「進階 → 空間感」滑桿):鋼琴、鼓的殘響都是照這個預設校正定案的,
+   舊使用者存過的值也不再套用。測試工具可以設 window.REVERB_OVERRIDE(0~1)比較 */
+const REVERB_DEFAULT = 0.3;
+function reverbAmount(){ return window.REVERB_OVERRIDE != null ? window.REVERB_OVERRIDE : REVERB_DEFAULT; }
 function reverbWetTarget(){ return reverbAmount() * 0.55; }
 function applyReverbAmount(){
   if (reverbWet) reverbWet.gain.value = reverbWetTarget();
   if (pianoVerbWet) pianoVerbWet.gain.value = reverbAmount() * (pianoVerbHall ? PIANO_HALL.wet : PIANO_VERB.wet);
   if (gtrVerbWet) gtrVerbWet.gain.value = reverbAmount() * GTR_VERB.wet;
-  const el = $("reverbAmountVal");
-  if (el) el.textContent = $("reverbAmount").value;
 }
 /* 真實鋼琴的低音弦在左、高音弦在右(以演奏者的視角),錄音也會保留這個位置感。
    幅度刻意保守(±0.32):做太寬會變成不自然的「兩台鋼琴」效果 */

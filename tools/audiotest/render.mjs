@@ -61,7 +61,7 @@ if (inst) await page.evaluate(i => { $("instrument").value = i; }, inst);
 const tempo = opt("tempo", null), reverb = opt("reverb", null);
 await page.evaluate(([t, rv]) => {
   if (t) applyTempo(+t);
-  if (rv != null) { $("reverbAmount").value = rv; }
+  if (rv != null) { window.REVERB_OVERRIDE = rv / 100; }   // 空間感滑桿已拿掉(2026-10),用覆寫值
 }, [tempo, reverb]);
 const info = await page.evaluate(async () => {
   const hasDrum = events.some(e => e.notes.some(n => n.drum));
