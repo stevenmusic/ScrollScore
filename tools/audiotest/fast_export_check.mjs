@@ -54,7 +54,7 @@ const res = await page.evaluate(async ({ format, s0, s1, realtime, mp4test, webm
   clearInterval(poll);
   const ms = performance.now() - t0;
   await Promise.race([got, new Promise(r => setTimeout(r, 20000))]);
-  return { ms: Math.round(ms), maxStall: Math.round(maxStall), stallTitle, overTime, log: log.slice(0, 40), note: fastExportNote, delivered, status: $("status") ? $("status").textContent : "", len: (cfg.endSec != null ? cfg.endSec - cfg.startSec : totalSec()) };
+  return { ms: Math.round(ms), maxStall: Math.round(maxStall), stallTitle, overTime, log: log.length > 60 ? log.slice(0, 30).concat(["…"], log.slice(-30)) : log, note: fastExportNote, delivered, status: $("status") ? $("status").textContent : "", len: (cfg.endSec != null ? cfg.endSec - cfg.startSec : totalSec()) };
 }, { format, s0, s1, realtime: flags.has("--realtime"), mp4test: flags.has("--mp4test"), webmtest: flags.has("--webmtest"), dropmeta: flags.has("--dropmeta"), nosuspend: flags.has("--nosuspend"), failmux: flags.has("--failmux"), cancelAt: opt("cancel") != null ? +opt("cancel") : null });
 if (res.delivered) {
   const tag = flags.has("--realtime") ? "rt-" : flags.has("--mp4test") ? "mp4test-" : flags.has("--webmtest") ? "webmtest-" : "";

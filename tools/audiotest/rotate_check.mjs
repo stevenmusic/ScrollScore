@@ -1,7 +1,9 @@
-// 旋轉螢幕檢查(2026-10,使用者反映:設定頁直式 → 橫式 → 直式,字變大):
+// 旋轉螢幕版面回歸檢查(2026-10,使用者反映:設定頁直式 → 橫式 → 直式,字變大):
 // 手機尺寸 × 各種狀態(載入前/後、設定面板開著或轉完才開、匯出畫面、連轉好幾次、轉的時候切語言/主題),
-// 轉完回到原本尺寸後,每個看得到的元素字級與大小要跟「直接用這個尺寸打開」一樣。
-// node rotate_check.mjs <樂譜> [--nofix](--nofix 拿掉 text-size-adjust,確認這個檢查抓得到問題)
+// 轉完回到原本尺寸後,每個看得到的元素字級與大小、樂譜縮放(scoreFit)、暫停位置(樂譜捲動)都要跟「直接用這個尺寸打開」一樣。
+// 注意:iPhone 的文字自動放大(text autosizing)是 WebKit 才有的行為,Chromium 重現不出來(審查確認 --nofix 也會通過),
+// 這裡抓的是程式自己的問題;text-size-adjust 的效果要在 iPhone 實機確認。
+// node rotate_check.mjs <樂譜> [--nofix](FULL=1 跑 6 種尺寸)
 import { chromium } from "playwright";
 import http from "node:http"; import fs from "node:fs"; import path from "node:path";
 const args = process.argv.slice(2), score = args.find(a => !a.startsWith("--")), nofix = args.includes("--nofix");
@@ -35,6 +37,9 @@ const snapNow = p => p.evaluate(() => {
     const cs = getComputedStyle(el);
     out[key] = { fs: parseFloat(cs.fontSize), w: Math.round(r.width), h: Math.round(r.height), txt: (el.childNodes.length === 1 && el.firstChild.nodeType === 3) ? el.textContent.trim().slice(0, 12) : "" };
   });
+  out.__scoreFit = { fs: 0, w: 0, h: Math.round(((typeof scoreFit !== "undefined" && scoreFit.s) || 0) * 1000), txt: "scoreFit×1000" };
+  const sc = document.getElementById("scroller");
+  out.__scrollX = { fs: 0, w: 0, h: sc ? Math.round(new DOMMatrix(getComputedStyle(sc).transform).m41 / ((typeof scoreFit !== "undefined" && scoreFit.s) || 1)) : 0, txt: "樂譜捲動位置" };
   return out;
 });
 const fresh = async (w, h, loaded, view) => {
@@ -44,6 +49,7 @@ const fresh = async (w, h, loaded, view) => {
   await p.goto(URL0);
   if (loaded) { await p.setInputFiles("#fileInput", path.resolve(score)); await p.waitForFunction(() => typeof events !== "undefined" && events.length > 0, null, { timeout: 120000 }); }
   await p.waitForTimeout(900);
+  if (loaded) { await p.evaluate(() => seekTo(totalSec() * 0.4)); await p.waitForTimeout(200); }   // 暫停在曲子中間(轉了之後不能跳回第一小節)
   return p;
 };
 const rotate = async (p, w, h) => { await p.setViewportSize({ width: w, height: h }); await p.evaluate(() => { window.dispatchEvent(new Event("orientationchange")); window.dispatchEvent(new Event("resize")); }); await p.waitForTimeout(450); };
@@ -63,7 +69,7 @@ for (const [w, h] of PHONES) for (const loaded of [false, true]) for (const [vna
     else { await seq(p, w, h); await open(p); }
     const got = await snap(p);
     const diffs = [];
-    for (const k of Object.keys(want)) { const a = want[k], b = got[k]; if (!b) continue; if (Math.abs(a.fs - b.fs) > 0.01) diffs.push(`${k} 字級 ${a.fs}→${b.fs} ${a.txt}`); else if (Math.abs(a.h - b.h) > 2) diffs.push(`${k} 高 ${a.h}→${b.h} ${a.txt}`); }
+    for (const k of Object.keys(want)) { const a = want[k], b = got[k]; if (!b) continue; if (Math.abs(a.fs - b.fs) > 0.01) diffs.push(`${k} 字級 ${a.fs}→${b.fs} ${a.txt}`); else if (k === "__scoreFit" ? Math.abs(a.h - b.h) > a.h * 0.01 : Math.abs(a.h - b.h) > 2) diffs.push(`${k} 高 ${a.h}→${b.h} ${a.txt}`); }
     checks++;
     if (diffs.length || p.errs.length) { fails++; console.log(`✗ ${w}×${h} ${loaded ? "已載入" : "未載入"} ${vname} ${sname} ${openFirst ? "開著轉" : "轉完才開"}: ${diffs.length} 處不同`, diffs.slice(0, 5).join(" | "), p.errs.slice(0, 3).join(" | ")); }
     await p.close();
