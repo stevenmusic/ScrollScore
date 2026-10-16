@@ -313,7 +313,9 @@ input[type=range]::-webkit-slider-thumb{
    min-width 取 108px:軌道 38 + 間距 10 + 四個中文字約 52 = 100,留一點餘裕,
    這樣連 320px 的螢幕(每欄可用 122px)都還能維持兩欄,不會退回一欄多吃 60px 高度 */
 .switch-grid{display:flex;flex-wrap:wrap;gap:8px 12px;width:100%}
-.switch-grid .switch-row{flex:1 1 calc(50% - 12px);min-width:108px}
+.switch-grid .switch-row{flex:1 1 calc(50% - 12px);min-width:max-content}
+.switch-row > span:last-child{white-space:nowrap}   /* 開關名稱不拆行(280px 時「小節高/亮」);放不下整個開關換到下一排 */
+.credits-list a[href*="creativecommons"]{white-space:nowrap}   /* 「CC BY / 4.0」不拆開 */
 .export-row{display:flex;gap:10px;flex-wrap:wrap;width:100%}
 /* 匯出是整個面板的主要動作,不再包進卡片,直接放在最下面當底部主按鈕 */
 .panel-actions #exportBtn{flex:1}
@@ -625,6 +627,7 @@ footer{
 }
 #seekInput:focus{outline:none;border-color:var(--gold)}
 #seekGoBtn{
+  white-space:nowrap;   /* 「跳/轉」 */
   background:var(--gold);color:var(--bg);border:none;border-radius:var(--radius-sm);
   padding:4px 10px;font-family:inherit;font-size:var(--fs-xs);font-weight:700;cursor:pointer;
 }
@@ -997,7 +1000,7 @@ body.exporting-active .empty-card{
         <li><b data-i18n="creditPiano">鋼琴音色</b> Accurate-Salamander Grand Piano V6.2 (Chisato Yamauchi), based on Salamander Grand Piano V3 by Alexander Holm — <a href="https://creativecommons.org/licenses/by/3.0/" target="_blank" rel="noopener">CC BY 3.0</a></li>
         <li><b data-i18n="creditDrums">鼓組音色</b> Naked Drums by Wilkinson Audio (SFZ edition by kinwie) — <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a></li>
         <li><b data-i18n="creditHall">音樂廳殘響</b> <a href="https://zenodo.org/records/4116247" target="_blank" rel="noopener">Open Database of Spatial Room Impulse Responses at Detmold University of Music</a> (S. V. Amengual Garí, B. Şahin, D. Eddy, M. Kob) — <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a></li>
-        <li><b data-i18n="creditScore">樂譜顯示</b> <a href="https://github.com/opensheetmusicdisplay/opensheetmusicdisplay" target="_blank" rel="noopener">OpenSheetMusicDisplay</a> (BSD-3-Clause), VexFlow (MIT)</li>
+        <li><b data-i18n="creditScore">樂譜顯示</b> <a href="https://github.com/opensheetmusicdisplay/opensheetmusicdisplay" target="_blank" rel="noopener">OpenSheetMusicDisplay</a> (BSD‑3‑Clause), VexFlow (MIT)</li>
         <li><b data-i18n="creditGp">Guitar Pro 匯入</b> <a href="https://github.com/CoderLine/alphaTab" target="_blank" rel="noopener">alphaTab</a> (MPL-2.0)</li>
         <li><b data-i18n="creditZip">壓縮樂譜(.mxl)</b> <a href="https://github.com/Stuk/jszip" target="_blank" rel="noopener">JSZip</a> (MIT)</li>
         <li><b data-i18n="creditData">演奏參考資料</b> ASAP dataset (F. Foscarin et al.), MAESTRO and Groove MIDI Dataset (Google Magenta)</li>
@@ -1239,7 +1242,7 @@ const I18N = {
     shareSaveBtn: "儲存影片",
     shareFailed: "無法開啟分享,請再試一次",
     aboutSummary: "關於與授權",
-    creditsIntro: "ScrollScore 使用以下開放授權的音色、資料與程式庫。音色檔經過處理(格式轉換、音量對齊、立體聲與長度調整)。",
+    creditsIntro: "ScrollScore 使用以下開放授權的音色、資料與程式庫。|音色檔經過處理|(轉檔、音量、立體聲與長度調整)。",
     creditPiano: "鋼琴音色",
     creditDrums: "鼓組音色",
     creditHall: "音樂廳殘響",
@@ -1389,9 +1392,9 @@ const I18N = {
     gestureTap: "點一下樂譜",
     gestureTapDesc: "播放 / 暫停",
     gestureSwipe: "左右滑動樂譜",
-    gestureSwipeDesc: "跳到前後小節(滑越長跳越多)",
+    gestureSwipeDesc: "跳到前後小節|(滑越長跳越多)",
     gestureDrag: "拖曳時間軸",
-    gestureDragDesc: "精確定位到任一時間點",
+    gestureDragDesc: "精確定位到|任一時間點",
     shortcutsFootnote: "載入樂譜後才會生效。輸入文字時快捷鍵會自動停用。",
     closeBtn: "關閉",
 

@@ -22,6 +22,7 @@ pip install numpy scipy soundfile pyloudnorm
 | `gmd_stats.py` | 真人鼓手統計(Groove MIDI Dataset):各鼓件力度、hi-hat/ride 各拍位置的相對力度、鬼音、各肢體時間差、扣掉節奏型後的力度起伏與相鄰相關。對照 App 的 humanizeDrumHit(用法與 2026-10 的數字寫在檔案開頭) |
 | `staff_gap.mjs` | 大譜表上下兩行的間距(格):App 現在的排版 vs 不畫圓滑線,看圓滑線撐開多少 |
 | `score_crop.mjs` | 樂譜局部截圖(指定小節,或 0 = 自動找上下兩行最擠的地方),可帶 OSMD 排版規則 |
+| `text_wrap_check.mjs` | 中文換行檢查:打開每個畫面(開始畫面、設定、匯出各步驟、快捷鍵…)× 8 種寬度,逐字算換行位置,列出括號被拆開、數字和單位被拆開、最後一行只剩 1~2 字、標點在行首。`--lang en` 掃英文 |
 | `shot.mjs` | 樂譜畫面截圖,`--eval '<js>'` 印出頁面裡的變數(events、perfMeasures、tempoMap…) |
 
 Guitar Pro 測試檔:alphaTab repo(github.com/CoderLine/alphaTab)packages/alphatab/test-data 裡的 .gp/.gpx/.gp5/.gp4(例如 conversion/full-song.gp、guitarpro4/fade-to-black.gp4、guitarpro7/drum-tabs.gp),只拿來測試,不放進 repo。
