@@ -923,20 +923,27 @@ body.exporting-active .empty-card{
            1. 預備拍 / 小節高亮   —— 切換是即時的,不動樂譜內容
            2. 速度記號 / 合併休止 —— 這兩個是唯一會呼叫 renderScore() 重新排版整份樂譜的,
                                      而且會先 stopPlayback() 再從原位置接回去。行為一樣就該放在同一列
-           「圓滑/踏板」開關已移除:圓滑線、踏板記號與和聲延音一律開啟(16 層鋼琴沒有延音非常難聽)
-           彈性速度一律開啟(使用者要求,2026-10),沒有開關。
+           「圓滑/踏板」開關已移除:圓滑線、踏板與和聲延音的「播放」一律開啟(16 層鋼琴沒有延音非常難聽)。
+           2026-10 使用者要求:「踏板記號」開關只管顯示(預設關閉,踏板記號很佔空間),播放照樣依譜上踏板;
+           「彈性速度」加回開關(預設開啟);小節高亮預設開啟。
            淺色模式已經搬到頁首常駐圖示按鈕(#themeToggle),不再放在這個面板裡 -->
       <label class="switch-row" data-i18n-attr="title:countInTitle">
         <span class="switch"><input type="checkbox" id="countIn"><span class="switch-track"></span></span><span data-i18n="countInLabel">預備拍</span>
       </label>
       <label class="switch-row" data-i18n-attr="title:measureHlTitle">
-        <span class="switch"><input type="checkbox" id="measureHl"><span class="switch-track"></span></span><span data-i18n="measureHlLabel">小節高亮</span>
+        <span class="switch"><input type="checkbox" id="measureHl" checked><span class="switch-track"></span></span><span data-i18n="measureHlLabel">小節高亮</span>
       </label>
       <label class="switch-row" data-i18n-attr="title:showTempoMarksTitle">
         <span class="switch"><input type="checkbox" id="showTempoMarks" checked><span class="switch-track"></span></span><span data-i18n="showTempoMarksLabel">速度記號</span>
       </label>
       <label class="switch-row" data-i18n-attr="title:mergeRestMeasuresTitle">
         <span class="switch"><input type="checkbox" id="mergeRestMeasures"><span class="switch-track"></span></span><span data-i18n="mergeRestMeasuresLabel">合併休止</span>
+      </label>
+      <label class="switch-row" data-i18n-attr="title:showPedalMarksTitle">
+        <span class="switch"><input type="checkbox" id="showPedalMarks"><span class="switch-track"></span></span><span data-i18n="showPedalMarksLabel">踏板記號</span>
+      </label>
+      <label class="switch-row" data-i18n-attr="title:rubatoTitle">
+        <span class="switch"><input type="checkbox" id="rubatoOn" checked><span class="switch-track"></span></span><span data-i18n="rubatoLabel">彈性速度</span>
       </label>
     </div>
   </div>
@@ -1259,6 +1266,10 @@ const I18N = {
     showTempoMarksLabel: "速度記號",
     mergeRestMeasuresTitle: "把連續的整小節休止符合併成一個多小節休止記號",
     mergeRestMeasuresLabel: "合併休止",
+    showPedalMarksTitle: "顯示樂譜上的踏板記號(只影響顯示,播放照樣依踏板)",
+    showPedalMarksLabel: "踏板記號",
+    rubatoTitle: "像真人演奏一樣,依樂句自然地稍微加快、放慢;關掉就照穩定的速度播放(鼓組一律穩定速度)",
+    rubatoLabel: "彈性速度",
     measureHlTitle: "把正在演奏的那一小節整段用色塊標起來,視讀時更容易抓到位置",
     measureHlLabel: "小節高亮",
 
@@ -1488,6 +1499,10 @@ const I18N = {
     showTempoMarksLabel: "Tempo Marks",
     mergeRestMeasuresTitle: "Merge consecutive whole-measure rests into a single multi-measure rest",
     mergeRestMeasuresLabel: "Merge Rests",
+    showPedalMarksTitle: "Show pedal markings on the score (display only; playback still follows the pedal)",
+    showPedalMarksLabel: "Pedal Marks",
+    rubatoTitle: "Shape the tempo naturally with the phrasing, like a human player; turn off for a steady tempo (drums always play in steady tempo)",
+    rubatoLabel: "Rubato",
     measureHlTitle: "Highlight the currently playing measure with a color band, making it easier to track while reading",
     measureHlLabel: "Highlight",
 
@@ -3416,7 +3431,15 @@ function installSlurFlattening(){
       skyPre = line.SkyLine.slice(x0i, x1i); botPre = line.BottomLine.slice(x0i, x1i);
     } catch (e) { line = null; }
     orig.call(this, rules);
-    if (!line || !this.bezierStartPt || !this.bezierEndPt) return;
+    if (!this.bezierStartPt || !this.bezierEndPt) return;
+    // OSMD 本身的問題:起點跟終點在同一個位置(長度 0)時角度除以 0,控制點變 NaN,SVG 報錯(舒伯特 D.899-3 開踏板記號時)。
+    // 控制點放回端點上(什麼都不畫),不報錯
+    { const C = [this.bezierStartControlPt, this.bezierEndControlPt], E = [this.bezierStartPt, this.bezierEndPt];
+      if (C.some(c => !c || !isFinite(c.x) || !isFinite(c.y))) {
+        this.bezierStartControlPt = { x: E[0].x, y: E[0].y }; this.bezierEndControlPt = { x: E[1].x, y: E[1].y };
+        return;
+      } }
+    if (!line) return;
     try {
       const P0 = this.bezierStartPt, P1 = this.bezierStartControlPt, P2 = this.bezierEndControlPt, P3 = this.bezierEndPt;
       const above = (P1.y + P2.y) / 2 < (P0.y + P3.y) / 2;
@@ -3506,12 +3529,12 @@ async function renderScore(xmlText){
   // 鼓譜的符尾一律水平:符尾的斜度應該看最靠近符尾的音(手打的 hi-hat/銅鈸,通常都在同一個位置),
   // VexFlow 卻照符桿頂端算,會被下面大鼓/小鼓的高低帶歪(三個同高的 hi-hat 符尾斜將近一格)。鼓譜教材多用水平符尾
   if (osmd.EngravingRules) osmd.EngravingRules.FlatBeams = DRUM_ENGRAVING_RULES && /sign>\s*percussion/.test(finalXml);
-  osmd.EngravingRules.RenderPedals = true;
+  osmd.EngravingRules.RenderPedals = $("showPedalMarks").checked;   // 預設不畫(很佔空間);播放照樣依譜上踏板
   osmd.render();
   // 單行橫向排版時,一個地方的記號太遠,整首曲子的譜表間距都會被撐開。OSMD 的踏板記號在某些檔案會一層層往下疊
   // (蕭邦第一號敘事曲 465 個踏板記號,疊到譜表下方 140 格,畫面上看不到譜表)。排出來太誇張時改成不畫踏板記號
   // (踏板的播放照樣依原檔),一般曲子不受影響
-  if (scoreLayoutTooTall()) { osmd.EngravingRules.RenderPedals = false; osmd.render(); }
+  if (osmd.EngravingRules.RenderPedals && scoreLayoutTooTall()) { osmd.EngravingRules.RenderPedals = false; osmd.render(); }
   if (finalXml.includes('id="gp-hide-clef-octave"')) hideClefOctaveMarks();
   extendLedgerLineStems(); // OSMD符桿長度是固定值,不會因為加線音符離譜表遠就自動加長,這裡渲染完手動補上
 
@@ -4977,7 +5000,7 @@ function useCalib(){ return $("useCalibration").checked && calibrationMap.length
 let rubatoMap = []; // [{orig: 原始tWhole, warped: 換算後的等效全音符座標}],依orig遞增排序
 /* 彈性速度一律開啟(使用者要求,沒有開關);鼓組不套用(律動要穩) */
 function rubatoEnabled(){
-  return rubatoMap.length >= 2 && currentInstrument() !== "drum";
+  return rubatoMap.length >= 2 && currentInstrument() !== "drum" && $("rubatoOn").checked;
 }
 
 /* Local Boundary Detection Model(LBDM,Cambouropoulos 2001):針對音高音程、IOI(音符間距)、
@@ -5789,6 +5812,8 @@ const PREF_FIELDS = [
   { id: "countIn",           prop: "checked" },
   { id: "showTempoMarks",    prop: "checked" },
   { id: "mergeRestMeasures", prop: "checked" },
+  { id: "showPedalMarks",    prop: "checked" },
+  { id: "rubatoOn",          prop: "checked" },
   /* lightTheme 已經搬到共用的 sm_theme(見下方「主題偏好」),不再存在這包 JSON 裡。
      舊值還留在既有使用者的 localStorage 中,storedTheme() 會讀它當備援。 */
   // cursorColor 刻意不存:游標/播放軸/小節色塊每次重新開啟都回到預設金色。
@@ -5870,6 +5895,31 @@ $("showTempoMarks").addEventListener("change", async () => {
   stopPlayback();
   await renderScore(lastXmlText);
   updatePlaylineExtent(); // 顯示/隱藏速度記號會改變樂譜高度,播放軸要重新貼齊
+  pausedAtSec = at;
+  updateTimeLabel(at);
+  if (wasPlaying) startPlayback(at);
+});
+
+$("showPedalMarks").addEventListener("change", async () => {
+  if (!lastXmlText) return;
+  const wasPlaying = playing;
+  const at = wasPlaying ? currentSec() : pausedAtSec;
+  stopPlayback();
+  await renderScore(lastXmlText);
+  updatePlaylineExtent(); // 踏板記號會改變樂譜高度,播放軸要重新貼齊
+  pausedAtSec = at;
+  updateTimeLabel(at);
+  if (wasPlaying) startPlayback(at);
+});
+// 彈性速度開關:秒數 ↔ 樂譜位置的換算會變,用「樂譜位置」接回去(同一個音,不是同一個秒數)
+$("rubatoOn").addEventListener("change", () => {
+  if (!events.length) return;
+  const wasPlaying = playing;
+  $("rubatoOn").checked = !$("rubatoOn").checked;            // 先用切換前的換算算出目前的樂譜位置
+  const w = secToWhole(wasPlaying ? currentSec() : pausedAtSec);
+  $("rubatoOn").checked = !$("rubatoOn").checked;
+  stopPlayback();
+  const at = Math.max(0, posToSec(w, useCalib()));
   pausedAtSec = at;
   updateTimeLabel(at);
   if (wasPlaying) startPlayback(at);
