@@ -1335,7 +1335,7 @@ const I18N = {
     exportWarnBodyFast: "切到其他 App 或讓螢幕熄滅,|匯出可能會中斷。",
     fastNoteNoCodecs: "這台裝置不支援快速匯出|(需要 iOS 16.4 以上),|改用即時錄影",
     fastNoteNoAudio: "這台裝置沒有聲音編碼器|(需要 iOS 26 以上),|改用即時錄影",
-    fastNoteSlow: "編碼速度不夠快|({x} 倍),|改用即時錄影",
+    fastNoteSlow: "編碼速度不夠快,|改用即時錄影|({x})",
     fastNoteError: "快速匯出失敗|({msg}),|改用即時錄影",
     exportInfoPFast: "不用等樂曲播完,|通常比樂曲長度快很多。",
 
@@ -1568,7 +1568,7 @@ const I18N = {
     exportWarnBodyFast: "Switching apps or letting the screen sleep may interrupt the export.",
     fastNoteNoCodecs: "Fast export isn't supported on this device (needs iOS 16.4+); using real-time recording",
     fastNoteNoAudio: "This device has no audio encoder (needs iOS 26+); using real-time recording",
-    fastNoteSlow: "Encoding isn't fast enough ({x}×); using real-time recording",
+    fastNoteSlow: "Encoding isn't fast enough; using real-time recording ({x})",
     fastNoteError: "Fast export failed ({msg}); using real-time recording",
     exportInfoPFast: "No need to wait for the piece to play through — usually much faster than its length.",
 
@@ -10276,30 +10276,54 @@ async function fastExportVideo(cfg){
       drawExportPageFrame(ctx, layout, cfg, pg, songSec, useCalib());
     } else drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, useCalib());
   };
-  // 2) 試編 1 秒:沒有硬體編碼器的機器(軟體編 1080p)可能比樂曲還慢,那就改用即時錄影(至少跟樂曲一樣長)。
-  //    計時從編碼器吐出第一格才開始:iPhone 的硬體編碼器啟動要幾百 ms,算進去會把速度低估好幾倍(2026-10 使用者 iPhone 實測因此一直退回即時錄影)。
-  //    60fps 不夠快、30fps 夠快時改用 30fps(捲動稍微沒那麼滑順,但比等整首播完好)
+  // 2) 試編:沒有硬體編碼器的機器(軟體編 1080p)可能比樂曲還慢,那就改用即時錄影(至少跟樂曲一樣長)。
+  //    先編第一格並等它出來(編碼器啟動、第一頁樂譜點陣化都不算進速度;iPhone 硬體編碼器啟動要幾百 ms),
+  //    之後每一格分開計時:畫畫面 / 從畫布取出影格 / 整格總時間,速度不夠時寫在原因裡,方便判斷卡在哪一步。
+  //    取影格有兩種方法(直接從 canvas、先轉 ImageBitmap),Safari 上哪個快不一定,兩個都試、用快的。
+  //    60fps 不夠快、30fps 夠快時改用 30fps
   const encCfg = rate => ({ codec: fmtSel.vCodec, width: cfg.W, height: cfg.H, bitrate: cfg.bitrate, framerate: rate, latencyMode: "realtime", ...(fmtSel.container === "mp4" ? { avc: { format: "avc" } } : {}) });
-  try {
-    const n = fps;
-    let got = 0, err = null, tWarm = 0, fWarm = 0, f = 0;
-    const probe = new VideoEncoder({ output: () => { if (!got++) { tWarm = performance.now(); fWarm = f; } }, error: e => { err = e; } });
+  const FRAME_SRC = {
+    canvas: async (ts) => new VideoFrame(cv, { timestamp: ts }),
+    bitmap: async (ts) => { const bm = await createImageBitmap(cv); const fr = new VideoFrame(bm, { timestamp: ts }); bm.close(); return fr; },
+  };
+  let frameSrc = "canvas", probeInfo = "";
+  const runProbe = async srcName => {
+    let got = 0, err = null;
+    const probe = new VideoEncoder({ output: () => got++, error: e => { err = e; } });
     probe.configure(encCfg(fps));
-    const t0 = performance.now();
-    for (; f < n; f++) {
-      await drawAt(rangeStart + f / fps);
-      const fr = new VideoFrame(cv, { timestamp: Math.round(f * 1e6 / fps) });
-      probe.encode(fr, { keyFrame: f === 0 }); fr.close();
+    const tA = performance.now();
+    await drawAt(rangeStart);
+    const f0 = await FRAME_SRC[srcName](0);
+    probe.encode(f0, { keyFrame: true }); f0.close();
+    await probe.flush();
+    const warm = performance.now() - tA;
+    let tDraw = 0, tGrab = 0, n = 0;
+    const tB = performance.now();
+    while (n < fps && performance.now() - tB < 2500) {   // 最多 1 秒的影片或 2.5 秒的時間
+      n++;
+      const ts = Math.round(n * 1e6 / fps);
+      let t = performance.now(); await drawAt(rangeStart + n / fps); tDraw += performance.now() - t;
+      t = performance.now(); const fr = await FRAME_SRC[srcName](ts); tGrab += performance.now() - t;
+      probe.encode(fr, { keyFrame: false }); fr.close();
       while (probe.encodeQueueSize > 6) await new Promise(r => setTimeout(r, 2));
     }
     await probe.flush(); probe.close();
-    const tEnd = performance.now();
-    const speed = tWarm && n - fWarm >= 8 ? ((n - fWarm) / fps) / ((tEnd - tWarm) / 1000) : (n / fps) / ((tEnd - t0) / 1000);   // 幾倍速
-    console.info("快速匯出試編:" + fps + "fps " + speed.toFixed(2) + " 倍(編碼器啟動 " + Math.round((tWarm || tEnd) - t0) + "ms)");
-    if (err || got < n) return fastFallback("error", err ? err.message : "probe");
-    if (!window.FAST_EXPORT_FORCE && speed < FAST_EXPORT.minSpeed) {
-      if (fps > 30 && speed * fps / 30 >= FAST_EXPORT.minSpeed) fps = 30;
-      else return fastFallback("slow", speed.toFixed(2));
+    const total = performance.now() - tB;
+    if (err) throw err;
+    return { speed: (n / fps) / (total / 1000), draw: tDraw / n, grab: tGrab / n, per: total / n, warm, n };
+  };
+  try {
+    let r = await runProbe("canvas");
+    // 取影格佔了大部分時間就試另一種方法
+    if (r.speed < FAST_EXPORT.minSpeed && r.grab > r.per * 0.4) {
+      const r2 = await runProbe("bitmap");
+      if (r2.speed > r.speed) { r = r2; frameSrc = "bitmap"; }
+    }
+    probeInfo = r.speed.toFixed(2) + "x · draw " + r.draw.toFixed(0) + "ms · grab " + r.grab.toFixed(0) + "ms (" + frameSrc + ") · total " + r.per.toFixed(0) + "ms · warm-up " + r.warm.toFixed(0) + "ms";
+    console.info("快速匯出試編:" + fps + "fps " + probeInfo);
+    if (!window.FAST_EXPORT_FORCE && r.speed < FAST_EXPORT.minSpeed) {
+      if (fps > 30 && r.speed * fps / 30 >= FAST_EXPORT.minSpeed) fps = 30;
+      else return fastFallback("slow", probeInfo);
     }
   } catch (e) { console.warn(e); return fastFallback("error", e.message); }
   computeDrumPerformance();   // 試編畫了鼓組面板,重算一次讓正式匯出從頭開始
@@ -10342,7 +10366,7 @@ async function fastExportVideo(cfg){
       if (encErr) throw encErr;
       const t = f / fps, songSec = Math.min(Math.max(t - lead, 0), total) + rangeStart;
       await drawAt(songSec);
-      const frame = new VideoFrame(cv, { timestamp: Math.round(t * 1e6), duration: Math.round(1e6 / fps) });
+      const frame = await FRAME_SRC[frameSrc](Math.round(t * 1e6));
       venc.encode(frame, { keyFrame: f % keyEvery === 0 });
       frame.close();
       // 編碼器跟不上時等一下(不然記憶體會一直堆);每 0.1 秒更新一次進度並讓畫面喘口氣(取消按鈕才按得到)
