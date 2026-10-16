@@ -97,7 +97,7 @@ body.light{
 /* 樂譜本身:深色版是用反相濾鏡把 OSMD 的黑字白紙翻成象牙色。
    淺色版不需要翻——直接顯示原本的黑字,就是最自然的紙本樂譜。
    (錄影模式早就是這樣做的,這裡沿用同一招) */
-body.light #score,body.light #score2{filter:none}
+body.light #score{filter:none}
 body.light #stage{background:#FFFDF6}
 /* touch-action:manipulation 只關掉「雙擊放大」這個手勢,雙指縮放完全不受影響——
    跟直接鎖 viewport 的 user-scalable=no 不一樣,那個連縮放需求的使用者也會一起擋掉。
@@ -494,11 +494,7 @@ body.kb-hidden #keyboardCanvas{display:none}
 }
 #scoreBg{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none;z-index:1}
 #scroller{will-change:transform;padding:0 0 0 0;position:relative;z-index:2;transform-origin:0 0}
-#score,#score2{filter:invert(92%) sepia(18%) saturate(180%) hue-rotate(10deg) brightness(1.02)}
-/* 直式兩行的第二行(接在第一行右邊後面的音樂);只是預覽,稍微淡一點 */
-#scroller2{position:absolute;left:0;top:0;transform-origin:0 0;z-index:2;display:none;pointer-events:none;will-change:transform}
-body.two-rows #scroller2{display:block}
-#scroller2 #score2{opacity:.82}
+#score{filter:invert(92%) sepia(18%) saturate(180%) hue-rotate(10deg) brightness(1.02)}
 /* OSMD 產出 SVG 為黑底白紙,用濾鏡翻成象牙色譜面 */
 /* 游標顏色/濃度可自訂:--cursor-col 由設定面板的色票寫入,--cursor-op 是不透明度 */
 #playline{
@@ -679,7 +675,7 @@ footer{
 /* ── 錄影模式 ───────────────────── */
 body.recording header, body.recording footer{display:none}
 body.recording #stage{background:#FFFDF6}
-body.recording #score,body.recording #score2{filter:none}
+body.recording #score{filter:none}
 body.recording #playline{
   background:linear-gradient(to bottom,transparent,#B8860B 12%,#B8860B 88%,transparent);
   box-shadow:0 0 10px 1px rgba(184,134,11,.35);
@@ -965,9 +961,6 @@ body.exporting-active .empty-card{
       <label class="switch-row" data-i18n-attr="title:showPedalMarksTitle">
         <span class="switch"><input type="checkbox" id="showPedalMarks"><span class="switch-track"></span></span><span data-i18n="showPedalMarksLabel">踏板記號</span>
       </label>
-      <label class="switch-row" data-i18n-attr="title:twoRowsTitle">
-        <span class="switch"><input type="checkbox" id="twoRowsOn" checked><span class="switch-track"></span></span><span data-i18n="twoRowsLabel">直式兩行</span>
-      </label>
       <label class="switch-row" data-i18n-attr="title:rubatoTitle">
         <span class="switch"><input type="checkbox" id="rubatoOn" checked><span class="switch-track"></span></span><span data-i18n="rubatoLabel">彈性速度</span>
       </label>
@@ -1059,7 +1052,6 @@ body.exporting-active .empty-card{
     </div>
   </div>
   <div id="scroller"><div id="measureHighlight"></div><div id="score"></div></div>
-  <div id="scroller2" aria-hidden="true"><div id="score2"></div></div>
   <div id="playline"></div>
   <div id="countdown">3</div>
   <button id="exitrec" data-i18n-attr="title:exitRecTitle">✕</button>
@@ -1298,8 +1290,6 @@ const I18N = {
     showPedalMarksLabel: "踏板記號",
     rubatoTitle: "像真人演奏一樣,依樂句自然地稍微加快、放慢;關掉就照穩定的速度播放(鼓組一律穩定速度)",
     rubatoLabel: "彈性速度",
-    twoRowsTitle: "手機或平板直放時,樂譜摺成上下兩行:上面是正在彈的,下面接著顯示後面的音樂,看得更遠",
-    twoRowsLabel: "直式兩行",
     measureHlTitle: "把正在演奏的那一小節整段用色塊標起來,視讀時更容易抓到位置",
     measureHlLabel: "小節高亮",
 
@@ -1534,8 +1524,6 @@ const I18N = {
     showPedalMarksLabel: "Pedal Marks",
     rubatoTitle: "Shape the tempo naturally with the phrasing, like a human player; turn off for a steady tempo (drums always play in steady tempo)",
     rubatoLabel: "Rubato",
-    twoRowsTitle: "When the phone or tablet is upright, wrap the score into two rows: the top row is playing, the bottom row shows what comes next",
-    twoRowsLabel: "Two Rows",
     measureHlTitle: "Highlight the currently playing measure with a color band, making it easier to track while reading",
     measureHlLabel: "Highlight",
 
@@ -5860,7 +5848,6 @@ const PREF_FIELDS = [
   { id: "mergeRestMeasures", prop: "checked" },
   { id: "showPedalMarks",    prop: "checked" },
   { id: "rubatoOn",          prop: "checked" },
-  { id: "twoRowsOn",         prop: "checked" },
   /* lightTheme 已經搬到共用的 sm_theme(見下方「主題偏好」),不再存在這包 JSON 裡。
      舊值還留在既有使用者的 localStorage 中,storedTheme() 會讀它當備援。 */
   // cursorColor 刻意不存:游標/播放軸/小節色塊每次重新開啟都回到預設金色。
@@ -5958,7 +5945,6 @@ $("showPedalMarks").addEventListener("change", async () => {
   updateTimeLabel(at);
   if (wasPlaying) startPlayback(at);
 });
-$("twoRowsOn").addEventListener("change", () => updatePlaylineExtent());
 // 彈性速度開關:秒數 ↔ 樂譜位置的換算會變,用「樂譜位置」接回去(同一個音,不是同一個秒數)
 $("rubatoOn").addEventListener("change", () => {
   if (!events.length) return;
@@ -7988,20 +7974,11 @@ let scoreFit = { s: 1, ty: 0 }, lastScrollX = 0;
    只用了三成多的高度。現在有空間就放大:譜線間距最多 maxSp px、樂譜(含播放軸上下留白)最多占樂譜區 fill,
    但播放軸右邊至少要看得到 aheadSec 秒(照目前速度的整首平均捲動速度;巴哈前奏曲這種十六分音符很密的曲子,
    手機直式 9px 時就只看得到約 1.6 秒,不會再放大)。最小就是原本的大小(放不下時才縮小) */
-/* 直式兩行(使用者要求試做,2026-10,設定「直式兩行」#twoRowsOn,預設開):樂譜區直的(高 > 寬)時把樂譜摺成上下兩行,
-   上面是正在彈的(有播放軸、小節高亮),下面接著顯示「第一行右邊緣之後」的音樂,兩行一起捲動,像讀書換行。
-   直式的限制是寬度(看不到後面的音),兩行時前面看得到的範圍 = 第一行播放軸右邊 + 一整個樂譜區寬,音符也能放大。
-   第二行是 #score 的複製(cloneNode,樂譜重新排版時重做),兩行放不下(會比原本的 9px 小,例如蕭邦敘事曲)就照舊一行 */
-let row2Src = null;
-function twoRowsWanted(){ return !!$("twoRowsOn") && $("twoRowsOn").checked && stageIsPortrait() && events.length > 0; }
 const SCREEN_SCORE = { maxSp: 13, maxSpWide: 16, wideFrom: 900, fill: 0.8, aheadSec: 2.5, drumAheadSec: 2 };
 // 大螢幕(樂譜區寬 ≥ wideFrom,iPad 橫放、筆電、桌機)上限放寬到 maxSpWide:以前 13px 時樂譜只用樂譜區四成高度(使用者同意,2026-10)
 function setScrollerX(x){
   lastScrollX = x;
-  const tx = playlineX() - x * scoreFit.s;
-  $("scroller").style.transform = "translate(" + tx + "px," + scoreFit.ty + "px) scale(" + scoreFit.s + ")";
-  // 第二行 = 第一行右邊緣之後的音樂:同一份樂譜往左多移一個樂譜區寬
-  if (scoreFit.row2 != null) $("scroller2").style.transform = "translate(" + (tx - $("stage").clientWidth) + "px," + scoreFit.row2 + "px) scale(" + scoreFit.s + ")";
+  $("scroller").style.transform = "translate(" + (playlineX() - x * scoreFit.s) + "px," + scoreFit.ty + "px) scale(" + scoreFit.s + ")";
 }
 /* 播放軸貼著樂譜:最上/最下的符頭(或譜線)再往外留 PLAYLINE_PAD_SPACES_WITH_PANEL 個譜線間距,跟匯出影片同一條規則 */
 function updatePlaylineExtent(){
@@ -8023,33 +8000,11 @@ function updatePlaylineExtent(){
   if (dur > 0 && svgW > 0) grow = Math.min(grow, ahead / ((isDrumScore ? SCREEN_SCORE.drumAheadSec : SCREEN_SCORE.aheadSec) * svgW / dur));
   const s = Math.min(fitFull, Math.max(1, grow));
   const prevS = scoreFit.s;
-  // 兩行:每行高 s×(cBot−cTop),中間留 gap;前面看得到的範圍多一整個樂譜區寬
-  let two = null;
-  if (twoRowsWanted() && dur > 0 && svgW > 0) {
-    const gap = Hs * 0.05, ch = cBot - cTop;
-    let g2 = Math.min(maxSp / (e.sp * svgH), Hs * SCREEN_SCORE.fill / (2 * ch + gap),
-                      (ahead + stage.clientWidth) / ((isDrumScore ? SCREEN_SCORE.drumAheadSec : SCREEN_SCORE.aheadSec) * svgW / dur));
-    const s2 = Math.min((Hs - 2 * margin - gap) / (2 * ch), Math.max(1, g2));
-    // 兩行要真的有幫助才用:音符不比一行小,或一行時看不到 aheadSec 秒(十六分音符很密的曲子);而且不能比原本的 9px 小
-    const target = isDrumScore ? SCREEN_SCORE.drumAheadSec : SCREEN_SCORE.aheadSec;
-    const oneAhead = ahead / (s * svgW / dur);
-    if (s2 >= 1 - 1e-6 && (s2 >= s - 0.01 || oneAhead < target - 0.05)) {
-      const top1 = Hs / 2 - (2 * s2 * ch + gap) / 2;        // 第一行內容(含留白)的上緣,在樂譜區裡的位置
-      two = { s: s2, ty: top1 - boxTop - s2 * cTop, row2: top1 + s2 * ch + gap - s2 * cTop };
-    }
-  }
-  document.body.classList.toggle("two-rows", !!two);
-  if (two) {
-    scoreFit = two;
-    if (row2Src !== svg) { const host = $("score2"); host.textContent = ""; host.appendChild(svg.cloneNode(true)); row2Src = svg; }
-  } else {
-    if (row2Src) { $("score2").textContent = ""; row2Src = null; }   // 不用時放掉複製的樂譜(長曲子很大)
-    if (Math.abs(s - 1) < 0.01 && boxTop + cTop >= margin && boxTop + cBot <= Hs - margin) scoreFit = { s: 1, ty: 0 };
-    else scoreFit = { s, ty: Hs / 2 - boxTop - s * (cTop + cBot) / 2 };
-  }
+  if (Math.abs(s - 1) < 0.01 && boxTop + cTop >= margin && boxTop + cBot <= Hs - margin) scoreFit = { s: 1, ty: 0 };
+  else scoreFit = { s, ty: Hs / 2 - boxTop - s * (cTop + cBot) / 2 };
   pl.style.left = playlineX() + "px";
   // 放大時讓瀏覽器重新點陣化(will-change: transform 的圖層換比例後會沿用舊的點陣、放大會糊)
-  if (Math.abs(scoreFit.s - prevS) > 0.005) { const s2el = $("scroller2"); scroller.style.willChange = s2el.style.willChange = "auto"; requestAnimationFrame(() => { scroller.style.willChange = s2el.style.willChange = ""; }); }
+  if (Math.abs(scoreFit.s - prevS) > 0.005) { scroller.style.willChange = "auto"; requestAnimationFrame(() => { scroller.style.willChange = ""; }); }
   const top = boxTop + scoreFit.ty + scoreFit.s * cTop, bot = boxTop + scoreFit.ty + scoreFit.s * cBot;
   pl.style.top = Math.max(0, top) + "px";
   pl.style.bottom = Math.max(0, Hs - bot) + "px";
