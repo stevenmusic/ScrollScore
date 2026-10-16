@@ -10327,16 +10327,13 @@ async function fastExportVideo(cfg){
     }
   } catch (e) { console.warn(e); return fastFallback("error", e.message); }
   computeDrumPerformance();   // 試編畫了鼓組面板,重算一次讓正式匯出從頭開始
-  // 3) 聲音
-  setPct("exportAnalyzingPct", 0);
+  // 3) 聲音跟畫面同時做(2026-10,使用者反映「調整音量中卡很久」):OfflineAudioContext 在音訊執行緒算,
+  //    主執行緒同時畫畫面、編影片,總時間約等於兩者中較久的那個(以前是相加)。
+  //    聲音還在算的時候,全域的 audioCtx 等是換成離線的那一組(renderExportAudioFast 算完才換回來),
+  //    所以不管成功、取消或出錯,離開前一定要等它算完(audioJob)
+  setPct("exportRenderingPct", 0);
   $("exportOverlaySub").textContent = T("exportAnalyzingSub");
   $("exportTime").textContent = "";
-  let L, R;
-  try { [L, R] = await renderExportAudioFast(rangeStart, rangeEnd, p => setPct("exportAnalyzingPct", p)); }
-  catch (e) { console.warn("快速匯出的聲音處理失敗,改用即時錄影:", e); return fastFallback("error", e.message); }
-  if (exportCancelled) { setStatus(T("exportCancelledStatus")); return true; }
-  setPct("exportRenderingPct", 0);
-  $("exportOverlaySub").textContent = "";
   kbScanCursor = 0; kbScanLastSec = -1;
   // 3) 編碼器與封裝
   const target = new Muxer.ArrayBufferTarget();
@@ -10349,16 +10346,10 @@ async function fastExportVideo(cfg){
   const aenc = new AudioEncoder({ output: (c, m) => muxer.addAudioChunk(c, m), error: e => { encErr = e; } });
   aenc.configure({ codec: fmtSel.aCodec, sampleRate: sr, numberOfChannels: 2, bitrate: FAST_EXPORT.audioBitrate });
   const closeAll = () => { try { venc.close(); } catch (e) {} try { aenc.close(); } catch (e) {} };
+  let L = null, R = null, audioPct = 0, audioErr = null;
+  const audioJob = renderExportAudioFast(rangeStart, rangeEnd, p => { audioPct = p; })
+    .then(([l, r]) => { L = l; R = r; audioPct = 1; }, e => { audioErr = e; });
   try {
-    // 聲音一次送完(編碼很快);每段 0.1 秒
-    const CH = sr / 10, nAud = L.length;
-    for (let i = 0; i < nAud; i += CH) {
-      const n = Math.min(CH, nAud - i), planar = new Float32Array(n * 2);
-      planar.set(L.subarray(i, i + n), 0); planar.set(R.subarray(i, i + n), n);
-      const ad = new AudioData({ format: "f32-planar", sampleRate: sr, numberOfFrames: n, numberOfChannels: 2, timestamp: Math.round(i / sr * 1e6), data: planar });
-      aenc.encode(ad); ad.close();
-    }
-    L = R = null;
     const nFrames = Math.ceil(dur * fps), keyEvery = Math.round(fps * FAST_EXPORT.keyEverySec);
     let lastUi = 0;
     for (let f = 0; f < nFrames; f++) {
@@ -10374,18 +10365,36 @@ async function fastExportVideo(cfg){
       const now = performance.now();
       if (now - lastUi > 100) {
         lastUi = now;
-        setPct("exportRenderingPct", (f + 1) / nFrames);
+        setPct("exportRenderingPct", ((f + 1) / nFrames + audioPct) / 2);   // 畫面、聲音各算一半
         $("exportTime").textContent = fmt(Math.max(0, t - lead)) + " / " + fmt(total);
         await new Promise(r => setTimeout(r, 0));
       }
     }
+    // 畫面做完、聲音還沒好:等聲音(進度照樣更新)
+    while (audioPct < 1 && !audioErr) {
+      setPct("exportRenderingPct", (1 + audioPct) / 2);
+      await Promise.race([audioJob, new Promise(r => setTimeout(r, 200))]);
+    }
+    await audioJob;
     if (exportCancelled) { closeAll(); setStatus(T("exportCancelledStatus")); return true; }
+    if (audioErr) throw audioErr;
+    $("exportOverlaySub").textContent = "";
+    // 聲音一次送完(編碼很快);每段 0.1 秒
+    const CH = sr / 10, nAud = L.length;
+    for (let i = 0; i < nAud; i += CH) {
+      const n = Math.min(CH, nAud - i), planar = new Float32Array(n * 2);
+      planar.set(L.subarray(i, i + n), 0); planar.set(R.subarray(i, i + n), n);
+      const ad = new AudioData({ format: "f32-planar", sampleRate: sr, numberOfFrames: n, numberOfChannels: 2, timestamp: Math.round(i / sr * 1e6), data: planar });
+      aenc.encode(ad); ad.close();
+    }
+    L = R = null;
     await venc.flush(); await aenc.flush();
     if (encErr) throw encErr;
     closeAll();
     muxer.finalize();
   } catch (e) {
     closeAll();
+    await audioJob;   // 全域的音訊狀態換回來之後才能改走即時錄影
     console.warn("快速匯出失敗,改用即時錄影:", e);
     return fastFallback("error", e && e.message);
   }
