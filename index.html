@@ -1133,7 +1133,7 @@ body.exporting-active .empty-card{
         <b data-i18n="exportWarnTitle">⚠ 請讓這個畫面保持在最前面</b>
         <span data-i18n="exportWarnBody">切到其他 App 或讓螢幕熄滅,錄出來會一格一格卡住,只能重新匯出。</span>
       </div>
-      <p data-i18n="exportInfoP">輸出時間 = 樂曲長度,完成後自動下載。</p>
+      <p data-i18n="exportInfoP">輸出時間 = 樂曲長度。匯出時喇叭靜音(避免爆音),影片裡的聲音不受影響。</p>
       <button class="btn" id="exportCancel" data-i18n="cancelBtn">取消</button>
     </div>
   </div>
@@ -1337,7 +1337,7 @@ const I18N = {
     exportAnalyzingPct: "調整音量(YouTube −14 LUFS)中 {pct}%",
     exportWarnTitle: "⚠ 請讓這個畫面保持在最前面",
     exportWarnBody: "切到其他 App 或讓螢幕熄滅,錄出來會一格一格卡住,只能重新匯出。",
-    exportInfoP: "輸出時間 = 樂曲長度,完成後自動下載。",
+    exportInfoP: "輸出時間 = 樂曲長度。匯出時喇叭靜音(避免爆音),影片裡的聲音不受影響。",
 
     previewTitle: "預覽畫面",
     previewImgAlt: "匯出預覽",
@@ -1565,7 +1565,7 @@ const I18N = {
     exportAnalyzingPct: "Normalizing loudness (YouTube −14 LUFS) {pct}%",
     exportWarnTitle: "⚠ Keep this window in the foreground",
     exportWarnBody: "Switching apps or letting the screen sleep will cause stuttering frames — you'll have to export again.",
-    exportInfoP: "Export time equals the piece's length; the file downloads automatically when done.",
+    exportInfoP: "Export time equals the piece's length. Speakers are muted while exporting to avoid crackling; the video's audio is unaffected.",
 
     previewTitle: "Preview",
     previewImgAlt: "Export preview",
@@ -1774,7 +1774,7 @@ let arpMap = {};
 let calibrating = false, calibStartPerf = 0, calibTapIndex = 0;
 let calibrationMap = []; // [{tWhole, realSec}] 已排序,由 tap-along 或自動偵測建立
 let endX = 0, totalWhole = 0;
-let audioCtx = null, masterGain = null, masterLimiter = null, masterOut = null, masterBus = null, masterLimiterNode = null, masterReady = Promise.resolve(false);
+let audioCtx = null, masterGain = null, masterLimiter = null, masterOut = null, monitorOut = null, masterBus = null, masterLimiterNode = null, masterReady = Promise.resolve(false);
 /* ── 母帶(總輸出)設定 ─────────────────────────────────
    masterGain(鋼琴/吉他)→ loudnessComp(響度壓縮)→ makeup → masterBus ← 鼓組匯流排
    masterBus → 母帶限幅器(AudioWorklet)→ masterOut → 喇叭/匯出影片 */
@@ -4621,6 +4621,7 @@ function computeDrumSongDynamics(){
    所有亂數都以時間點為種子,同一首曲子每次播放/匯出都一樣 */
 const DRUM_CYMBAL_KEYS = new Set([49, 52, 55, 57]);
 const DRUM_VEL_JITTER = 0.15, DRUM_VEL_AR = 0.15;   // 三角分布 ±0.15(標準差約 0.06 = 力度 8)
+const DRUM_ACCENT_RATIO = 0.95 / 0.72;               // 重音力度 = 附近一般音 × 1.32(音量約 +4.8dB;以前固定 0.95 對一般 0.72)
 function computeDrumPerformance(){
   if (!events.length) return;
   const calib = useCalib();
@@ -4672,6 +4673,24 @@ function computeDrumPerformance(){
     if (h.n.ghost && backbeats.some(t => Math.abs(t - h.t) < 0.13)) h.n.perf -= 0.03;
     if (h.ev.barIdx != null && h.ev.barIdx % 4 === 3) h.n.perf += 0.015;
   }
+  // 8) 重音照比例(使用者要求,2026-10):重音 = 附近一般音(同一鼓件、前後半小節內〔沒有就一小節、兩小節〕、沒重音也不是鬼音)平均力度 × DRUM_ACCENT_RATIO。
+  //    以前重音固定是 0.95 再加段落/律動/亂數、超過 1 截掉:大聲段落一般音也接近 1、重音幾乎聽不出來,小聲段落又特別突出,
+  //    同樣的小節出現兩次聽起來不一樣。每一下自己的亂數不算進重音(重音的比例才固定)
+  const byKey = {};
+  for (const h of hits) { h.s0 = humanizeDrumHit(h.ev, h.n, true).s; h.n.accS = null; (byKey[h.n.key] = byKey[h.n.key] || []).push(h); }
+  for (const seq of Object.values(byKey)) seq.forEach((h, i) => {
+    if (!h.acc) return;
+    const w = h.ev.barLen > 0 ? h.ev.barLen : 1;
+    let ref = null;
+    for (const span of [w / 2, w, 2 * w]) {
+      let sum = 0, cnt = 0;
+      for (const dir of [-1, 1]) for (let j = i + dir; j >= 0 && j < seq.length && Math.abs(seq[j].ev.tWhole - h.ev.tWhole) <= span + 1e-6; j += dir) {
+        const o = seq[j]; if (!o.acc && !o.n.ghost) { sum += o.s0; cnt++; }
+      }
+      if (cnt) { ref = sum / cnt; break; }
+    }
+    h.n.accS = Math.max(0.08, Math.min(1, Math.max(ref != null ? ref : 0, h.s0) * DRUM_ACCENT_RATIO));
+  });
 }
 /* OSMD 不會畫 <notehead parentheses="yes"> 的括號,鬼音在譜上看起來跟一般音一樣。
    這裡在符頭左右各補一個括號(依符頭大小縮放,跟符頭同色),同一個符頭只畫一次 */
@@ -4721,9 +4740,9 @@ const DRUM_TIMEKEEPERS = new Set([42, 44, 46, 51, 53, 59]); // hi-hat 與 ride
 const DRUM_HAT_BEAT_4_4 = [-0.016, 0.041, -0.061, 0.037];   // 4/4 各拍 hi-hat 相對四分音符平均(Groove MIDI Dataset:+12.7/+19.9/+7.0/+19.4)
 const DRUM_LIMB_JITTER = 0.008;                            // 各肢體自己的時間偏移:三角分布 ±8ms
 function drumHitRand(ev, key, salt){ return seededRand01(ev.tWhole * 131.7 + key * 7.31 + salt * 3.17); }
-function humanizeDrumHit(ev, n){
+function humanizeDrumHit(ev, n, noAccent){
   const key = n.key;
-  const accented = !!(ev.artic && (ev.artic.accent || ev.artic.strongAccent));
+  const accented = !noAccent && !n.ghost && !!(ev.artic && (ev.artic.accent || ev.artic.strongAccent));
   // 力度值會換成 MIDI 力度(×127)走原廠力度曲線:鬼音 ≈38、一般 ≈91(鼓手平常的律動大約在 90~100)、重音 ≈121
   let s = n.ghost ? 0.3 : accented ? 0.95 : 0.72;
   if (ev.barPos != null && ev.beatLen > 0) {
@@ -4749,6 +4768,7 @@ function humanizeDrumHit(ev, n){
   s += (n.perf != null ? n.perf : (drumHitRand(ev, key, 1) + drumHitRand(ev, key, 2) - 1) * 0.08)
      + (drumHitRand(ev, key, 5) + drumHitRand(ev, key, 6) - 1) * 0.02;
   s = Math.max(0.08, Math.min(1, s));
+  if (accented && n.accS != null) s = n.accS;   // 重音照附近一般音的比例(computeDrumPerformance 8)
   // 時間:同一拍的所有鼓件共用一個整體偏移(整個人這一拍稍早或稍晚,±4ms),再加上各肢體各自的偏移(±8ms)。
   // Groove MIDI Dataset 搖滾/流行:同一拍大鼓與 hi-hat 相差中位數 9.5ms、小鼓與 hi-hat 6.3ms;以前 ±1.5ms 只差 0.5ms,
   // 四肢像機器一樣完全同步。電子鼓觸發也有誤差,取約三分之一(中位數約 3ms),不會到聽得出 flam 的 10ms 以上
@@ -5894,7 +5914,9 @@ function initAudioGraph(){
     masterBus = audioCtx.createGain();
     makeupGain.connect(masterBus);
     masterOut = audioCtx.createGain();
-    masterOut.connect(audioCtx.destination);
+    // monitorOut:只給喇叭的音量(匯出影片時靜音,見 exportVideo;影片從 masterOut 取,不受影響)
+    monitorOut = audioCtx.createGain();
+    masterOut.connect(monitorOut); monitorOut.connect(audioCtx.destination);
     /* 備援(不支援 AudioWorklet 的瀏覽器才用):快起音壓縮器 + 4 倍超取樣軟削波。
        Web Audio 的 DynamicsCompressor 沒有預讀、又會自動補增益(約 +1.6dB),擋不住峰值,
        所以後面還要一段軟削波:−3dBFS 以下線性,以上平滑壓向 −1.4dBFS(真峰值 ≤ −1dBTP),但會有一點失真 */
@@ -6511,12 +6533,35 @@ function computePianoDynamics(){
         }
         if (n.durWhole >= 0.5) v += 2; else if (n.durWhole <= 1 / 16 + 1e-6) v -= 2;
         v += (seededRand01(k * 7.31 + m * 0.137) - 0.5) * 5;
-        if (accDb) v *= Math.pow(10, accDb / 40);
-        n.pvel = Math.max(8, Math.min(124, v));
+        n._v0 = v; n._accDb = accDb - momDb; n._momDb = momDb; n._role = rh ? (n === top ? 1 : 2) : 3;
+        n.pvel = Math.max(8, Math.min(124, v * Math.pow(10, accDb / 40)));
         n.pdt = chord && !(rh && n === top) && n.rollIndex == null ? seededRand01(k * 5.71 + m * 0.291) * 0.007 : 0;
       }
     }
   }
+  // 重音照比例(使用者要求,2026-10):重音 = 附近一般音(同一手、同角色〔旋律/內聲部/左手〕、前後半小節內〔沒有就一小節、兩小節〕、沒有重音或 sf)
+  // 平均力度 × 10^(dB/40)。以前是乘在這個音自己的力度上,而這個音本身就有拍子輕重、旋律起伏、亂數(±3~5 力度),
+  // 跟重音(+1dB ≈ 力度 +6%)一樣大:同樣的小節第一次出現重音聽不出來、第二次碰到比較大的亂數就突出
+  const pn = [];
+  for (const ev of events) for (const n of ev.notes) if (n._v0 != null) pn.push({ t: ev.tWhole, w: ev.barLen > 0 ? ev.barLen : 1, n });
+  const byRole = {};
+  for (const x of pn) (byRole[(x.n.staff || 1) * 10 + x.n._role] = byRole[(x.n.staff || 1) * 10 + x.n._role] || []).push(x);
+  for (const seq of Object.values(byRole)) seq.forEach((x, i) => {
+    const n = x.n;
+    if (n._accDb) {
+      let ref = null;
+      for (const span of [x.w / 2, x.w, 2 * x.w]) {
+        let sum = 0, cnt = 0;
+        for (const dir of [-1, 1]) for (let j = i + dir; j >= 0 && j < seq.length && Math.abs(seq[j].t - x.t) <= span + 1e-6; j += dir) {
+          const o = seq[j].n; if (!o._accDb && !o._momDb) { sum += o._v0; cnt++; }
+        }
+        if (cnt) { ref = sum / cnt; break; }
+      }
+      // 這個音本來就比附近大聲(例如小節第一拍)時以它自己為準,加了重音不會反而變小聲
+      if (ref != null) n.pvel = Math.max(8, Math.min(124, Math.max(ref, n._v0) * Math.pow(10, (n._accDb + n._momDb) / 40)));
+    }
+  });
+  for (const x of pn) delete x.n._v0, delete x.n._accDb, delete x.n._momDb, delete x.n._role;
 }
 
 /* 這首曲子需要哪些(音 × 力度層),以及每個最長要響多久(截短時用) */
@@ -9135,9 +9180,12 @@ const DRUM_EXPORT_SCORE_SCALE = 1.4;
    同一個直式畫面:巴哈譜線間距 21px、一次只看到 1 小節(捲很快),蕭邦只有 8px(字太小、上下大片空白),鼓譜 31px。
    改成「照音符大小」決定:譜線間距目標 EXPORT_AUTO_SCORE.space px,但播放軸右邊至少要看得到 aheadSec 秒的音樂
    (用整首的平均捲動速度算;用「小節數」的話,巴哈這種小節很寬但很慢的曲子會被縮得太小),
-   不小於 7px,也不超過扣掉標題與樂器面板後的高度。橫式照舊(使用者覺得沒問題) */
+   不小於 7px,也不超過扣掉標題與樂器面板後的高度。
+   橫式(2026-10,使用者要求確認比例):以前固定 440 高,譜線間距 歡樂頌 19、巴哈 17、莫札特/舒伯特 9.5、蕭邦敘事曲 6px(比直式還小),
+   上下大片空白;現在一樣照音符大小:目標 18px(橫式畫面寬,看得到的秒數不是限制,巴哈 4 秒、其他 8 秒以上),
+   鼓 36(跟以前 440×1.4 的鼓譜大小一樣;使用者沒反映過太大或太小) */
 // 鼓譜(使用者反映 18/15 太小):節奏型一直重複、讀譜不用看很遠,看前面 2 秒就夠,所以可以放更大
-const EXPORT_AUTO_SCORE = { portrait: { space: 12, drumSpace: 26, aheadSec: 3, drumAheadSec: 2 }, square: { space: 11, drumSpace: 22, aheadSec: 3, drumAheadSec: 2 } };
+const EXPORT_AUTO_SCORE = { landscape: { space: 18, drumSpace: 36, aheadSec: 3, drumAheadSec: 2 }, portrait: { space: 12, drumSpace: 26, aheadSec: 3, drumAheadSec: 2 }, square: { space: 11, drumSpace: 22, aheadSec: 3, drumAheadSec: 2 } };
 function exportAutoScoreH(cfg, kind){
   const svg = $("score").querySelector("svg");
   const P = EXPORT_AUTO_SCORE[kind];
@@ -9175,7 +9223,7 @@ async function showExportPreview(cfg){
 // 樂譜高度調小一點(原本560/480):樂譜太大時,同樣的移動速度視覺上掃過的範圍更大,
 // 快速橫向捲動會讓人看了很暈;縮小一點在畫面上維持同樣的播放速度感覺會穩定不少
 $("fmtLandscape").addEventListener("click", () => {
-  showExportPreview(Object.assign({ W: 1920, H: 1080, scoreH: 440, align: chosenAlign, bitrate: 5000000, fps: exportFps, includeKeyboard: chosenIncludeKeyboard, startSec: chosenStartSec, endSec: chosenEndSec }, watermarkCfg()));
+  showExportPreview(Object.assign({ W: 1920, H: 1080, scoreH: 440, autoKind: "landscape", align: chosenAlign, bitrate: 5000000, fps: exportFps, includeKeyboard: chosenIncludeKeyboard, startSec: chosenStartSec, endSec: chosenEndSec }, watermarkCfg()));
 });
 // 直式/方形的鋼琴譜放大(直式 380 → 560、方形 400 → 500;直式再大會一次只看得到 1.5 小節、捲動太快):手機直立看影片時樂譜太小看不清楚,
 // 而且只占畫面 1/5、上下大片空白(使用者反映)。鼓譜照舊(另外乘 DRUM_EXPORT_SCORE_SCALE)
@@ -9670,7 +9718,7 @@ function solveExportGain(E, P, block, releaseSec){
 function exportHasDrums(){ return events.some(ev => ev.notes.some(n => n.drum)); }
 async function measureExportGain(rangeStart, rangeEnd, onProgress){
   if (typeof OfflineAudioContext === "undefined" || typeof AudioWorkletNode === "undefined") return null;
-  const KEEP = ["audioCtx", "masterGain", "masterLimiter", "masterOut", "masterBus", "masterLimiterNode", "masterReady", "reverbBus", "reverbConvolver", "reverbWet", "reverbPreDelay",
+  const KEEP = ["audioCtx", "masterGain", "masterLimiter", "masterOut", "monitorOut", "masterBus", "masterLimiterNode", "masterReady", "reverbBus", "reverbConvolver", "reverbWet", "reverbPreDelay",
     "pianoRoomBus", "pianoBusIn", "pianoBusCtx", "pianoVerbIn", "pianoVerbWet", "pianoVerbCtx", "pianoVerbConv", "pianoVerbPre", "pianoVerbHp", "pianoVerbHall", "pianoResIn", "pianoResGate", "pianoResCtx", "gtrVerbIn", "gtrVerbWet", "gtrVerbCtx", "drumBus", "drumVerbIn", "drumVerbWet", "drumRoomConv", "drumRoomWet", "drumRoomIn",
     "scheduled", "startCtxTime", "ringingOpenHat", "ringingCymbals", "noteSched", "pianoPedalQueue", "pianoVoices", "pianoLastByKey", "pianoRRFlip", "gtrRR"];
   const saved = {};
@@ -9766,6 +9814,9 @@ async function exportVideo(cfg){
     }
     aDest = audioCtx.createMediaStreamDestination();
     masterOut.connect(aDest); // 從輸出上限之後取音,匯出的影片才跟現場聽到的一樣不會破音
+    // 匯出時喇叭靜音(使用者反映,2026-10):即時編碼影片很吃 CPU,音訊來不及送到喇叭時喇叭會爆音、有雜聲,
+    // 但錄進影片的每一段聲音都是完整算好的(影片沒有雜聲)。靜音只關喇叭,影片的聲音完全一樣
+    if (monitorOut) monitorOut.gain.setValueAtTime(0, audioCtx.currentTime);
     const stream = new MediaStream([
       ...vStream.getVideoTracks(),
       ...aDest.stream.getAudioTracks()
@@ -9835,6 +9886,7 @@ async function exportVideo(cfg){
     setStatus(exportCancelled ? T("exportCancelledStatus") : T("exportFailed", { msg: err.message || err }));
   }
   if (aDest) { try { masterOut.disconnect(aDest); } catch(e){} }
+  if (monitorOut) { monitorOut.gain.cancelScheduledValues(0); monitorOut.gain.value = 1; }
   if (masterBus) masterBus.gain.value = 1;   // 響度標準化只用在匯出,App 裡播放恢復原本音量
   if (masterLimiterNode) masterLimiterNode.port.postMessage({ release: MASTER.release, releaseSlow: MASTER.releaseSlow });
   stopAudioOnly();

@@ -21,7 +21,7 @@ await page.waitForFunction(() => typeof events !== "undefined" && events.length 
 await page.waitForTimeout(1500);
 for (const [name, W, H, sh] of [["landscape", 1920, 1080, 440], ["portrait", 1080, 1920, await page.evaluate(() => isDrumScore ? 380 : EXPORT_PORTRAIT_SCORE_H)], ["square", 1080, 1080, await page.evaluate(() => isDrumScore ? 400 : EXPORT_SQUARE_SCORE_H)]]) for (const kb of [true, false]) {
   const data = await page.evaluate(async ({ W, H, sh, kb, sec }) => {
-    const cfg = Object.assign({ W, H, scoreH: sh, autoKind: W === H ? "square" : H > W ? "portrait" : undefined, align: typeof chosenAlign !== "undefined" ? chosenAlign : "center", bitrate: 5e6, fps: 30, includeKeyboard: kb, startSec: sec, endSec: null }, watermarkCfg());
+    const cfg = Object.assign({ W, H, scoreH: sh, autoKind: W === H ? "square" : H > W ? "portrait" : "landscape", align: typeof chosenAlign !== "undefined" ? chosenAlign : "center", bitrate: 5e6, fps: 30, includeKeyboard: kb, startSec: sec, endSec: null }, watermarkCfg());
     await showExportPreview(cfg);
     $("previewOverlay").classList.remove("show");
     const L = computeExportLayout(pendingExportCfg);
