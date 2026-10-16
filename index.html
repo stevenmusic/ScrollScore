@@ -1135,7 +1135,7 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
               <button type="button" data-v="square" role="radio"><span class="ratio ratio-s"></span><b data-i18n="expFmtSquare">方形</b><small>IG · FB</small></button>
             </div>
           </div>
-          <label class="switch-row exp-switch">
+          <label class="switch-row exp-switch" id="expPanelRow">
             <span data-i18n="expPanelLabel">顯示鍵盤/鼓組</span>
             <span class="switch"><input type="checkbox" id="expPanelToggle"><span class="switch-track"></span></span>
           </label>
@@ -9238,6 +9238,10 @@ function exportRangeSel(){
   if (en - st < 0.5) return "bad";
   return { startSec: Math.max(0, st), endSec: Math.min(totalSec(), en) };
 }
+/* 直式鋼琴影片不畫鍵盤(使用者決定,2026-10):直式寬 1080,琴鍵只有 19~37px(蕭邦敘事曲 57 個白鍵),手機上看不出是哪個鍵,
+   空間留給翻頁的樂譜。鼓組照常(面板夠大);網頁、橫式、方形的鍵盤不變。開關記住的值不動,換回橫式/方形照舊 */
+function exportPanelAllowed(){ return !(exportPrefs.format === "portrait" && currentInstrument() !== "drum"); }
+function syncExportPanelRow(){ $("expPanelRow").style.display = exportPanelAllowed() ? "" : "none"; }
 function openExportSheet(){
   if (!events.length || exporting) return;
   closeSettingsSheet();
@@ -9245,6 +9249,7 @@ function openExportSheet(){
   syncSeg("expFormatSeg", exportPrefs.format);
   syncSeg("expAlignSeg", exportPrefs.align);
   $("expPanelToggle").checked = !!exportPrefs.panel;
+  syncExportPanelRow();
   $("formatOverlay").classList.add("show");
   refreshExportPreview(true);
 }
@@ -9256,7 +9261,7 @@ document.addEventListener("keydown", e => {
 });
 $("expFormatSeg").addEventListener("click", e => {
   const b = e.target.closest("button[data-v]"); if (!b) return;
-  exportPrefs.format = b.dataset.v; saveExportPrefs(); syncSeg("expFormatSeg", exportPrefs.format); refreshExportPreview();
+  exportPrefs.format = b.dataset.v; saveExportPrefs(); syncSeg("expFormatSeg", exportPrefs.format); syncExportPanelRow(); refreshExportPreview();
 });
 $("expAlignSeg").addEventListener("click", e => {
   const b = e.target.closest("button[data-v]"); if (!b) return;
@@ -9405,7 +9410,7 @@ function buildExportCfg(){
   const range = exportRangeSel();
   if (range === "bad") return null;
   const cfg = Object.assign((EXPORT_FORMATS[exportPrefs.format] || EXPORT_FORMATS.landscape)(),
-    { align: exportPrefs.align, bitrate: 5000000, fps: exportFps, includeKeyboard: !!exportPrefs.panel, startSec: range.startSec, endSec: range.endSec },
+    { align: exportPrefs.align, bitrate: 5000000, fps: exportFps, includeKeyboard: !!exportPrefs.panel && exportPanelAllowed(), startSec: range.startSec, endSec: range.endSec },
     watermarkCfg());
   if (cfg.page) {}
   else if (cfg.autoKind) cfg.scoreH = exportAutoScoreH(cfg, cfg.autoKind);
