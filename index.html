@@ -103,6 +103,9 @@ body.light #stage{background:#FFFDF6}
    跟直接鎖 viewport 的 user-scalable=no 不一樣,那個連縮放需求的使用者也會一起擋掉。
    #progressbar 自己的 touch-action:none 更嚴格,會照常覆蓋這裡,拖曳行為不受影響 */
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
+/* iPhone 直式轉橫式時 Safari 會自動放大文字(text autosizing),轉回直式不一定縮回來(使用者反映設定頁的字越轉越大)。
+   固定 100%:字級完全照 CSS,使用者自己雙指縮放不受影響 */
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
 html,body{height:100%;overflow:hidden}
 body{
   background:var(--bg);color:var(--ivory);
@@ -1328,6 +1331,7 @@ const I18N = {
 
     exportRenderingPct: "合成中 {pct}%",
     exportAnalyzingPct: "調整音量中 {pct}%",
+    exportPreparingPct: "準備中 {pct}%",
     exportAnalyzingSub: "YouTube 標準音量 −14 LUFS",
     exportWarnTitle: "⚠ 請讓這個畫面保持在最前面",
     exportWarnBody: "切到其他 App 或讓螢幕熄滅,|錄出來會一格一格卡住,|只能重新匯出。",
@@ -1561,6 +1565,7 @@ const I18N = {
 
     exportRenderingPct: "Rendering {pct}%",
     exportAnalyzingPct: "Normalizing loudness {pct}%",
+    exportPreparingPct: "Preparing {pct}%",
     exportAnalyzingSub: "YouTube standard: −14 LUFS",
     exportWarnTitle: "⚠ Keep this window in the foreground",
     exportWarnBody: "Switching apps or letting the screen sleep will cause stuttering frames — you'll have to export again.",
@@ -10078,6 +10083,16 @@ function exportHasDrums(){ return events.some(ev => ev.notes.some(n => n.drum));
 const EXPORT_AUDIO_KEEP = ["audioCtx", "masterGain", "masterLimiter", "masterOut", "monitorOut", "masterBus", "masterLimiterNode", "masterReady", "reverbBus", "reverbConvolver", "reverbWet", "reverbPreDelay",
     "pianoRoomBus", "pianoBusIn", "pianoBusCtx", "pianoVerbIn", "pianoVerbWet", "pianoVerbCtx", "pianoVerbConv", "pianoVerbPre", "pianoVerbHp", "pianoVerbHall", "pianoResIn", "pianoResGate", "pianoResCtx", "gtrVerbIn", "gtrVerbWet", "gtrVerbCtx", "drumBus", "drumVerbIn", "drumVerbWet", "drumRoomConv", "drumRoomWet", "drumRoomIn",
     "scheduled", "startCtxTime", "ringingOpenHat", "ringingCymbals", "noteSched", "pianoPedalQueue", "pianoVoices", "pianoLastByKey", "pianoRRFlip", "gtrRR"];
+/* 離線合成的進度。Safari 的 OfflineAudioContext 不一定會在 suspend 的時間點停下來回報(iPhone 實測「調整音量中 0%」
+   一直不動,使用者以為網頁壞了):真的進度沒來時照經過時間慢慢往前推(估計要 音訊長度 × 0.3 秒,最多推到九成),
+   真的進度來了以真的為準;數字只增不減 */
+function renderProgressTicker(estSec, report){
+  const t0 = performance.now(), est = Math.max(3, estSec) * 1000;
+  let real = 0, shown = 0;
+  const show = f => { if (f > shown + 1e-4) { shown = f; report(f); } };
+  const id = setInterval(() => show(Math.max(real, 0.9 * (1 - Math.exp(-(performance.now() - t0) / est)))), 250);
+  return { real(f){ real = Math.max(real, f); show(real); }, stop(){ clearInterval(id); } };
+}
 async function measureExportGain(rangeStart, rangeEnd, onProgress){
   if (typeof OfflineAudioContext === "undefined" || typeof AudioWorkletNode === "undefined") return null;
   const KEEP = EXPORT_AUDIO_KEEP;
@@ -10098,11 +10113,12 @@ async function measureExportGain(rangeStart, rangeEnd, onProgress){
     computeDrumPerformance();
     scheduleExportRange(rangeStart, rangeEnd, useCalib());
     const ctx = audioCtx, total = len / sr;
+    const tick = renderProgressTicker(total * 0.3, f => onProgress && onProgress(Math.round(f * 100)));
     for (let k = 1; k < 20; k++) {   // 進度:每 5% 暫停一下更新畫面
       const at = Math.floor(total * k / 20 * 128 / 128 * sr / 128) * 128 / sr;
-      ctx.suspend(at).then(() => { if (onProgress) onProgress(k * 5); ctx.resume(); }).catch(() => {});
+      ctx.suspend(at).then(() => { tick.real(k / 20); ctx.resume(); }).catch(() => {});
     }
-    await ctx.startRendering();
+    try { await ctx.startRendering(); } finally { tick.stop(); }
     const data = await new Promise(res => { tap.port.onmessage = e => res(e.data); tap.port.postMessage("dump"); });
     restore();
     return solveExportGain(data.E, data.P, data.block, exportHasDrums() ? EXPORT_DRUM_RELEASE : 0.15);
@@ -10160,10 +10176,17 @@ async function pickFastExportFormat(W, H, fps, bitrate){
   if (typeof VideoEncoder === "undefined" || typeof VideoFrame === "undefined" || typeof OfflineAudioContext === "undefined" || typeof AudioWorkletNode === "undefined") return { fail: "codecs" };
   if (typeof AudioEncoder === "undefined" || typeof AudioData === "undefined") return { fail: "audio" };   // iPhone/iPad:iOS 26 才有 AudioEncoder
   const sr = fastExportSampleRate();
-  const vOk = async codec => { try { const r = await VideoEncoder.isConfigSupported({ codec, width: W, height: H, bitrate, framerate: fps, ...(codec.startsWith("avc") ? { avc: { format: "avc" } } : {}) }); return r && r.supported; } catch (e) { return false; } };
+  const vTry = async (codec, avcFormat) => { try { const r = await VideoEncoder.isConfigSupported({ codec, width: W, height: H, bitrate, framerate: fps, ...(avcFormat ? { avc: { format: avcFormat } } : {}) }); return r && r.supported; } catch (e) { return false; } };
+  // H.264 優先用 Annex B(SPS/PPS 跟著關鍵格在位元流裡,不靠編碼器給 decoderConfig;見 makeH264Packer)
+  let avcFormat = null;
+  const vOk = async codec => {
+    if (!codec.startsWith("avc")) return vTry(codec, null);
+    for (const f of ["annexb", "avc"]) if (await vTry(codec, f)) { avcFormat = f; return true; }
+    return false;
+  };
   const aOk = async codec => { try { const r = await AudioEncoder.isConfigSupported({ codec, sampleRate: sr, numberOfChannels: 2, bitrate: FAST_EXPORT.audioBitrate }); return r && r.supported; } catch (e) { return false; } };
   if (await aOk("mp4a.40.2"))
-    for (const v of ["avc1.640028", "avc1.4d0028", "avc1.42e028"]) if (await vOk(v)) return { container: "mp4", vCodec: v, aCodec: "mp4a.40.2", muxV: "avc", muxA: "aac", mime: "video/mp4;codecs=avc1,mp4a.40.2", ext: "mp4" };
+    for (const v of ["avc1.640028", "avc1.4d0028", "avc1.42e028"]) if (await vOk(v)) return { container: "mp4", vCodec: v, avcFormat, aCodec: "mp4a.40.2", muxV: "avc", muxA: "aac", mime: "video/mp4;codecs=avc1,mp4a.40.2", ext: "mp4" };
   if (await aOk("opus"))
     for (const [v, mv] of [["vp09.00.40.08", "V_VP9"], ["vp8", "V_VP8"]]) if (await vOk(v)) return { container: "webm", vCodec: v, aCodec: "opus", muxV: mv, muxA: "A_OPUS", mime: "video/webm;codecs=" + (mv === "V_VP9" ? "vp9" : "vp8") + ",opus", ext: "webm" };
   return { fail: (await aOk("mp4a.40.2")) || (await aOk("opus")) ? "codecs" : "audio" };
@@ -10216,11 +10239,12 @@ async function renderExportAudioFast(rangeStart, rangeEnd, onProgress){
     computeDrumPerformance();
     scheduleExportRange(rangeStart, rangeEnd, useCalib());
     const ctx = audioCtx, total = len / sr;
+    const tick = renderProgressTicker(total * 0.3, f => onProgress && onProgress(f * 0.85));
     for (let k = 1; k < 20; k++) {
       const at = Math.floor(total * k / 20 * sr / 128) * 128 / sr;
-      ctx.suspend(at).then(() => { if (onProgress) onProgress(k / 20 * 0.85); ctx.resume(); }).catch(() => {});
+      ctx.suspend(at).then(() => { tick.real(k / 20); ctx.resume(); }).catch(() => {});
     }
-    buf = await ctx.startRendering();
+    try { buf = await ctx.startRendering(); } finally { tick.stop(); }
     data = await new Promise(res => { tap.port.onmessage = e => res(e.data); tap.port.postMessage("dump"); });
   } finally { restore(); }
   const drums = exportHasDrums();
@@ -10240,14 +10264,104 @@ function setExportOverlayMode(fast){
 /* 改用即時錄影時,在匯出畫面與完成訊息寫出原因(使用者回報時看得到是哪一種:沒有編碼器、太慢、出錯) */
 let fastExportNote = "";
 function fastFallback(reason, detail){
+  stopFastPrepTick();
   const txt = reason === "test" ? "" : T({ codecs: "fastNoteNoCodecs", audio: "fastNoteNoAudio", slow: "fastNoteSlow", error: "fastNoteError" }[reason], { x: detail || "", msg: detail || "" });
   setPhrasedText($("exportFastNote"), txt);
   fastExportNote = txt.replace(/\|/g, "");
+  $("exportTime").textContent = "";   // 快速匯出留下的時間(例如 1:26 / 1:26)不要帶到即時錄影
+  $("exportFill").style.width = "0%";
   setExportOverlayMode(false);
   return false;
 }
+/* 編碼器輸出 → 封裝。iPhone(iOS 26.1 Safari)實測:VideoEncoder 沒有附 decoderConfig,mp4-muxer 收尾時
+   「track.info.decoderConfig is null」整段白做、退回即時錄影(使用者截圖)。所以不靠編碼器給的資訊:
+   - H.264 用 Annex B(SPS/PPS 在關鍵格的位元流裡),makeH264Packer 自己轉成 MP4 的長度前綴格式、組 avcC;
+     編碼器有給 description(Chrome 的 avc 格式)就用它
+   - 時長沒給(null)就用 1/fps、1024/取樣率;其他格式沒給 decoderConfig 就補最基本的(VP9 要 colorSpace)
+   - 聲音的 decoderConfig 沒有 description 就不傳,mp4-muxer 會自己照 AAC-LC 組 */
+function h264SplitNals(u8){
+  const out = [];
+  const annexB = u8.length > 3 && u8[0] === 0 && u8[1] === 0 && (u8[2] === 1 || (u8[2] === 0 && u8[3] === 1));
+  if (!annexB) {   // 長度前綴(AVCC)
+    for (let i = 0; i + 4 <= u8.length; ) {
+      const n = ((u8[i] << 24) | (u8[i + 1] << 16) | (u8[i + 2] << 8) | u8[i + 3]) >>> 0; i += 4;
+      if (!n || i + n > u8.length) break;
+      out.push(u8.subarray(i, i + n)); i += n;
+    }
+    return out;
+  }
+  let start = -1;
+  for (let i = 0; i + 2 < u8.length; i++) {
+    if (u8[i] === 0 && u8[i + 1] === 0 && u8[i + 2] === 1) {
+      if (start >= 0) { let end = i; while (end > start && u8[end - 1] === 0) end--; out.push(u8.subarray(start, end)); }
+      start = i + 3; i += 2;
+    }
+  }
+  if (start >= 0 && start < u8.length) out.push(u8.subarray(start));
+  return out;
+}
+function makeH264Packer(){
+  let sps = null, pps = null, desc = null;
+  return (u8, meta) => {
+    const d = meta && meta.decoderConfig && meta.decoderConfig.description;
+    if (d && !desc) desc = d instanceof ArrayBuffer ? new Uint8Array(d.slice(0)) : new Uint8Array(d.buffer.slice(d.byteOffset, d.byteOffset + d.byteLength));
+    const keep = [];
+    for (const n of h264SplitNals(u8)) {
+      const t = n[0] & 31;
+      if (t === 7) { if (!sps) sps = n.slice(); }
+      else if (t === 8) { if (!pps) pps = n.slice(); }
+      else if (t !== 9) keep.push(n);   // 參數組放 avcC、存取單元分隔符不要
+    }
+    let size = 0; for (const n of keep) size += 4 + n.length;
+    const data = new Uint8Array(size);
+    let o = 0;
+    for (const n of keep) { data[o] = n.length >>> 24; data[o + 1] = (n.length >> 16) & 255; data[o + 2] = (n.length >> 8) & 255; data[o + 3] = n.length & 255; data.set(n, o + 4); o += 4 + n.length; }
+    if (!desc && sps && pps) desc = new Uint8Array([1, sps[1], sps[2], sps[3], 0xFF, 0xE1, sps.length >> 8, sps.length & 255, ...sps, 1, pps.length >> 8, pps.length & 255, ...pps]);
+    return { data, desc };
+  };
+}
+const DEFAULT_COLOR_SPACE = { primaries: "bt709", transfer: "bt709", matrix: "bt709", fullRange: false };
+function muxVideoChunkFn(muxer, fmtSel, W, H, fps){
+  const packer = fmtSel.muxV === "avc" ? makeH264Packer() : null, mp4 = fmtSel.container === "mp4";
+  let sentCfg = false;
+  return (chunk, meta) => {
+    if (window.FAST_EXPORT_DROP_META) meta = undefined;   // 測試工具:模擬 Safari 不給 decoderConfig
+    const raw = new Uint8Array(chunk.byteLength); chunk.copyTo(raw);
+    const ts = chunk.timestamp, dur = Number.isFinite(chunk.duration) ? chunk.duration : Math.round(1e6 / fps);
+    if (!mp4) return muxer.addVideoChunkRaw(raw, chunk.type, ts, meta && meta.decoderConfig ? meta : undefined);
+    const mc = meta && meta.decoderConfig;
+    let data = raw, m;
+    if (packer) {
+      const r = packer(raw, meta); data = r.data;
+      if (r.desc && !sentCfg) { sentCfg = true; m = { decoderConfig: { codec: fmtSel.vCodec, codedWidth: W, codedHeight: H, description: r.desc, ...(mc && mc.colorSpace ? { colorSpace: mc.colorSpace } : {}) } }; }
+    } else if (!sentCfg) {
+      sentCfg = true;
+      m = { decoderConfig: { codec: fmtSel.vCodec, codedWidth: W, codedHeight: H, ...(mc || {}), colorSpace: (mc && mc.colorSpace && mc.colorSpace.primaries) ? mc.colorSpace : DEFAULT_COLOR_SPACE } };
+    }
+    muxer.addVideoChunkRaw(data, chunk.type, ts, dur, m);
+  };
+}
+function muxAudioChunkFn(muxer, fmtSel, sr){
+  const mp4 = fmtSel.container === "mp4";
+  return (chunk, meta) => {
+    if (window.FAST_EXPORT_DROP_META) meta = undefined;
+    const raw = new Uint8Array(chunk.byteLength); chunk.copyTo(raw);
+    const m = meta && meta.decoderConfig && meta.decoderConfig.description ? meta : undefined;
+    if (!mp4) return muxer.addAudioChunkRaw(raw, chunk.type, chunk.timestamp, m);
+    const dur = Number.isFinite(chunk.duration) ? chunk.duration : Math.round(1024 / sr * 1e6);
+    muxer.addAudioChunkRaw(raw, chunk.type, chunk.timestamp, dur, m);
+  };
+}
 /* 快速匯出。回傳 true = 已經處理完(成功、取消或在產生影片後失敗);false = 這台機器不支援或還沒開始就失敗,改用即時錄影 */
+let fastPrepTick = null;
+function stopFastPrepTick(){ if (fastPrepTick) { fastPrepTick.stop(); fastPrepTick = null; } }
 async function fastExportVideo(cfg){
+  // 準備(格式檢查、樂譜點陣化、試編)要幾秒,標題不能停在 0%(使用者會以為壞了):照時間往前推
+  stopFastPrepTick();
+  const prepPct = f => { const pct = Math.round(f * 100); $("exportOverlayTitle").textContent = T("exportPreparingPct", { pct }); $("exportFill").style.width = pct + "%"; };
+  prepPct(0);
+  $("exportTime").textContent = "";
+  fastPrepTick = renderProgressTicker(4, prepPct);
   const fmtSel = await pickFastExportFormat(cfg.W, cfg.H, cfg.fps || 30, cfg.bitrate);
   if (fmtSel.fail) return fastFallback(fmtSel.fail);
   let Muxer;
@@ -10281,7 +10395,7 @@ async function fastExportVideo(cfg){
   //    之後每一格分開計時:畫畫面 / 從畫布取出影格 / 整格總時間,速度不夠時寫在原因裡,方便判斷卡在哪一步。
   //    取影格有兩種方法(直接從 canvas、先轉 ImageBitmap),Safari 上哪個快不一定,兩個都試、用快的。
   //    60fps 不夠快、30fps 夠快時改用 30fps
-  const encCfg = rate => ({ codec: fmtSel.vCodec, width: cfg.W, height: cfg.H, bitrate: cfg.bitrate, framerate: rate, latencyMode: "realtime", ...(fmtSel.container === "mp4" ? { avc: { format: "avc" } } : {}) });
+  const encCfg = rate => ({ codec: fmtSel.vCodec, width: cfg.W, height: cfg.H, bitrate: cfg.bitrate, framerate: rate, latencyMode: "realtime", ...(fmtSel.avcFormat ? { avc: { format: fmtSel.avcFormat } } : {}) });
   const FRAME_SRC = {
     canvas: async (ts) => new VideoFrame(cv, { timestamp: ts }),
     bitmap: async (ts) => { const bm = await createImageBitmap(cv); const fr = new VideoFrame(bm, { timestamp: ts }); bm.close(); return fr; },
@@ -10326,6 +10440,7 @@ async function fastExportVideo(cfg){
       else return fastFallback("slow", probeInfo);
     }
   } catch (e) { console.warn(e); return fastFallback("error", e.message); }
+  stopFastPrepTick();
   computeDrumPerformance();   // 試編畫了鼓組面板,重算一次讓正式匯出從頭開始
   // 3) 聲音
   setPct("exportAnalyzingPct", 0);
@@ -10344,9 +10459,10 @@ async function fastExportVideo(cfg){
     ? { target, video: { codec: fmtSel.muxV, width: cfg.W, height: cfg.H, frameRate: fps }, audio: { codec: fmtSel.muxA, numberOfChannels: 2, sampleRate: sr }, fastStart: "in-memory", firstTimestampBehavior: "offset" }
     : { target, video: { codec: fmtSel.muxV, width: cfg.W, height: cfg.H, frameRate: fps }, audio: { codec: fmtSel.muxA, numberOfChannels: 2, sampleRate: sr }, firstTimestampBehavior: "offset" });
   let encErr = null;
-  const venc = new VideoEncoder({ output: (c, m) => muxer.addVideoChunk(c, m), error: e => { encErr = e; } });
+  const onVideo = muxVideoChunkFn(muxer, fmtSel, cfg.W, cfg.H, fps), onAudio = muxAudioChunkFn(muxer, fmtSel, sr);
+  const venc = new VideoEncoder({ output: (c, m) => { try { onVideo(c, m); } catch (e) { encErr = encErr || e; } }, error: e => { encErr = e; } });
   venc.configure(encCfg(fps));
-  const aenc = new AudioEncoder({ output: (c, m) => muxer.addAudioChunk(c, m), error: e => { encErr = e; } });
+  const aenc = new AudioEncoder({ output: (c, m) => { try { onAudio(c, m); } catch (e) { encErr = encErr || e; } }, error: e => { encErr = e; } });
   aenc.configure({ codec: fmtSel.aCodec, sampleRate: sr, numberOfChannels: 2, bitrate: FAST_EXPORT.audioBitrate });
   const closeAll = () => { try { venc.close(); } catch (e) {} try { aenc.close(); } catch (e) {} };
   try {
@@ -10375,7 +10491,7 @@ async function fastExportVideo(cfg){
       if (now - lastUi > 100) {
         lastUi = now;
         setPct("exportRenderingPct", (f + 1) / nFrames);
-        $("exportTime").textContent = fmt(Math.max(0, t - lead)) + " / " + fmt(total);
+        $("exportTime").textContent = fmt(Math.min(total, Math.max(0, t - lead))) + " / " + fmt(total);
         await new Promise(r => setTimeout(r, 0));
       }
     }
@@ -10413,7 +10529,9 @@ async function exportVideo(cfg){
   let aDest = null;
   try {
     // 先試快速匯出(WebCodecs,不用照時間跑);不支援或還沒產生影片前就失敗,才往下走原本的即時錄影
-    if (!(await fastExportVideo(cfg))) {
+    const fastDone = await fastExportVideo(cfg);
+    stopFastPrepTick();
+    if (!fastDone) {
       setExportOverlayMode(false);
       // 響度標準化:先在背景算一遍要匯出的區間,求出讓成品 −14 LUFS 的增益(只影響匯出的影片)
       {
