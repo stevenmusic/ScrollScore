@@ -6,7 +6,7 @@
 
 `npm run build`（`build-www.mjs`）會把下面這些檔案複製到 `www/`，再由 Capacitor 放進 App：
 
-- `index.html`、`privacy.html`
+- `index.html`、`privacy.html`、`support.html`
 - `vendor/`：OSMD、JSZip、alphaTab 程式庫
 - `samples/`：範例樂譜
 - `piano/`、`drums/`：鋼琴與鼓的音色

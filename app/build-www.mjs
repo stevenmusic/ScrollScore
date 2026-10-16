@@ -1,11 +1,11 @@
 // 把 App 要用的檔案複製到 app/www(Capacitor 的 webDir)。只放 App 會用到的東西:
-//   index.html、privacy.html、vendor/(程式庫)、samples/(範例樂譜)、piano/、drums/(音色)
+//   index.html、privacy.html、support.html、vendor/(程式庫)、samples/(範例樂譜)、piano/、drums/(音色)
 // 不放:guitar/(吉他沒有在 App 裡;授權也不能放進商業 App:GPL / CC-BY-NC)、tools/、各資料夾裡的 build/ 建置腳本
 import fs from "node:fs";
 import path from "node:path";
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const OUT = path.join(ROOT, "app", "www");
-const FILES = ["index.html", "privacy.html"];
+const FILES = ["index.html", "privacy.html", "support.html"];
 const DIRS = ["vendor", "samples", "piano", "drums"];
 const SKIP = new Set(["build", "__pycache__"]);
 const SKIP_EXT = new Set([".py"]);

@@ -11,7 +11,7 @@
 | 年齡分級 | 4+（所有問題都答「無」） |
 | 價格 | 自行決定。所有音色授權都允許商用 |
 | 隱私權政策網址 | https://stevenmusic.github.io/ScrollScore/privacy.html（push 到 main 後由 GitHub Pages 提供） |
-| 支援網址 | https://stevenmusic.github.io/ScrollScore/ |
+| 支援網址 | https://stevenmusic.github.io/ScrollScore/support.html（使用說明、常見問題、聯絡信箱；審核規則 1.5 要求支援網址上要有聯絡方式） |
 | 聯絡信箱 | steventsaimusic@gmail.com |
 
 ## App 隱私（App Privacy）
@@ -66,6 +66,6 @@ App 沒有帳號、分析、廣告或追蹤功能。匯入的樂譜和匯出的�
 ## 送審前檢查
 
 - [ ] 在實機上測試：靜音開關打開時有聲音、匯入檔案、匯出影片並存到相簿、旋轉螢幕
-- [ ] 隱私權政策網址打得開（push 到 main 後確認 GitHub Pages 已更新）
+- [ ] 隱私權政策、支援網址都打得開（push 到 main 後確認 GitHub Pages 已更新）
 - [ ] App 圖示不是 Capacitor 預設圖示（已換成 `assets/icon-1024.png`）
 - [ ] 版本號：第一次送審用 1.0 (1)
