@@ -3386,6 +3386,76 @@ function extendLedgerLineStems(){
 }
 
 /* ── 渲染 + 建立時間軸 ─────────────────────── */
+/* 圓滑線拱形(使用者要求,2026-10:參考一般樂譜,高音譜與低音譜不要離太遠、不允許重疊、可以調圓滑線的拱形)。
+   單行排版的上下距離取「整首最擠的一點」,量出來撐開距離的主要是圓滑線:關掉圓滑線時 莫札特 K331-3 15.4 → 7.5 格、
+   蕭邦第一號敘事曲 35.4 → 22.6、德布西 15.1 → 11.2(一般樂譜約 6~10 格)。OSMD 先把兩端接在音符上、
+   再用固定的切線角度決定控制點,長圓滑線常常拱得比「越過中間的音符」需要的高很多(莫札特第 121~124 小節
+   低音譜一條跨 4 小節的圓滑線拱到低音譜上方 11 格)。這裡在 OSMD 算完之後把兩個控制點往兩端連線收:
+   找出「整條線離中間所有東西(音符、符桿、加線、之前的圓滑線…,OSMD 的上/下輪廓線)至少 SLUR_FLAT.clear 格」
+   的最小拱高,不比原本高、也不低於 min(SLUR_FLAT.minH, 寬度 × SLUR_FLAT.minRatio),再用新的曲線更新輪廓線。
+   兩端各 SLUR_FLAT.endSkip 格內不檢查(端點本來就貼著音符)。不會跟任何東西重疊(檢查的就是 OSMD 用來排距離的輪廓線) */
+const SLUR_FLAT = { clear: 0.6, minH: 1.2, minRatio: 0.2, endSkip: 1, minLen: 6, shapes: [0.25, 0.18, 0.12, 0.07] };
+function installSlurFlattening(){
+  const G = window.opensheetmusicdisplay && opensheetmusicdisplay.GraphicalSlur;
+  if (!G || !G.prototype.calculateCurve || G.prototype.__ssFlat) return;
+  const orig = G.prototype.calculateCurve;
+  G.prototype.__ssFlat = true;
+  G.prototype.calculateCurve = function(rules){
+    let line = null, x0i = 0, skyPre = null, botPre = null;
+    try {
+      const a = this.staffEntries[0], b = this.staffEntries[this.staffEntries.length - 1];
+      line = a.parentMeasure.ParentStaffLine;
+      const su = rules.SamplingUnit, n = line.SkyLine.length;
+      const xa = a.parentMeasure.PositionAndShape.RelativePosition.x + a.PositionAndShape.RelativePosition.x - 6;
+      const xb = b.parentMeasure.PositionAndShape.RelativePosition.x + b.parentMeasure.PositionAndShape.Size.width + 6;
+      x0i = Math.max(0, Math.floor(xa * su));
+      const x1i = Math.min(n, Math.ceil(xb * su) + 2);
+      skyPre = line.SkyLine.slice(x0i, x1i); botPre = line.BottomLine.slice(x0i, x1i);
+    } catch (e) { line = null; }
+    orig.call(this, rules);
+    if (!line || !this.bezierStartPt || !this.bezierEndPt) return;
+    try {
+      const P0 = this.bezierStartPt, P1 = this.bezierStartControlPt, P2 = this.bezierEndControlPt, P3 = this.bezierEndPt;
+      const above = (P1.y + P2.y) / 2 < (P0.y + P3.y) / 2;
+      const su = rules.SamplingUnit, arr = above ? line.SkyLine : line.BottomLine, pre = above ? skyPre : botPre;
+      for (let i = 0; i < pre.length; i++) arr[x0i + i] = pre[i];             // 拿掉 OSMD 用原本曲線更新的輪廓
+      // 曲線形狀:控制點 = 端點沿連線往內 a×長度、往外(圓滑線那一側)偏 H。a 小 = 兩端陡、中間平(長圓滑線的印刷慣例)
+      const dx = P3.x - P0.x, dy = P3.y - P0.y, len = Math.hypot(dx, dy) || 1;
+      let nx = -dy / len, ny = dx / len;                                       // 連線的法向量,轉到圓滑線那一側
+      const side = ((P1.x + P2.x) / 2 - (P0.x + P3.x) / 2) * nx + ((P1.y + P2.y) / 2 - (P0.y + P3.y) / 2) * ny;
+      if (side < 0) { nx = -nx; ny = -ny; }
+      const N = Math.max(16, Math.ceil(Math.abs(dx) * su));
+      const bez = (C1, C2) => { const pts = []; for (let i = 0; i <= N; i++) { const t = i / N, u = 1 - t; pts.push({ x: u*u*u*P0.x + 3*u*u*t*C1.x + 3*u*t*t*C2.x + t*t*t*P3.x, y: u*u*u*P0.y + 3*u*u*t*C1.y + 3*u*t*t*C2.y + t*t*t*P3.y }); } return pts; };
+      const shape = (a, H) => [{ x: P0.x + a * dx + H * nx, y: P0.y + a * dy + H * ny }, { x: P3.x - a * dx + H * nx, y: P3.y - a * dy + H * ny }];
+      const height = pts => { let h = 0; for (const p of pts) h = Math.max(h, ((p.x - P0.x) * nx + (p.y - P0.y) * ny)); return h; };
+      // 侵入量:曲線進到「離輪廓 clear 格」範圍內最深多少(0 = 完全沒碰到)
+      const intrude = pts => { let v = 0; for (const p of pts) {
+        if (p.x < Math.min(P0.x, P3.x) + SLUR_FLAT.endSkip || p.x > Math.max(P0.x, P3.x) - SLUR_FLAT.endSkip) continue;
+        const i = Math.floor(p.x * su) - x0i;
+        for (const j of [i - 1, i, i + 1]) { if (j < 0 || j >= pre.length) continue; v = Math.max(v, above ? p.y - (pre[j] - SLUR_FLAT.clear) : (pre[j] + SLUR_FLAT.clear) - p.y); }
+      } return v; };
+      const orig1 = bez(P1, P2), h1 = height(orig1);
+      // 原本的曲線有些地方就已經比 clear 近(端點附近、跟別的圓滑線很近):只要不比原本更近就可以
+      const v1 = intrude(orig1) + 1e-3;
+      const hMin = Math.min(SLUR_FLAT.minH, SLUR_FLAT.minRatio * len);
+      let best = null;
+      if (h1 > hMin * 1.15 && len >= SLUR_FLAT.minLen) for (const a of SLUR_FLAT.shapes) {   // 短的圓滑線本來就不高,不用找
+        // 拱高約 0.75H:找最小、不碰到東西的 H(二分搜尋)
+        let lo = hMin / 0.75, hi = Math.max(lo, h1 / 0.75 * 1.5);
+        if (intrude(bez(...shape(a, hi))) > v1) continue;
+        if (intrude(bez(...shape(a, lo))) > v1) { for (let it = 0; it < 16; it++) { const m = (lo + hi) / 2; if (intrude(bez(...shape(a, m))) <= v1) hi = m; else lo = m; } lo = hi; }
+        const pts = bez(...shape(a, lo)), h = height(pts);
+        if (!best || h < best.h * 0.9) best = { a, H: lo, h };                  // 差不多高時用前面(比較圓)的形狀
+      }
+      const useNew = best && best.h < h1 * 0.9;                                // 省不到一成就保留 OSMD 原本的
+      if (useNew) { const [C1, C2] = shape(best.a, best.H); P1.x = C1.x; P1.y = C1.y; P2.x = C2.x; P2.y = C2.y; }
+      for (const p of bez(P1, P2)) {                                             // 用新的曲線更新輪廓(跟 OSMD 一樣更新兩個取樣點)
+        const i = Math.floor(p.x * su);
+        for (const j of [i, i + 1]) { if (j < 0 || j >= arr.length) continue; arr[j] = above ? Math.min(arr[j], p.y) : Math.max(arr[j], p.y); }
+      }
+    } catch (err) { console.warn("slur flatten", err); }
+  };
+}
 function scoreLayoutTooTall(){
   try {
     const sys = osmd.GraphicSheet.MusicPages[0].MusicSystems[0], sl = sys.StaffLines;
@@ -3410,6 +3480,7 @@ async function renderScore(xmlText){
     followCursor: false
   });
   osmd.EngravingRules.RenderSingleHorizontalStaffline = true;
+  installSlurFlattening();
   // OSMD 預設把整行寬度上限設在 32767(canvas 的限制),長曲子(例如蕭邦敘事曲 264 小節)超過就會被折成第二行,
   // 橫向捲動整個錯掉。這裡用 SVG,沒有這個限制;匯出影片點陣化本來就切成 4000px 的 tile
   osmd.EngravingRules.SheetMaximumWidth = 1e7;
