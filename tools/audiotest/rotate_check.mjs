@@ -15,7 +15,7 @@ const server = http.createServer((req, res) => {
 await new Promise(r => server.listen(0, "127.0.0.1", r));
 const URL0 = `http://127.0.0.1:${server.address().port}/index.html`;
 const browser = await chromium.launch({ args: ["--autoplay-policy=no-user-gesture-required"] });
-const PHONES = [[390, 844], [375, 667], [430, 932], [320, 568], [360, 780], [768, 1024]];
+const PHONES = process.env.FULL ? [[390, 844], [375, 667], [430, 932], [320, 568], [360, 780], [768, 1024]] : [[390, 844], [320, 568], [768, 1024]];   // FULL=1 跑全部尺寸
 // 狀態:載入前/後 × 要看的畫面
 const VIEWS = {
   settings: async p => { await p.click("#settingsToggle"); await p.waitForTimeout(400); },
