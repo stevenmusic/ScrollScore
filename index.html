@@ -1130,6 +1130,7 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
     <div class="box">
       <div class="title" id="exportOverlayTitle">合成中 0%</div>
       <div class="export-sub" id="exportOverlaySub"></div>
+      <div class="export-sub" id="exportFastNote"></div>
       <div id="exportTime">0:00 / 0:00</div>
       <div id="exportBar"><div id="exportFill"></div></div>
       <div class="export-warn">
@@ -1332,6 +1333,10 @@ const I18N = {
     exportWarnBody: "切到其他 App 或讓螢幕熄滅,|錄出來會一格一格卡住,|只能重新匯出。",
     exportInfoP: "輸出時間 = 樂曲長度。|匯出時喇叭靜音|(避免爆音),|影片裡的聲音不受影響。",
     exportWarnBodyFast: "切到其他 App 或讓螢幕熄滅,|匯出可能會中斷。",
+    fastNoteNoCodecs: "這台裝置不支援快速匯出|(需要 iOS 16.4 以上),|改用即時錄影",
+    fastNoteNoAudio: "這台裝置沒有聲音編碼器|(需要 iOS 26 以上),|改用即時錄影",
+    fastNoteSlow: "編碼速度不夠快|({x} 倍),|改用即時錄影",
+    fastNoteError: "快速匯出失敗|({msg}),|改用即時錄影",
     exportInfoPFast: "不用等樂曲播完,|通常比樂曲長度快很多。",
 
     previewImgAlt: "匯出預覽",
@@ -1561,6 +1566,10 @@ const I18N = {
     exportWarnBody: "Switching apps or letting the screen sleep will cause stuttering frames — you'll have to export again.",
     exportInfoP: "Export time equals the piece's length. Speakers are muted while exporting to avoid crackling; the video's audio is unaffected.",
     exportWarnBodyFast: "Switching apps or letting the screen sleep may interrupt the export.",
+    fastNoteNoCodecs: "Fast export isn't supported on this device (needs iOS 16.4+); using real-time recording",
+    fastNoteNoAudio: "This device has no audio encoder (needs iOS 26+); using real-time recording",
+    fastNoteSlow: "Encoding isn't fast enough ({x}×); using real-time recording",
+    fastNoteError: "Fast export failed ({msg}); using real-time recording",
     exportInfoPFast: "No need to wait for the piece to play through — usually much faster than its length.",
 
     previewImgAlt: "Export preview",
@@ -10120,7 +10129,7 @@ function scheduleExportRange(rangeStart, rangeEnd, calib){
    3) 封裝:mp4-muxer(H.264 + AAC,iPhone「照片」、QuickTime 都能播)或 webm-muxer(VP9 + Opus,沒有 AAC 編碼器的瀏覽器)
    瀏覽器不支援、或中途任何一步失敗(還沒產生影片前),自動退回原本的即時錄影,使用者不會拿不到影片。
    影片開頭留 FAST_EXPORT.lead 秒、結尾留 tail 秒讓殘響收尾(即時匯出是 0.4 / 0.6 秒) */
-const FAST_EXPORT = { lead: 0.4, tail: 1.2, audioBitrate: 192000, keyEverySec: 2, minSpeed: 1.5 };   // minSpeed:試編至少要幾倍速才用快速匯出
+const FAST_EXPORT = { lead: 0.4, tail: 1.2, audioBitrate: 192000, keyEverySec: 2, minSpeed: 1.2 };   // minSpeed:試編至少要幾倍速才用快速匯出(聲音處理兩邊都要做,影片編碼比樂曲短就划算)
 // 取樣率跟著播放用的 AudioContext(殘響等 ConvolverNode 的 IR 是照它解碼的,離線 context 取樣率不同會出錯);通常 48000 或 44100
 function fastExportSampleRate(){ return (audioCtx && audioCtx.sampleRate) || 48000; }
 const MUXER_URLS = {
@@ -10146,10 +10155,10 @@ function loadMuxer(kind){
 }
 // 找一組這台機器能編碼的格式:先 MP4(H.264 + AAC),再 WebM(VP9/VP8 + Opus);都不行回傳 null(改用即時錄影)
 async function pickFastExportFormat(W, H, fps, bitrate){
-  if (window.FAST_EXPORT_DISABLE) return null;            // 測試工具:強制走即時錄影
+  if (window.FAST_EXPORT_DISABLE) return { fail: "test" };   // 測試工具:強制走即時錄影
   if (window.FAST_EXPORT_FORCE) return window.FAST_EXPORT_FORCE;   // 測試工具:指定格式(例如 MP4 容器 + VP9/Opus,測 mp4-muxer)
-  if (typeof VideoEncoder === "undefined" || typeof AudioEncoder === "undefined" || typeof VideoFrame === "undefined"
-    || typeof AudioData === "undefined" || typeof OfflineAudioContext === "undefined" || typeof AudioWorkletNode === "undefined") return null;
+  if (typeof VideoEncoder === "undefined" || typeof VideoFrame === "undefined" || typeof OfflineAudioContext === "undefined" || typeof AudioWorkletNode === "undefined") return { fail: "codecs" };
+  if (typeof AudioEncoder === "undefined" || typeof AudioData === "undefined") return { fail: "audio" };   // iPhone/iPad:iOS 26 才有 AudioEncoder
   const sr = fastExportSampleRate();
   const vOk = async codec => { try { const r = await VideoEncoder.isConfigSupported({ codec, width: W, height: H, bitrate, framerate: fps, ...(codec.startsWith("avc") ? { avc: { format: "avc" } } : {}) }); return r && r.supported; } catch (e) { return false; } };
   const aOk = async codec => { try { const r = await AudioEncoder.isConfigSupported({ codec, sampleRate: sr, numberOfChannels: 2, bitrate: FAST_EXPORT.audioBitrate }); return r && r.supported; } catch (e) { return false; } };
@@ -10157,7 +10166,7 @@ async function pickFastExportFormat(W, H, fps, bitrate){
     for (const v of ["avc1.640028", "avc1.4d0028", "avc1.42e028"]) if (await vOk(v)) return { container: "mp4", vCodec: v, aCodec: "mp4a.40.2", muxV: "avc", muxA: "aac", mime: "video/mp4;codecs=avc1,mp4a.40.2", ext: "mp4" };
   if (await aOk("opus"))
     for (const [v, mv] of [["vp09.00.40.08", "V_VP9"], ["vp8", "V_VP8"]]) if (await vOk(v)) return { container: "webm", vCodec: v, aCodec: "opus", muxV: mv, muxA: "A_OPUS", mime: "video/webm;codecs=" + (mv === "V_VP9" ? "vp9" : "vp8") + ",opus", ext: "webm" };
-  return null;
+  return { fail: (await aOk("mp4a.40.2")) || (await aOk("opus")) ? "codecs" : "audio" };
 }
 // 母帶限幅器在主執行緒跑(同一份 AudioWorkletProcessor 程式碼,補上 port/sampleRate/registerProcessor 的殼),直接改寫 L/R
 function runLimiterOffline(L, R, sampleRate, opts, onProgress){
@@ -10228,14 +10237,24 @@ function setExportOverlayMode(fast){
   setPhrasedText($("exportWarnBodyEl"), T(fast ? "exportWarnBodyFast" : "exportWarnBody"));
   setPhrasedText($("exportInfoEl"), T(fast ? "exportInfoPFast" : "exportInfoP"));
 }
+/* 改用即時錄影時,在匯出畫面與完成訊息寫出原因(使用者回報時看得到是哪一種:沒有編碼器、太慢、出錯) */
+let fastExportNote = "";
+function fastFallback(reason, detail){
+  const txt = reason === "test" ? "" : T({ codecs: "fastNoteNoCodecs", audio: "fastNoteNoAudio", slow: "fastNoteSlow", error: "fastNoteError" }[reason], { x: detail || "", msg: detail || "" });
+  setPhrasedText($("exportFastNote"), txt);
+  fastExportNote = txt.replace(/\|/g, "");
+  setExportOverlayMode(false);
+  return false;
+}
 /* 快速匯出。回傳 true = 已經處理完(成功、取消或在產生影片後失敗);false = 這台機器不支援或還沒開始就失敗,改用即時錄影 */
 async function fastExportVideo(cfg){
   const fmtSel = await pickFastExportFormat(cfg.W, cfg.H, cfg.fps || 30, cfg.bitrate);
-  if (!fmtSel) return false;
+  if (fmtSel.fail) return fastFallback(fmtSel.fail);
   let Muxer;
-  try { Muxer = await loadMuxer(fmtSel.container); } catch (e) { return false; }
+  try { Muxer = await loadMuxer(fmtSel.container); } catch (e) { return fastFallback("error", "muxer"); }
   setExportOverlayMode(true);
-  const fps = cfg.fps || 30, sr = fastExportSampleRate();
+  let fps = cfg.fps || 30;
+  const sr = fastExportSampleRate();
   const rangeStart = cfg.startSec != null ? Math.max(0, cfg.startSec) : 0;
   const rangeEnd = cfg.endSec != null ? Math.min(totalSec(), cfg.endSec) : totalSec();
   const total = rangeEnd - rangeStart, lead = FAST_EXPORT.lead, dur = lead + total + FAST_EXPORT.tail;
@@ -10246,7 +10265,7 @@ async function fastExportVideo(cfg){
   try {
     if (cfg.page) pg = await buildPageScore(cfg, layout);
     else ({ tiles, scale } = await rasterizeScore(layout.SCORE_H));
-  } catch (e) { console.warn(e); setExportOverlayMode(false); return false; }
+  } catch (e) { console.warn(e); return fastFallback("error", e.message); }
   const cv = document.createElement("canvas");
   cv.width = cfg.W; cv.height = cfg.H;
   const ctx = cv.getContext("2d", { alpha: false });
@@ -10257,21 +10276,32 @@ async function fastExportVideo(cfg){
       drawExportPageFrame(ctx, layout, cfg, pg, songSec, useCalib());
     } else drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, useCalib());
   };
-  // 2) 試編半秒:沒有硬體編碼器的機器(軟體編 1080p)可能比樂曲還慢,那就改用即時錄影(至少跟樂曲一樣長)
+  // 2) 試編 1 秒:沒有硬體編碼器的機器(軟體編 1080p)可能比樂曲還慢,那就改用即時錄影(至少跟樂曲一樣長)。
+  //    計時從編碼器吐出第一格才開始:iPhone 的硬體編碼器啟動要幾百 ms,算進去會把速度低估好幾倍(2026-10 使用者 iPhone 實測因此一直退回即時錄影)。
+  //    60fps 不夠快、30fps 夠快時改用 30fps(捲動稍微沒那麼滑順,但比等整首播完好)
+  const encCfg = rate => ({ codec: fmtSel.vCodec, width: cfg.W, height: cfg.H, bitrate: cfg.bitrate, framerate: rate, latencyMode: "realtime", ...(fmtSel.container === "mp4" ? { avc: { format: "avc" } } : {}) });
   try {
-    const n = Math.round(fps / 2), t0 = performance.now();
-    let got = 0, err = null;
-    const probe = new VideoEncoder({ output: () => got++, error: e => { err = e; } });
-    probe.configure({ codec: fmtSel.vCodec, width: cfg.W, height: cfg.H, bitrate: cfg.bitrate, framerate: fps, ...(fmtSel.container === "mp4" ? { avc: { format: "avc" } } : {}) });
-    for (let f = 0; f < n; f++) {
+    const n = fps;
+    let got = 0, err = null, tWarm = 0, fWarm = 0, f = 0;
+    const probe = new VideoEncoder({ output: () => { if (!got++) { tWarm = performance.now(); fWarm = f; } }, error: e => { err = e; } });
+    probe.configure(encCfg(fps));
+    const t0 = performance.now();
+    for (; f < n; f++) {
       await drawAt(rangeStart + f / fps);
       const fr = new VideoFrame(cv, { timestamp: Math.round(f * 1e6 / fps) });
       probe.encode(fr, { keyFrame: f === 0 }); fr.close();
+      while (probe.encodeQueueSize > 6) await new Promise(r => setTimeout(r, 2));
     }
     await probe.flush(); probe.close();
-    const speed = (n / fps) / ((performance.now() - t0) / 1000);   // 幾倍速
-    if (err || got < n || (speed < FAST_EXPORT.minSpeed && !window.FAST_EXPORT_FORCE)) { console.info("快速匯出編碼速度 " + speed.toFixed(2) + " 倍,改用即時錄影"); setExportOverlayMode(false); return false; }
-  } catch (e) { console.warn(e); setExportOverlayMode(false); return false; }
+    const tEnd = performance.now();
+    const speed = tWarm && n - fWarm >= 8 ? ((n - fWarm) / fps) / ((tEnd - tWarm) / 1000) : (n / fps) / ((tEnd - t0) / 1000);   // 幾倍速
+    console.info("快速匯出試編:" + fps + "fps " + speed.toFixed(2) + " 倍(編碼器啟動 " + Math.round((tWarm || tEnd) - t0) + "ms)");
+    if (err || got < n) return fastFallback("error", err ? err.message : "probe");
+    if (!window.FAST_EXPORT_FORCE && speed < FAST_EXPORT.minSpeed) {
+      if (fps > 30 && speed * fps / 30 >= FAST_EXPORT.minSpeed) fps = 30;
+      else return fastFallback("slow", speed.toFixed(2));
+    }
+  } catch (e) { console.warn(e); return fastFallback("error", e.message); }
   computeDrumPerformance();   // 試編畫了鼓組面板,重算一次讓正式匯出從頭開始
   // 3) 聲音
   setPct("exportAnalyzingPct", 0);
@@ -10279,7 +10309,7 @@ async function fastExportVideo(cfg){
   $("exportTime").textContent = "";
   let L, R;
   try { [L, R] = await renderExportAudioFast(rangeStart, rangeEnd, p => setPct("exportAnalyzingPct", p)); }
-  catch (e) { console.warn("快速匯出的聲音處理失敗,改用即時錄影:", e); setExportOverlayMode(false); return false; }
+  catch (e) { console.warn("快速匯出的聲音處理失敗,改用即時錄影:", e); return fastFallback("error", e.message); }
   if (exportCancelled) { setStatus(T("exportCancelledStatus")); return true; }
   setPct("exportRenderingPct", 0);
   $("exportOverlaySub").textContent = "";
@@ -10291,7 +10321,7 @@ async function fastExportVideo(cfg){
     : { target, video: { codec: fmtSel.muxV, width: cfg.W, height: cfg.H, frameRate: fps }, audio: { codec: fmtSel.muxA, numberOfChannels: 2, sampleRate: sr }, firstTimestampBehavior: "offset" });
   let encErr = null;
   const venc = new VideoEncoder({ output: (c, m) => muxer.addVideoChunk(c, m), error: e => { encErr = e; } });
-  venc.configure({ codec: fmtSel.vCodec, width: cfg.W, height: cfg.H, bitrate: cfg.bitrate, framerate: fps, ...(fmtSel.container === "mp4" ? { avc: { format: "avc" } } : {}) });
+  venc.configure(encCfg(fps));
   const aenc = new AudioEncoder({ output: (c, m) => muxer.addAudioChunk(c, m), error: e => { encErr = e; } });
   aenc.configure({ codec: fmtSel.aCodec, sampleRate: sr, numberOfChannels: 2, bitrate: FAST_EXPORT.audioBitrate });
   const closeAll = () => { try { venc.close(); } catch (e) {} try { aenc.close(); } catch (e) {} };
@@ -10333,8 +10363,7 @@ async function fastExportVideo(cfg){
   } catch (e) {
     closeAll();
     console.warn("快速匯出失敗,改用即時錄影:", e);
-    setExportOverlayMode(false);
-    return false;
+    return fastFallback("error", e && e.message);
   }
   const blob = new Blob([target.buffer], { type: fmtSel.container === "mp4" ? "video/mp4" : "video/webm" });
   const rangeTag = cfg.startSec != null ? "-" + fmt(rangeStart).replace(":","m") + "s-" + fmt(rangeEnd).replace(":","m") + "s" : "";
@@ -10355,6 +10384,7 @@ async function exportVideo(cfg){
   if (pianoLoading && currentInstrument() === "piano") await pianoLoading;
   if (GTR_INSTS[currentInstrument()] && GTR_INSTS[currentInstrument()].loading) await GTR_INSTS[currentInstrument()].loading;
   await ensureTitleFontsLoaded(cfg); // 保險:萬一使用者看到預覽秒按確認,字型下載可能還沒跑完
+  fastExportNote = ""; $("exportFastNote").textContent = "";
   $("exportOverlay").classList.add("show");
   let aDest = null;
   try {
@@ -10473,7 +10503,7 @@ async function exportVideo(cfg){
         const ext = mimeExt(mime);
         const rangeTag = cfg.startSec != null ? "-" + fmt(rangeStart).replace(":","m") + "s-" + fmt(rangeEnd).replace(":","m") + "s" : "";
         const fileName = "scrollscore-" + W + "x" + H + rangeTag + "." + ext;
-        setStatus(T("exportComplete", { mb: (blob.size/1048576).toFixed(1), fmt: mimeLabel(mime) }));
+        setStatus(T("exportComplete", { mb: (blob.size/1048576).toFixed(1), fmt: mimeLabel(mime) }) + (fastExportNote ? " · " + fastExportNote : ""));
         deliverExportedVideo(blob, fileName, mime);
       } else {
         setStatus(T("exportCancelledStatus"));
