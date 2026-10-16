@@ -1044,7 +1044,7 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
       <p class="credits-intro" data-i18n="creditsIntro">ScrollScore 使用以下開放授權的音色、資料與程式庫。音色檔經過處理(格式轉換、音量對齊、立體聲與長度調整)。</p>
       <ul class="credits-list">
         <li><b data-i18n="creditPiano">鋼琴音色</b> Accurate-Salamander Grand Piano V6.2 (Chisato Yamauchi), based on Salamander Grand Piano V3 by Alexander Holm — <a href="https://creativecommons.org/licenses/by/3.0/" target="_blank" rel="noopener">CC BY 3.0</a></li>
-        <li><b data-i18n="creditDrums">鼓組音色</b> Naked Drums by Wilkinson Audio (SFZ edition by kinwie) — <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a></li>
+        <li><b data-i18n="creditDrums">鼓組音色</b> Naked Drums by Wilkinson Audio <span style="white-space:nowrap">(SFZ edition by kinwie)</span> — <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a></li>
         <li><b data-i18n="creditHall">音樂廳殘響</b> <a href="https://zenodo.org/records/4116247" target="_blank" rel="noopener">Open Database of Spatial Room Impulse Responses at Detmold University of Music</a> (S. V. Amengual Garí, B. Şahin, D. Eddy, M. Kob) — <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a></li>
         <li><b data-i18n="creditScore">樂譜顯示</b> <a href="https://github.com/opensheetmusicdisplay/opensheetmusicdisplay" target="_blank" rel="noopener">OpenSheetMusicDisplay</a> (BSD‑3‑Clause), VexFlow (MIT)</li>
         <li><b data-i18n="creditGp">Guitar Pro 匯入</b> <a href="https://github.com/CoderLine/alphaTab" target="_blank" rel="noopener">alphaTab</a> (MPL-2.0)</li>
@@ -3405,16 +3405,16 @@ function mergeRestMeasures(xmlText){
    逐一算出每個音符所在譜表的中線位置,加線音符就把符桿的自由端接到中線上。 */
 /* Guitar Pro 匯入的吉他:為了播放音高正確,譜號寫成「低八度的高音譜號」(clef-octave-change −1),但 Guitar Pro 原本的
    畫面沒有譜號下的小 8(見 gpToMusicXML)。OSMD 把小 8 畫成譜號群組裡的第二個 path,拿掉它 */
-function hideClefOctaveMarks(){
-  const svg = $("score").querySelector("svg");
+function hideClefOctaveMarks(root){
+  const svg = (root || $("score")).querySelector("svg");
   if (!svg) return;
   for (const g of svg.querySelectorAll(".vf-clef")) {
     const paths = g.querySelectorAll("path");
     for (let i = 1; i < paths.length; i++) paths[i].remove();
   }
 }
-function extendLedgerLineStems(){
-  const svg = $("score").querySelector("svg");
+function extendLedgerLineStems(root){
+  const svg = (root || $("score")).querySelector("svg");
   if (!svg) return;
   const beamRanges = Array.from(svg.querySelectorAll(".vf-beam")).map(b => {
     const bbox = b.getBBox();
@@ -3573,6 +3573,7 @@ async function renderScore(xmlText){
   const beamedXml = stemConventionMusicXML(autoBeamMusicXML(drumStemFixMusicXML(tameFarDirectionsMusicXML(transposedXml))));   // 符桿方向要在補完符尾之後算(同一組符尾要一起決定)
   const finalXml = mergeRests ? mergeRestMeasures(beamedXml) : splitRestMeasures(beamedXml);
   await osmd.load(finalXml);
+  lastRenderedXml = finalXml;   // 直式翻頁影片用同一份重新排版
   osmd.zoom = 0.9;
   // 鼓譜的符尾一律水平:符尾的斜度應該看最靠近符尾的音(手打的 hi-hat/銅鈸,通常都在同一個位置),
   // VexFlow 卻照符桿頂端算,會被下面大鼓/小鼓的高低帶歪(三個同高的 hi-hat 符尾斜將近一格)。鼓譜教材多用水平符尾
@@ -7620,6 +7621,18 @@ function fitDrumLayout(w, h){
   return _drumFitCache;
 }
 
+/* 鼓組面板剛好需要的高度(使用者反映,2026-10:鼓組上下有黑色空位):鼓組被寬度限制住時,面板再高也只是上下多出黑邊。
+   找出「再高鼓組也不會變大、位置也不會再拉開」的最小高度,畫面上與匯出影片的面板都不超過這個高度,多出來的空間給樂譜 */
+function drumKitNaturalH(w){
+  const sW = fitDrumLayout(w, w * 4).s;   // 只受寬度限制時的大小
+  let lo = 1, hi = w * 4;
+  for (let k = 0; k < 30; k++) {
+    const mid = (lo + hi) / 2, f = fitDrumLayout(w, mid);
+    if (f.s >= sW * 0.999 && f.sy >= f.sx * 0.999) hi = mid; else lo = mid;
+  }
+  return Math.ceil(hi);
+}
+
 function mixColor(base, accent, t, alpha){
   t = Math.max(0, Math.min(1, t));
   const r = Math.round(base[0] + (accent[0] - base[0]) * t);
@@ -7957,7 +7970,9 @@ function resizeKeyboardCanvas(){
   document.body.classList.toggle("kb-hidden", hideKb);
   if (hideKb) { cv.width = 0; cv.height = 0; return; }
   if (currentInstrument() === "drum") {
-    cv.style.height = ""; // 鼓組面板不是白鍵排列,沒有這個比例問題,交回 CSS 斷點控制高度
+    cv.style.height = ""; // 鼓組面板不是白鍵排列,交回 CSS 斷點控制高度,但不超過鼓組實際需要的高度(不然上下都是黑邊)
+    const r0 = cv.getBoundingClientRect();
+    if (r0.width > 0) { const nat = drumKitNaturalH(r0.width); if (r0.height > nat) cv.style.height = nat + "px"; }
   } else {
     const w = cv.getBoundingClientRect().width;
     // 手機橫放時鍵盤最多占畫面高度的 KB_MAX_VH(以前 844×390 鍵盤 150px、樂譜區只剩 144px,樂譜被縮到 5px)
@@ -9371,7 +9386,7 @@ function exportAutoScoreH(cfg, kind){
   const srcW = parseFloat(svg.getAttribute("width")) || svg.clientWidth, dur = totalSec();
   if (srcW > 0 && dur > 0) sc = Math.min(sc, cfg.W * (1 - PLAYLINE_RATIO) / ((isDrumScore ? P.drumAheadSec : P.aheadSec) * srcW / dur));
   sc = Math.max(sc, 7 / unit);
-  const panel = !cfg.includeKeyboard ? 0 : currentInstrument() === "drum" ? Math.min(cfg.W * EXPORT_KIT_MAX_W, cfg.H * 0.42)
+  const panel = !cfg.includeKeyboard ? 0 : currentInstrument() === "drum" ? Math.min(cfg.W * EXPORT_KIT_MAX_W, cfg.H * 0.42, drumKitNaturalH(cfg.W))
     : computeKeyboardHeight(cfg.W, cfg.H * 0.03, cfg.H * 0.25);
   const maxH = cfg.H - panel - cfg.H * 0.16;   // 標題區 + 上下留白
   return Math.round(Math.max(120, Math.min(srcH * sc, maxH)));
@@ -9382,7 +9397,7 @@ const EXPORT_KIT_MAX_W = 0.72;
 const EXPORT_PORTRAIT_SCORE_H = 560, EXPORT_SQUARE_SCORE_H = 500;
 const EXPORT_FORMATS = {
   landscape: () => ({ W: 1920, H: 1080, scoreH: 440, autoKind: "landscape" }),
-  portrait: () => ({ W: 1080, H: 1920, scoreH: isDrumScore ? 380 : EXPORT_PORTRAIT_SCORE_H, autoKind: "portrait" }),
+  portrait: () => ({ W: 1080, H: 1920, scoreH: Math.round(1920 * 0.5), page: true }),   // 翻頁式(scoreH 只用來決定樂器面板高度)
   square: () => ({ W: 1080, H: 1080, scoreH: isDrumScore ? 400 : EXPORT_SQUARE_SCORE_H, autoKind: "square" }),
 };
 // 目前畫面上的選擇 → 匯出設定(片段不合法時回傳 null)
@@ -9392,7 +9407,8 @@ function buildExportCfg(){
   const cfg = Object.assign((EXPORT_FORMATS[exportPrefs.format] || EXPORT_FORMATS.landscape)(),
     { align: exportPrefs.align, bitrate: 5000000, fps: exportFps, includeKeyboard: !!exportPrefs.panel, startSec: range.startSec, endSec: range.endSec },
     watermarkCfg());
-  if (cfg.autoKind) cfg.scoreH = exportAutoScoreH(cfg, cfg.autoKind);
+  if (cfg.page) {}
+  else if (cfg.autoKind) cfg.scoreH = exportAutoScoreH(cfg, cfg.autoKind);
   else if (isDrumScore) cfg.scoreH = Math.round(cfg.scoreH * DRUM_EXPORT_SCORE_SCALE);
   return cfg;
 }
@@ -9412,16 +9428,22 @@ async function drawExportPreview(){
   try {
     await ensureTitleFontsLoaded(cfg);
     const svg = $("score").querySelector("svg");
-    if (!previewRaster || previewRaster.svg !== svg || previewRaster.scoreH !== cfg.scoreH) {
+    const layout = computeExportLayout(cfg);
+    const previewSongSec = cfg.startSec != null ? cfg.startSec : (playing ? currentSec() : pausedAtSec);
+    let pg = null;
+    if (cfg.page) {
+      pg = await buildPageScore(cfg, layout);
+      const pos = pagePosAt(pg, previewSongSec);
+      await ensurePageCanvas(pg, pos ? pos.sys.page : 0);
+    } else if (!previewRaster || previewRaster.svg !== svg || previewRaster.scoreH !== cfg.scoreH) {
       const r = await rasterizeScore(cfg.scoreH);
       previewRaster = { svg, scoreH: cfg.scoreH, tiles: r.tiles, scale: r.scale };
     }
     if (token !== previewToken) return;   // 已經有更新的選擇,這張不用畫了
-    const layout = computeExportLayout(cfg);
     const cv = document.createElement("canvas");
     cv.width = cfg.W; cv.height = cfg.H;
-    const previewSongSec = cfg.startSec != null ? cfg.startSec : (playing ? currentSec() : pausedAtSec);
-    drawExportFrame(cv.getContext("2d"), layout, cfg, previewRaster.tiles, previewRaster.scale, previewSongSec, useCalib());
+    if (pg) drawExportPageFrame(cv.getContext("2d"), layout, cfg, pg, previewSongSec, useCalib());
+    else drawExportFrame(cv.getContext("2d"), layout, cfg, previewRaster.tiles, previewRaster.scale, previewSongSec, useCalib());
     $("previewImg").src = cv.toDataURL("image/jpeg", 0.85);
   } catch (e) { setStatus(T("exportFailed", { msg: e.message || e })); }
   finally { if (token === previewToken) wrap.classList.remove("busy"); }
@@ -9647,7 +9669,7 @@ function computeExportLayout(cfg){
   const kbMaxH = fullAvailableKbH * 0.8;
   const kbH = (cfg.includeKeyboard && currentInstrument() !== "drum")
     ? computeKeyboardHeight(W, Math.min(kbMaxH, H * 0.03), kbMaxH)
-    : Math.min(kbMaxH, W * EXPORT_KIT_MAX_W);
+    : Math.min(kbMaxH, W * EXPORT_KIT_MAX_W, drumKitNaturalH(W));
   // 樂器面板永遠貼齊畫面最底部,不會因為靠上/置中/靠下而移動;
   // 靠上/置中/靠下只影響樂譜本身在「扣掉面板後剩餘的空間」裡怎麼擺放
   const scoreAreaH = H - kbH;
@@ -9672,7 +9694,9 @@ function computeExportLayout(cfg){
   const minTopY = titleBlockBottom > 0 ? titleBlockBottom + Math.round(H * 0.02) : 0;
   let topY = Math.max(rawTopY, minTopY), kbY = H - kbH;
   const plX = W * PLAYLINE_RATIO;
-  return { W, H, SCORE_H, margin, kbH, kbY, scoreAreaH, topY, plX, minTopY };
+  // 翻頁式:一頁樂譜可以用的上下範圍(標題下面 ~ 樂器面板上面)
+  const pageTop = Math.max(minTopY, margin * 0.8), pageBottom = (cfg.includeKeyboard ? kbY : H) - margin * 0.6;
+  return { W, H, SCORE_H, margin, kbH, kbY, scoreAreaH, topY, plX, minTopY, pageTop, pageBottom };
 }
 /* 匯出畫面的樂譜底色是亮米色(#FFFDF6),使用者挑的游標顏色如果偏亮(預設的淡金色就是),
    直接畫上去會幾乎看不見。這裡在亮度過高時等比壓暗到安全範圍,色相維持不變 */
@@ -9738,8 +9762,8 @@ function drawImageCover(ctx, img, x, y, w, h){
 /* 畫單一影格:背景圖片/樂譜/播放線/鍵盤或鼓組/標題浮水印,匯出的每一幀跟預覽都呼叫這個函式,
    確保兩邊畫面完全一致 */
 const EXPORT_PLAYLINE_ALPHA = 0.5;   // 播放軸半透明,跟畫面上的 #playline 一致
-function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
-  const { W, H, SCORE_H, kbH, topY, plX } = layout;
+function drawExportBackground(ctx, layout){
+  const { W, H } = layout;
   ctx.fillStyle = currentInstrument() === "drum" ? "#FFFFFF" : "#FFFDF6";   // 鼓譜匯出用純白底(使用者要求),鋼琴維持米色
   ctx.fillRect(0, 0, W, H);
   if (customBgImage) {
@@ -9751,6 +9775,10 @@ function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
       ctx.restore();
     }
   }
+}
+function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
+  const { W, H, SCORE_H, kbH, topY, plX } = layout;
+  drawExportBackground(ctx, layout);
   const off = plX - xAtSec(songSec) * scale;
   // 小節高亮畫在樂譜「之前」,才會在音符底下當底色而不是蓋住音符(跟現場畫面的 z-index 一致)
   if (measureHlOn()) {
@@ -9788,6 +9816,11 @@ function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
   ctx.moveTo(plX-9, plTop-2); ctx.lineTo(plX+9, plTop-2); ctx.lineTo(plX, plTop+13);
   ctx.closePath(); ctx.fill();
   ctx.restore();
+  drawExportOverlays(ctx, layout, cfg, songSec, calib, topY + SCORE_H);
+}
+// 樂器面板 + 標題/副標題/頻道名稱(捲動式與翻頁式共用);scoreBottomY = 樂譜下緣(頻道名稱不要疊到樂譜)
+function drawExportOverlays(ctx, layout, cfg, songSec, calib, scoreBottomY){
+  const { W, H, kbH } = layout;
   if (cfg.includeKeyboard) {
     const kbY = layout.kbY;
     if (currentInstrument() === "drum") {
@@ -9841,7 +9874,6 @@ function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
       // 樂譜靠上/置中對齊時兩者位置差不多,但樂譜靠下對齊時樂譜下緣會很靠近鍵盤,
       // 直接貼鍵盤上緣定位會讓文字疊到樂譜最後幾行音符,所以要以樂譜下緣為準,
       // 並且不能低於鍵盤上緣(沒有鍵盤面板時就以畫面底部為準)
-      const scoreBottomY = topY + SCORE_H;
       const floorY = cfg.includeKeyboard ? layout.kbY : H;
       // 正常情況(樂譜下緣離鍵盤還有空間)用貼近鍵盤上緣的位置;萬一樂譜靠太近鍵盤、
       // 空間不夠,改成貼樂譜下緣往下推,寧可靠近鍵盤一點,也不要疊到樂譜本身
@@ -9850,6 +9882,223 @@ function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
     }
     ctx.restore();
   }
+}
+
+/* ── 直式影片翻頁式(使用者要求,2026-10)──────────────────────
+   直式畫面寬只有 1080,單行橫向捲動時一次只看得到 1~2 小節(巴哈前奏曲 3.9 秒)。改成像紙本樂譜:
+   用另一個 OSMD 照畫面寬度重新排版(自動換行,一行 3~5 小節),一頁放得下幾行就放幾行,
+   播放軸沿著每一行往右走,走到下一頁的第一行就整頁換掉。樂器面板、標題、浮水印照舊。
+   跟畫面上的單行樂譜是同一份 MusicXML(含移調、符桿、休止符合併等設定),圓滑線拱形同一套規則。
+   時間 → 位置:演奏位置換回記譜位置(perfToSrcWhole,反覆記號會翻回前面那一頁),
+   在那一小節裡依各譜表音符(staff entry)的時間做線性內插,跟單行捲動的 xAtWhole 同一個做法 */
+const EXPORT_PAGE = { space: 14, drumSpace: 18, marginX: 0.045, minSpace: 9, keep: 6, aheadSec: 2 };
+let pageScoreCache = null, lastRenderedXml = "";
+function pageScoreKey(cfg, sp){
+  return [lastRenderedXml.length, lastRenderedXml.slice(-200), cfg.W, sp, osmd && osmd.EngravingRules.RenderPedals, $("showTempoMarks").checked].join("|");
+}
+async function renderPageOsmd(contentW, sp){
+  const host = document.createElement("div");
+  host.style.cssText = "position:absolute;left:-200000px;top:0;width:" + contentW + "px;visibility:hidden;pointer-events:none";
+  document.body.appendChild(host);
+  const o = new opensheetmusicdisplay.OpenSheetMusicDisplay(host, {
+    backend: "svg", autoResize: false,
+    drawTitle: false, drawSubtitle: false, drawComposer: false, drawLyricist: false, drawPartNames: false,
+    drawMeasureNumbers: true, drawMetronomeMarks: $("showTempoMarks").checked, followCursor: false
+  });
+  const R = o.EngravingRules, M = osmd.EngravingRules;
+  R.SlurPlacementUseSkyBottomLine = true;
+  R.PageTopMargin = 1; R.PageBottomMargin = 1; R.PageLeftMargin = 1; R.PageRightMargin = 1;
+  R.RenderMeasureNumbersOnlyAtSystemStart = true;
+  R.AutoGenerateMultipleRestMeasuresFromRestMeasures = M.AutoGenerateMultipleRestMeasuresFromRestMeasures;
+  await o.load(lastRenderedXml);
+  o.zoom = sp / 10;
+  R.FlatBeams = M.FlatBeams;
+  R.RenderPedals = M.RenderPedals;
+  o.render();
+  if (lastRenderedXml.includes('id="gp-hide-clef-octave"')) hideClefOctaveMarks(host);
+  extendLedgerLineStems(host);
+  return { o, host };
+}
+function readPageGeometry(o){
+  const unit = 10 * o.zoom, systems = [], measures = [];
+  for (const page of o.GraphicSheet.MusicPages) for (const sys of page.MusicSystems) {
+    const si = systems.length;
+    let top = Infinity, bot = -Infinity, sTop = Infinity, sBot = -Infinity;
+    for (const sl of sys.StaffLines) {
+      const y = sl.PositionAndShape.AbsolutePosition.y, h = sl.StaffHeight || 4;
+      sTop = Math.min(sTop, y); sBot = Math.max(sBot, y + h);
+      top = Math.min(top, y + Math.min(0, ...(sl.SkyLine || [0])));
+      bot = Math.max(bot, y + Math.max(h, ...(sl.BottomLine || [h])));
+      sl.Measures.forEach((gm, k) => {
+        if (!gm || !gm.parentSourceMeasure || !gm.parentSourceMeasure.AbsoluteTimestamp) return;
+        const sm = gm.parentSourceMeasure, start = sm.AbsoluteTimestamp.RealValue;
+        let m = measures.find(q => q.sys === si && q.start === start);
+        if (!m) {
+          const ps = gm.PositionAndShape;
+          m = { sys: si, start, dur: sm.Duration ? sm.Duration.RealValue : 1, left: ps.AbsolutePosition.x * unit, right: (ps.AbsolutePosition.x + ps.Size.width) * unit, xs: new Map() };
+          measures.push(m);
+        }
+        for (const se of gm.staffEntries || []) {
+          if (!se.relInMeasureTimestamp) continue;
+          const t = se.relInMeasureTimestamp.RealValue, x = se.PositionAndShape.AbsolutePosition.x * unit;
+          if (!m.xs.has(t) || m.xs.get(t) > x) m.xs.set(t, x);
+        }
+      });
+    }
+    systems.push({ top: top * unit, bot: bot * unit, staffTop: sTop * unit, staffBot: sBot * unit });
+  }
+  measures.sort((a, b) => a.start - b.start);
+  for (let i = 0; i < measures.length; i++) {
+    const m = measures[i];
+    m.end = i + 1 < measures.length ? measures[i + 1].start : m.start + m.dur;
+    m.pts = [...m.xs.entries()].sort((a, b) => a[0] - b[0]);
+    delete m.xs;
+  }
+  return { systems, measures, unit };
+}
+// 一頁放幾行:從上往下塞,下一行放不下就換頁(行與行之間照 OSMD 排的距離)
+function paginateSystems(systems, availH){
+  const pages = [];
+  let cur = null;
+  systems.forEach((s, i) => {
+    const top = i === 0 ? Math.min(0, s.top) : (systems[i - 1].bot + s.top) / 2;
+    const bot = i === systems.length - 1 ? s.bot : (s.bot + systems[i + 1].top) / 2;
+    if (cur && bot - cur.y0 <= availH) { cur.last = i; cur.y1 = bot; }
+    else { cur = { first: i, last: i, y0: top, y1: bot }; pages.push(cur); }
+    s.page = pages.length - 1;
+  });
+  return pages;
+}
+async function buildPageScore(cfg, layout){
+  const svgMain = $("score").querySelector("svg");
+  if (!svgMain || !lastRenderedXml) throw new Error(T("errScoreNotFound"));
+  const contentW = Math.round(cfg.W * (1 - 2 * EXPORT_PAGE.marginX));
+  const availH = layout.pageBottom - layout.pageTop;
+  let sp = isDrumScore ? EXPORT_PAGE.drumSpace : EXPORT_PAGE.space;
+  const sp0 = sp, key = pageScoreKey(cfg, sp);
+  // 同一份樂譜只改標題/面板(可用高度變了):不用重新排版,重新分頁就好(打字時不會每個字都重排整首)
+  const c = pageScoreCache;
+  if (c && c.key === key && c.svgMain === svgMain && !(c.tallest > availH && c.sp > EXPORT_PAGE.minSpace) && !(c.sp < sp0 && c.tallest0 <= availH)) {
+    if (c.availH !== availH) { c.pages = paginateSystems(c.systems, availH); c.availH = availH; c.canvases.clear(); c.pending.clear(); c.shown = -1; }
+    return c;
+  }
+  dropPageScore();
+  let r = await renderPageOsmd(contentW, sp), g = readPageGeometry(r.o);
+  // 一行比整個可用高度還高(很寬的大譜表)就整體縮小再排一次
+  const tallest0 = Math.max(...g.systems.map(s => s.bot - s.top));
+  if (tallest0 > availH && sp > EXPORT_PAGE.minSpace) {
+    r.host.remove();
+    sp = Math.max(EXPORT_PAGE.minSpace, sp * availH / tallest0 * 0.97);
+    r = await renderPageOsmd(contentW, sp); g = readPageGeometry(r.o);
+  }
+  const svg = r.host.querySelector("svg");
+  const wAttr = parseFloat(svg.getAttribute("width")) || contentW;
+  const vb = (svg.getAttribute("viewBox") || "").split(/[\s,]+/).map(Number);
+  const vbScale = vb.length === 4 && vb[2] > 0 ? vb[2] / wAttr : 1;   // 畫面 px → SVG 內部座標
+  svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  // 每一頁只放落在這一頁範圍內的元素(OSMD 的 SVG 第一層是每一行每個譜表的群組、括號、小節號):
+  // 整首放進同一個 SVG 的話,蕭邦敘事曲 19MB,每畫一頁要 4 秒,匯出換頁時畫面會卡住
+  const ser = new XMLSerializer(), parts = [];
+  for (const k of [...svg.children]) {
+    let b = null; try { b = k.getBBox(); } catch (e) {}
+    parts.push({ y0: b ? b.y : -Infinity, y1: b ? b.y + b.height : Infinity, txt: ser.serializeToString(k) });
+  }
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+  const shell = ser.serializeToString(svg), headEnd = shell.indexOf(">");
+  const svgHead = shell.slice(0, headEnd).replace(/\s(width|height|viewBox|preserveAspectRatio)="[^"]*"/g, "").replace(/\/$/, "")
+    + ' width="__W__" height="__H__" viewBox="__VB__" preserveAspectRatio="none">';
+  r.host.remove();
+  pageScoreCache = { key, availH, tallest0, tallest: Math.max(...g.systems.map(s => s.bot - s.top)), svgMain, svgHead, parts, vbX: vb.length === 4 ? vb[0] : 0, vbScale, contentW, sp,
+    systems: g.systems, measures: g.measures, pages: paginateSystems(g.systems, availH), canvases: new Map(), pending: new Map(), used: new Map(), tick: 0, shown: -1 };
+  return pageScoreCache;
+}
+function dropPageScore(){ pageScoreCache = null; }
+// 一頁的點陣圖:同一份 SVG 只改 viewBox 裁出這一頁(不用整首點陣化,長曲子也不會碰到 iOS canvas 尺寸限制)
+function ensurePageCanvas(pg, p){
+  if (pg.canvases.has(p)) return Promise.resolve(pg.canvases.get(p));
+  if (pg.pending.has(p)) return pg.pending.get(p);
+  const page = pg.pages[p], w = pg.contentW, h = Math.ceil(page.y1 - page.y0);
+  const vy0 = page.y0 * pg.vbScale, vy1 = page.y1 * pg.vbScale, slack = 20 * pg.vbScale;
+  const body = pg.parts.filter(q => q.y1 >= vy0 - slack && q.y0 <= vy1 + slack).map(q => q.txt).join("");
+  const txt = pg.svgHead.replace('"__W__"', '"' + w + '"').replace('"__H__"', '"' + h + '"')
+    .replace('"__VB__"', '"' + [pg.vbX, vy0, w * pg.vbScale, h * pg.vbScale].join(" ") + '"') + body + "</svg>";
+  const url = URL.createObjectURL(new Blob([txt], { type: "image/svg+xml" }));
+  const pr = new Promise((res, rej) => {
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement("canvas"); c.width = w; c.height = h;
+      c.getContext("2d").drawImage(img, 0, 0, w, h);
+      URL.revokeObjectURL(url);
+      pg.canvases.set(p, c); pg.pending.delete(p);
+      pg.used.set(p, ++pg.tick);
+      while (pg.canvases.size > EXPORT_PAGE.keep) {   // 只留最近用過的幾頁(記憶體;一頁約 5MB)
+        let old = -1, ot = Infinity;
+        for (const k of pg.canvases.keys()) if (k !== p && k !== pg.shown && (pg.used.get(k) || 0) < ot) { ot = pg.used.get(k) || 0; old = k; }
+        if (old < 0) break;
+        pg.canvases.delete(old);
+      }
+      res(c);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); pg.pending.delete(p); rej(new Error(T("errRasterizeFailed"))); };
+    img.src = url;
+  });
+  pg.pending.set(p, pr);
+  return pr;
+}
+// 樂譜上的時間 → 第幾行、x(px,相對於排版寬度)
+function pagePosAt(pg, songSec){
+  const w = perfToSrcWhole(secToWhole(songSec)), ms = pg.measures;
+  if (!ms.length) return null;
+  let lo = 0, hi = ms.length - 1;
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (ms[mid].start <= w + 1e-9) lo = mid; else hi = mid - 1; }
+  const m = ms[lo], rel = Math.max(0, w - m.start), pts = m.pts;
+  let x = pts.length ? pts[0][1] : m.left;
+  if (pts.length) {
+    let k = 0; while (k + 1 < pts.length && pts[k + 1][0] <= rel + 1e-9) k++;
+    const a = pts[k], b = k + 1 < pts.length ? pts[k + 1] : [m.end - m.start, m.right - pg.sp * 0.8];
+    x = rel <= a[0] ? a[1] : a[1] + (b[1] - a[1]) * Math.min(1, (rel - a[0]) / Math.max(b[0] - a[0], 1e-6));
+  }
+  return { m, sys: pg.systems[m.sys], x };
+}
+function drawExportPageFrame(ctx, layout, cfg, pg, songSec, calib){
+  const { W, H } = layout;
+  drawExportBackground(ctx, layout);
+  const pos = pagePosAt(pg, songSec);
+  if (!pos) return drawExportOverlays(ctx, layout, cfg, songSec, calib, layout.pageBottom);
+  let p = pos.sys.page;
+  if (!pg.canvases.has(p)) { ensurePageCanvas(pg, p).catch(() => {}); if (pg.canvases.has(pg.shown)) p = pg.shown; }
+  const cv = pg.canvases.get(p);
+  if (cv) { if (p !== pg.shown) pg.used.set(p, ++pg.tick); pg.shown = p; }
+  // 先把 2 秒後要用的那一頁準備好(下一頁、反覆記號跳回去的那一頁),換頁時才不會慢半拍
+  const ahead = pagePosAt(pg, songSec + EXPORT_PAGE.aheadSec);
+  if (ahead && !pg.canvases.has(ahead.sys.page)) ensurePageCanvas(pg, ahead.sys.page).catch(() => {});
+  const page = pg.pages[p], ph = page.y1 - page.y0;
+  const avail = layout.pageBottom - layout.pageTop;
+  const ox = (W - pg.contentW) / 2;
+  const oy = Math.round(layout.pageTop + (cfg.align === "top" ? 0 : cfg.align === "bottom" ? avail - ph : (avail - ph) / 2)) - page.y0;
+  const onPage = p === pos.sys.page;
+  const ink = exportInkColor(hlCursorColor());
+  if (onPage && measureHlOn()) {
+    ctx.save();
+    ctx.globalAlpha = hlMeasureOpacity();
+    ctx.fillStyle = exportInkColor(hlMeasureColor());
+    const padY = pg.sp * 1.5;
+    ctx.fillRect(ox + pos.m.left, oy + pos.sys.staffTop - padY, pos.m.right - pos.m.left, pos.sys.staffBot - pos.sys.staffTop + padY * 2);
+    ctx.restore();
+  }
+  if (cv) ctx.drawImage(cv, ox, oy + page.y0);
+  if (onPage) {
+    const pad = pg.sp * (cfg.includeKeyboard ? PLAYLINE_PAD_SPACES_WITH_PANEL : PLAYLINE_PAD_SPACES_SCORE_ONLY);
+    const x = ox + pos.x, top = oy + pos.sys.staffTop - pad, bot = oy + pos.sys.staffBot + pad;
+    ctx.save();
+    ctx.globalAlpha = hlCursorOpacity() * EXPORT_PLAYLINE_ALPHA;
+    ctx.strokeStyle = ink; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, bot); ctx.stroke();
+    ctx.fillStyle = ink;
+    ctx.beginPath(); ctx.moveTo(x - 9, top - 2); ctx.lineTo(x + 9, top - 2); ctx.lineTo(x, top + 13); ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+  drawExportOverlays(ctx, layout, cfg, songSec, calib, oy + page.y1);
 }
 
 /* ── 匯出影片的響度標準化(YouTube −14 LUFS)──────────────────────
@@ -9982,7 +10231,13 @@ async function exportVideo(cfg){
     $("exportFill").style.width = "0%";
     const layout = computeExportLayout(cfg);
     const { W, H, SCORE_H, kbH, topY, plX } = layout;
-    const { tiles, scale } = await rasterizeScore(SCORE_H);
+    let tiles = null, scale = 1, pg = null;
+    if (cfg.page) {   // 翻頁式:先把開頭那一頁與下一頁準備好
+      pg = await buildPageScore(cfg, layout);
+      const pos = pagePosAt(pg, cfg.startSec != null ? Math.max(0, cfg.startSec) : 0), p0 = pos ? pos.sys.page : 0;
+      await ensurePageCanvas(pg, p0);
+      if (p0 + 1 < pg.pages.length) await ensurePageCanvas(pg, p0 + 1);
+    } else ({ tiles, scale } = await rasterizeScore(SCORE_H));
 
     const cv = document.createElement("canvas");
     cv.width = W; cv.height = H;
@@ -10044,7 +10299,8 @@ async function exportVideo(cfg){
         const el = audioCtx.currentTime - t0;
         const sec = Math.min(Math.max(el - LEAD, 0), total);
         const songSec = sec + rangeStart; // 匯出片段內的相對時間 → 換算回整首曲子的實際位置,拿來對應樂譜捲動/鍵盤高亮
-        drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib);
+        if (pg) drawExportPageFrame(ctx, layout, cfg, pg, songSec, calib);
+        else drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib);
         pushFrame();
         const timeText = fmt(sec) + " / " + fmt(total);
         if (timeText !== lastTimeText) { lastTimeText = timeText; $("exportTime").textContent = timeText; }

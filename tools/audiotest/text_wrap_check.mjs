@@ -11,7 +11,7 @@ const ROOT = path.resolve(path.join(path.dirname(new URL(import.meta.url).pathna
 const server = http.createServer((req, res) => { const p = path.join(ROOT, decodeURIComponent(req.url.split("?")[0])); if (!fs.existsSync(p) || fs.statSync(p).isDirectory()) { res.writeHead(404); return res.end(); } res.writeHead(200); fs.createReadStream(p).pipe(res); });
 await new Promise(r => server.listen(0, "127.0.0.1", r));
 const browser = await chromium.launch();
-const SIZES = [[280, 653], [320, 568], [360, 740], [390, 844], [430, 932], [568, 320], [768, 1024], [1280, 800]];
+const SIZES = process.env.WRAP_SIZES ? JSON.parse(process.env.WRAP_SIZES) : [[280, 653], [320, 568], [360, 740], [390, 844], [430, 932], [568, 320], [768, 1024], [1280, 800]];
 
 // 在頁面裡執行:掃 root 底下所有看得到的文字,依「最近的區塊層級祖先」分組,逐字取位置分行
 const SCAN = (rootSel) => {
