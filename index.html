@@ -762,23 +762,23 @@ body.exporting-active .empty-card{
 #exportOverlay .export-warn span{color:var(--ivory);font-size:var(--fs-2xs);line-height:1.6;opacity:.9}
 /* ── 格式選擇 ───────────────────── */
 #formatOverlay{
-  /* 跟 #previewOverlay 同樣的理由必須用 fixed:這層嵌在 #stage 裡,而 #stage 的高度受 flex
+  /* 必須用 fixed:這層嵌在 #stage 裡,而 #stage 的高度受 flex
      版面壓縮,手機橫向時只剩約 197px。用 absolute 的話對話框會以那 197px 置中,
      實測上緣被切掉 10~17px 而且捲不到(對話框本身沒超過 max-height,不會出現捲軸)。
      改成 fixed 才是相對於真正的視窗置中 */
-  position:fixed;inset:0;z-index:45;display:none;
+  position:fixed;inset:0;z-index:66;display:none;   /* 高過頂欄(65):不然手機橫放時頂欄蓋住視窗上緣,視窗開著還點得到頂欄 */
   align-items:center;justify-content:center;
   background:var(--scrim);backdrop-filter:blur(3px);
 }
 /* Guitar Pro 多音軌時選一軌(跟匯出格式選擇同一種對話框) */
 #trackOverlay{
-  position:fixed;inset:0;z-index:45;display:none;
+  position:fixed;inset:0;z-index:66;display:none;
   align-items:center;justify-content:center;
   background:var(--scrim);backdrop-filter:blur(3px);
 }
 #trackOverlay .fmt b{overflow-wrap:anywhere}
 #shareOverlay{
-  position:fixed;inset:0;z-index:46;display:none;
+  position:fixed;inset:0;z-index:69;display:none;
   align-items:center;justify-content:center;
   background:var(--scrim);backdrop-filter:blur(3px);
 }
@@ -831,31 +831,73 @@ body.exporting-active .empty-card{
 .ratio-l{width:34px;height:20px}
 .ratio-p{width:20px;height:34px}
 .ratio-s{width:27px;height:27px}
-/* ── 匯出預覽 ───────────────────── */
-#previewOverlay{
-  /* fixed(而非absolute)是因為這層原本嵌套在 #stage 裡,#stage 本身受 flex 版面限制、
-     高度不等於整個裝置視窗——直式(portrait)預覽圖很高時,absolute+inset:0 只會撐滿
-     #stage 那塊被壓縮過的區域,導致下方按鈕被推到 #stage 範圍外、完全按不到。
-     改成 fixed 讓這層一定是相對於真正的視窗定位,不受 #stage 高度影響。 */
-  position:fixed;inset:0;z-index:46;display:none;
-  align-items:center;justify-content:center;
-  background:var(--scrim);backdrop-filter:blur(3px);
+/* ── 匯出影片(一頁) ───────────────────── */
+#formatOverlay .box.exp-sheet{
+  width:min(94vw, 860px);padding:18px 18px 0;text-align:left;
+  display:flex;flex-direction:column;max-height:94vh;max-height:94dvh;overflow:hidden;
 }
-#previewOverlay.show{display:flex}
-#previewOverlay .box{
-  text-align:center;padding:20px;border:1px solid var(--gold);
-  border-radius:var(--radius-md);background:var(--panel-2);width:min(94vw,640px);
-  max-height:92vh;max-height:92dvh;overflow-y:auto;box-sizing:border-box;
-  box-shadow:var(--shadow-lg);
+#formatOverlay .exp-sheet .title{text-align:center;margin-bottom:12px}
+.exp-body{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:14px;padding-bottom:12px}
+.exp-preview{position:relative;display:flex;justify-content:center;align-items:center;min-height:120px}
+/* 直式預覽很高:限制在畫面高度約三分之一,選項才看得到;桌機改成左右兩欄 */
+#previewImg{max-width:100%;max-height:34vh;max-height:34dvh;object-fit:contain;display:block;border-radius:var(--radius-sm);border:1px solid var(--line);background:var(--bg)}
+.exp-busy{position:absolute;inset:auto 0 8px;text-align:center;font-size:var(--fs-2xs);color:var(--muted);display:none}
+.exp-preview.busy .exp-busy{display:block}
+.exp-preview.busy #previewImg{opacity:.5}
+.exp-opts{display:flex;flex-direction:column;gap:12px;min-width:0}
+.exp-row{display:flex;flex-direction:column;gap:6px}
+.exp-label{font-size:var(--fs-xs);color:var(--muted)}
+.seg{display:flex;gap:6px}
+.seg button{
+  flex:1 1 0;min-width:0;display:flex;flex-direction:column;align-items:center;gap:3px;
+  padding:8px 4px;border-radius:var(--radius-sm);border:1px solid var(--line);background:var(--bg);
+  color:var(--ivory);font-family:inherit;cursor:pointer;min-height:44px;justify-content:center;
 }
-#previewOverlay .title{
-  font-family:"Noto Serif TC",serif;font-size:var(--fs-xl);color:var(--gold);
-  letter-spacing:.1em;margin-bottom:14px;
+.seg button b{font-size:var(--fs-sm);color:var(--ivory);font-weight:600;white-space:nowrap}
+.seg button small{font-size:var(--fs-2xs);color:var(--muted);white-space:nowrap}
+.seg button .ratio{margin-bottom:2px;transform:scale(.7)}
+.seg button[aria-checked="true"]{border-color:var(--gold);background:rgba(201,162,75,.12)}
+.seg button[aria-checked="true"] b{color:var(--gold-bright)}
+.seg-sm button{min-height:36px;padding:6px 4px}
+.exp-switch{justify-content:space-between;width:100%}
+.exp-field{display:flex;align-items:center;gap:10px}
+.exp-field > span{width:4.2em;flex:none;font-size:var(--fs-xs);color:var(--muted);white-space:nowrap}
+.exp-field input{text-align:left;min-width:0}
+.exp-adv{border-top:1px solid var(--line);padding-top:8px}
+.exp-adv summary{list-style:none;cursor:pointer;display:flex;justify-content:space-between;align-items:center;font-size:var(--fs-sm);color:var(--gold-bright);min-height:32px}
+.exp-adv summary::-webkit-details-marker{display:none}
+.exp-adv .chev{transition:transform .2s}
+.exp-adv[open] .chev{transform:rotate(90deg)}
+.exp-adv[open]{display:flex;flex-direction:column;gap:12px}
+.exp-range{display:flex;flex-direction:column;gap:8px}
+.exp-time{display:flex;align-items:center;gap:6px}
+.exp-time > span:first-child{width:3em;flex:none;font-size:var(--fs-xs);color:var(--muted)}
+.exp-time .colon{color:var(--muted)}
+.exp-time .btn{padding:4px 10px;font-size:var(--fs-2xs);white-space:nowrap;min-height:32px}
+.exp-actions{
+  display:flex;gap:10px;justify-content:flex-end;padding:12px 0 16px;
+  border-top:1px solid var(--line);background:var(--panel-2);
 }
-/* 直式(portrait)匯出圖片長寬比很高,若不限制高度會把下方文字跟按鈕擠出可視範圍,
-   所以限制在視窗高度一半左右,不論橫式/直式都保證按鈕留在畫面內 */
-#previewImg{max-width:100%;max-height:50vh;max-height:50dvh;object-fit:contain;display:block;margin:0 auto 14px;border-radius:var(--radius-sm);border:1px solid var(--line)}
-#previewOverlay p{font-size:var(--fs-xs);color:var(--muted);line-height:1.7;margin-bottom:16px}
+.exp-actions .btn{min-height:44px;justify-content:center}
+.exp-actions .btn.primary{flex:1;max-width:260px}
+@media (min-width:760px) and (min-height:520px){
+  .exp-body{flex-direction:row;align-items:flex-start;gap:20px}
+  .exp-preview{flex:1 1 55%;position:sticky;top:0}
+  #previewImg{max-height:60vh;max-height:60dvh}
+  .exp-opts{flex:1 1 45%}
+}
+/* 手機橫放:左右兩欄,預覽縮小 */
+@media (max-height:480px) and (orientation:landscape){
+  .exp-body{flex-direction:row;align-items:flex-start;gap:14px}
+  .exp-preview{flex:1 1 45%;position:sticky;top:0}
+  #previewImg{max-height:60vh;max-height:60dvh}
+  .exp-opts{flex:1 1 55%}
+  #formatOverlay .exp-sheet .title{margin-bottom:6px}
+}
+/* 頂欄的匯出鈕:樂譜載入後才出現;最窄的手機放不下時收掉(設定面板裡還有) */
+#exportHdrBtn{display:none}
+body.score-loaded #exportHdrBtn{display:inline-flex}
+body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
 </style>
 </head>
 <body>
@@ -883,6 +925,10 @@ body.exporting-active .empty-card{
         <div class="tempo-box"><span class="tempo-label" data-i18n="tempoAriaLabel">速度</span> <input type="range" id="tempo" min="40" max="400" value="100" step="1"><input type="number" id="tempoVal" min="40" max="400" value="100"></div>
       </div>
     </div>
+    <button class="btn" id="exportHdrBtn" data-i18n-attr="aria-label:exportBtnLabel,title:exportBtnLabel">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="14" height="12" rx="2"/><path d="M16 10.5l6-3.5v10l-6-3.5z"/></svg>
+      <span class="btn-label" data-i18n="exportHdrLabel">匯出影片</span>
+    </button>
     <button class="btn" id="settingsToggle" data-i18n-attr="aria-label:settingsToggleLabel">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15a3 3 0 100-6 3 3 0 000 6z"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
       <span class="btn-label" data-i18n="settingsToggleLabel">設定</span>
@@ -1058,7 +1104,7 @@ body.exporting-active .empty-card{
   <div id="shareOverlay" role="dialog" aria-modal="true" aria-labelledby="shareTitle">
     <div class="box">
       <div class="title" id="shareTitle" data-i18n="shareTitle">影片完成</div>
-      <p class="share-sub" data-i18n="shareSub">點「儲存影片」存到相簿,或分享到其他 App。</p>
+      <p class="share-sub" id="shareSub" data-i18n="shareSub">點「儲存影片」存到相簿,或分享到其他 App。</p>
       <button class="btn primary" id="shareSaveBtn" data-i18n="shareSaveBtn">儲存影片</button>
       <button class="btn" id="shareCloseBtn" data-i18n="closeBtn">關閉</button>
     </div>
@@ -1070,84 +1116,73 @@ body.exporting-active .empty-card{
       <button class="btn" id="trackCancel" data-i18n="cancelBtn">取消</button>
     </div>
   </div>
-  <div id="formatOverlay">
-    <div class="box">
-      <div class="title" id="fmtTitle">選擇匯出類型</div>
-      <div id="fmtStepType" class="fmt-step">
-        <button class="fmt" id="fmtTypeScore">
-          <span><b data-i18n="fmtTypeScoreTitle">純樂譜</b><small data-i18n="fmtTypeScoreSub">整個畫面只有樂譜</small></span>
-        </button>
-        <button class="fmt" id="fmtTypeWithKeyboard">
-          <span><b data-i18n="fmtTypeKeyboardTitle">樂譜+樂器</b><small data-i18n="fmtTypeKeyboardSub">下方加上鍵盤/鼓組高亮</small></span>
-        </button>
+  <!-- 匯出影片(2026-10 改成一頁,使用者要求簡化步驟):以前 類型 → 片段 → 對齊 → 標題 → 格式 → 預覽 六步,
+       現在一個畫面:上面即時預覽、下面選項(改了預覽馬上跟著變),不常用的(副標題、對齊、片段)收在「進階」;選擇會記住 -->
+  <div id="formatOverlay" role="dialog" aria-modal="true" aria-labelledby="expTitle">
+    <div class="box exp-sheet">
+      <div class="title" id="expTitle" data-i18n="expTitle">匯出影片</div>
+      <div class="exp-body">
+        <div class="exp-preview">
+          <img id="previewImg" data-i18n-attr="alt:previewImgAlt" alt="匯出預覽">
+          <div class="exp-busy" id="previewBusy" data-i18n="previewBusy">預覽產生中…</div>
+        </div>
+        <div class="exp-opts">
+          <div class="exp-row">
+            <span class="exp-label" data-i18n="expFormatLabel">格式</span>
+            <div class="seg" id="expFormatSeg" role="radiogroup">
+              <button type="button" data-v="landscape" role="radio"><span class="ratio ratio-l"></span><b data-i18n="expFmtLandscape">橫式</b><small>YouTube</small></button>
+              <button type="button" data-v="portrait" role="radio"><span class="ratio ratio-p"></span><b data-i18n="expFmtPortrait">直式</b><small>Shorts · Reels</small></button>
+              <button type="button" data-v="square" role="radio"><span class="ratio ratio-s"></span><b data-i18n="expFmtSquare">方形</b><small>IG · FB</small></button>
+            </div>
+          </div>
+          <label class="switch-row exp-switch">
+            <span data-i18n="expPanelLabel">顯示鍵盤/鼓組</span>
+            <span class="switch"><input type="checkbox" id="expPanelToggle"><span class="switch-track"></span></span>
+          </label>
+          <div class="exp-field">
+            <span data-i18n="titleLabel">標題</span>
+            <input type="text" id="exportTitleInput" class="range-time-input" data-i18n-attr="placeholder:titlePlaceholder" placeholder="樂曲標題(上方置中)">
+          </div>
+          <div class="exp-field">
+            <span data-i18n="watermarkLabel">浮水印</span>
+            <input type="text" id="exportWatermarkInput" class="range-time-input" data-i18n-attr="placeholder:watermarkPlaceholder" placeholder="頻道名稱(右下角)">
+          </div>
+          <details class="exp-adv" id="expAdvanced">
+            <summary><span data-i18n="expAdvanced">進階</span><span class="chev">›</span></summary>
+            <div class="exp-field">
+              <span data-i18n="subtitleLabel">副標題</span>
+              <input type="text" id="exportSubtitleInput" class="range-time-input" data-i18n-attr="placeholder:subtitlePlaceholder" placeholder="副標題(標題正下方,選填)">
+            </div>
+            <div class="exp-row">
+              <span class="exp-label" data-i18n="expAlignLabel">樂譜位置</span>
+              <div class="seg seg-sm" id="expAlignSeg" role="radiogroup">
+                <button type="button" data-v="top" role="radio"><b data-i18n="expAlignTop">靠上</b></button>
+                <button type="button" data-v="center" role="radio"><b data-i18n="expAlignCenter">置中</b></button>
+                <button type="button" data-v="bottom" role="radio"><b data-i18n="expAlignBottom">靠下</b></button>
+              </div>
+            </div>
+            <label class="switch-row exp-switch">
+              <span data-i18n="exportRangeToggleLabel">只匯出片段區間</span>
+              <span class="switch"><input type="checkbox" id="exportRangeToggle"><span class="switch-track"></span></span>
+            </label>
+            <div id="exportRangeInputs" class="exp-range" style="display:none">
+              <div class="exp-time">
+                <span data-i18n="startLabel">開始</span>
+                <select id="exportStartMin" class="range-time-select"></select><span class="colon">:</span><select id="exportStartSec" class="range-time-select"></select>
+                <button class="btn" id="exportStartNowBtn" data-i18n="nowPositionBtn">目前位置</button>
+              </div>
+              <div class="exp-time">
+                <span data-i18n="endLabel">結束</span>
+                <select id="exportEndMin" class="range-time-select"></select><span class="colon">:</span><select id="exportEndSec" class="range-time-select"></select>
+                <button class="btn" id="exportEndNowBtn" data-i18n="nowPositionBtn">目前位置</button>
+              </div>
+            </div>
+          </details>
+        </div>
+      </div>
+      <div class="exp-actions">
         <button class="btn" id="fmtCancel" data-i18n="cancelBtn">取消</button>
-      </div>
-      <div id="fmtStepRange" class="fmt-step" style="display:none">
-        <label class="switch-row" style="justify-content:space-between;width:100%;margin-bottom:14px">
-          <span data-i18n="exportRangeToggleLabel">只匯出片段區間</span>
-          <span class="switch"><input type="checkbox" id="exportRangeToggle"><span class="switch-track"></span></span>
-        </label>
-        <div id="exportRangeInputs" style="display:none;flex-direction:column;gap:10px;margin-bottom:8px">
-          <div style="display:flex;align-items:center;gap:8px">
-            <span style="width:36px;font-size:13px;color:var(--muted);flex:none" data-i18n="startLabel">開始</span>
-            <select id="exportStartMin" class="range-time-select"></select>
-            <span style="color:var(--muted)">:</span>
-            <select id="exportStartSec" class="range-time-select"></select>
-            <button class="btn" id="exportStartNowBtn" style="padding:4px 10px;font-size:12px" data-i18n="nowPositionBtn">目前位置</button>
-          </div>
-          <div style="display:flex;align-items:center;gap:8px">
-            <span style="width:36px;font-size:13px;color:var(--muted);flex:none" data-i18n="endLabel">結束</span>
-            <select id="exportEndMin" class="range-time-select"></select>
-            <span style="color:var(--muted)">:</span>
-            <select id="exportEndSec" class="range-time-select"></select>
-            <button class="btn" id="exportEndNowBtn" style="padding:4px 10px;font-size:12px" data-i18n="nowPositionBtn">目前位置</button>
-          </div>
-        </div>
-        <button class="btn" id="fmtBackFromRange" data-i18n="backBtn">返回</button>
-        <button class="btn primary" id="fmtNextFromRange" style="margin-top:10px" data-i18n="nextBtn">下一步</button>
-      </div>
-      <div id="fmtStepAlign" class="fmt-step" style="display:none">
-        <button class="fmt" id="alignTop"><span><b data-i18n="alignTopTitle">樂譜靠上</b><small data-i18n="alignTopSub">下方留白</small></span></button>
-        <button class="fmt" id="alignCenter"><span><b data-i18n="alignCenterTitle">樂譜靠中</b><small data-i18n="alignCenterSub">上下等距置中</small></span></button>
-        <button class="fmt" id="alignBottom"><span><b data-i18n="alignBottomTitle">樂譜靠下</b><small data-i18n="alignBottomSub">上方留白</small></span></button>
-        <button class="btn" id="fmtBackFromAlign" data-i18n="backBtn">返回</button>
-      </div>
-      <div id="fmtStepBrand" class="fmt-step" style="display:none">
-        <label class="switch-row" style="justify-content:space-between;width:100%;margin-bottom:10px">
-          <span data-i18n="watermarkToggleLabel">加上標題/浮水印</span>
-          <span class="switch"><input type="checkbox" id="exportWatermarkToggle" checked><span class="switch-track"></span></span>
-        </label>
-        <div id="exportWatermarkFields" style="display:none;flex-direction:column;gap:8px;width:100%;margin-bottom:10px">
-          <div style="display:flex;align-items:center;gap:8px">
-            <span style="width:56px;font-size:13px;color:var(--muted);flex:none" data-i18n="titleLabel">標題</span>
-            <input type="text" id="exportTitleInput" class="range-time-input" style="text-align:left" data-i18n-attr="placeholder:titlePlaceholder" placeholder="樂曲標題(上方置中)">
-          </div>
-          <div style="display:flex;align-items:center;gap:8px">
-            <span style="width:56px;font-size:13px;color:var(--muted);flex:none" data-i18n="subtitleLabel">副標題</span>
-            <input type="text" id="exportSubtitleInput" class="range-time-input" style="text-align:left" data-i18n-attr="placeholder:subtitlePlaceholder" placeholder="副標題(標題正下方,選填)">
-          </div>
-          <div style="display:flex;align-items:center;gap:8px">
-            <span style="width:56px;font-size:13px;color:var(--muted);flex:none" data-i18n="watermarkLabel">浮水印</span>
-            <input type="text" id="exportWatermarkInput" class="range-time-input" style="text-align:left" data-i18n-attr="placeholder:watermarkPlaceholder" placeholder="頻道名稱(右下角)">
-          </div>
-        </div>
-        <button class="btn" id="fmtBackFromBrand" data-i18n="backBtn">返回</button>
-        <button class="btn primary" id="fmtNextFromBrand" style="margin-top:10px" data-i18n="nextBtn">下一步</button>
-      </div>
-      <div id="fmtStepFormat" class="fmt-step" style="display:none">
-        <button class="fmt" id="fmtLandscape">
-          <span class="ratio-slot"><span class="ratio ratio-l"></span></span>
-          <span><b data-i18n="fmtLandscapeTitle">橫式 1920 × 1080</b><small data-i18n="fmtLandscapeSub">YouTube 影片</small></span>
-        </button>
-        <button class="fmt" id="fmtPortrait">
-          <span class="ratio-slot"><span class="ratio ratio-p"></span></span>
-          <span><b data-i18n="fmtPortraitTitle">直式 1080 × 1920</b><small>Shorts / Reels / TikTok</small></span>
-        </button>
-        <button class="fmt" id="fmtSquare">
-          <span class="ratio-slot"><span class="ratio ratio-s"></span></span>
-          <span><b data-i18n="fmtSquareTitle">正方形 1080 × 1080</b><small data-i18n="fmtSquareSub">Instagram 貼文 / Facebook</small></span>
-        </button>
-        <button class="btn" id="fmtBackFromFormat" data-i18n="backBtn">返回</button>
+        <button class="btn primary" id="previewConfirmBtn" data-i18n="previewConfirmBtn">開始匯出</button>
       </div>
     </div>
   </div>
@@ -1163,17 +1198,6 @@ body.exporting-active .empty-card{
       </div>
       <p data-i18n="exportInfoP"></p>
       <button class="btn" id="exportCancel" data-i18n="cancelBtn">取消</button>
-    </div>
-  </div>
-  <div id="previewOverlay">
-    <div class="box">
-      <div class="title" data-i18n="previewTitle">預覽畫面</div>
-      <img id="previewImg" data-i18n-attr="alt:previewImgAlt" alt="匯出預覽">
-      <p data-i18n="previewBody">實際匯出畫面(以目前播放位置為準),確認樂譜對齊、標題浮水印、背景都正確再開始匯出。</p>
-      <div style="display:flex;gap:10px;justify-content:center">
-        <button class="btn" id="previewBackBtn" data-i18n="backBtn">返回</button>
-        <button class="btn primary" id="previewConfirmBtn" data-i18n="previewConfirmBtn">開始匯出</button>
-      </div>
     </div>
   </div>
 </div>
@@ -1241,6 +1265,12 @@ const I18N = {
     shareSub: "點「儲存影片」存到相簿,或分享到其他 App。",
     shareSaveBtn: "儲存影片",
     shareFailed: "無法開啟分享,請再試一次",
+    shareSavingTitle: "儲存到相簿中…",
+    shareSavedTitle: "已存到相簿",
+    shareSavedSub: "影片已存到「照片」,也可以分享到其他 App。",
+    shareShareBtn: "分享",
+    shareSaveFailedSub: "沒辦法直接存到相簿(可能沒有允許加入照片),請點「儲存影片」存檔。",
+    doneBtn: "完成",
     aboutSummary: "關於與授權",
     creditsIntro: "ScrollScore 使用以下開放授權的音色、資料與程式庫。|音色檔經過處理|(轉檔、音量、立體聲與長度調整)。",
     creditPiano: "鋼琴音色",
@@ -1331,40 +1361,31 @@ const I18N = {
     sampleScoreFilename: "範例樂譜-小星星.musicxml",
     exitRecTitle: "離開錄影模式",
 
-    fmtStepType: "選擇匯出類型",
-    fmtStepRange: "選擇匯出區間",
-    fmtStepAlign: "選擇樂譜對齊",
-    fmtStepBrand: "標題與浮水印",
-    fmtStepFormat: "選擇影片格式",
-    fmtTypeScoreTitle: "純樂譜",
-    fmtTypeScoreSub: "整個畫面只有樂譜",
-    fmtTypeKeyboardTitle: "樂譜+樂器",
-    fmtTypeKeyboardSub: "下方加上鍵盤/鼓組高亮",
     cancelBtn: "取消",
+    expTitle: "匯出影片",
+    exportHdrLabel: "匯出影片",
+    previewBusy: "預覽產生中…",
+    expFormatLabel: "格式",
+    expFmtLandscape: "橫式",
+    expFmtPortrait: "直式",
+    expFmtSquare: "方形",
+    expPanelLabel: "顯示鍵盤/鼓組",
+    expAdvanced: "進階",
+    expAlignLabel: "樂譜位置",
+    expAlignTop: "靠上",
+    expAlignCenter: "置中",
+    expAlignBottom: "靠下",
     exportRangeToggleLabel: "只匯出片段區間",
     startLabel: "開始",
     endLabel: "結束",
     nowPositionBtn: "目前位置",
     backBtn: "返回",
-    nextBtn: "下一步",
-    alignTopTitle: "樂譜靠上",
-    alignTopSub: "下方留白",
-    alignCenterTitle: "樂譜靠中",
-    alignCenterSub: "上下等距置中",
-    alignBottomTitle: "樂譜靠下",
-    alignBottomSub: "上方留白",
-    watermarkToggleLabel: "加上標題/浮水印",
     titleLabel: "標題",
     titlePlaceholder: "樂曲標題(上方置中)",
     subtitleLabel: "副標題",
     subtitlePlaceholder: "副標題(標題正下方,選填)",
     watermarkLabel: "浮水印",
     watermarkPlaceholder: "頻道名稱(右下角)",
-    fmtLandscapeTitle: "橫式 1920 × 1080",
-    fmtLandscapeSub: "YouTube 影片",
-    fmtPortraitTitle: "直式 1080 × 1920",
-    fmtSquareTitle: "正方形 1080 × 1080",
-    fmtSquareSub: "Instagram 貼文 / Facebook",
 
     exportRenderingPct: "合成中 {pct}%",
     exportAnalyzingPct: "調整音量中 {pct}%",
@@ -1373,9 +1394,7 @@ const I18N = {
     exportWarnBody: "切到其他 App 或讓螢幕熄滅,|錄出來會一格一格卡住,|只能重新匯出。",
     exportInfoP: "輸出時間 = 樂曲長度。|匯出時喇叭靜音|(避免爆音),|影片裡的聲音不受影響。",
 
-    previewTitle: "預覽畫面",
     previewImgAlt: "匯出預覽",
-    previewBody: "實際匯出畫面(以目前播放位置為準),確認樂譜對齊、標題浮水印、背景都正確再開始匯出。",
     previewConfirmBtn: "開始匯出",
 
     statusDefault: "尚未載入樂譜",
@@ -1475,6 +1494,12 @@ const I18N = {
     shareSub: "Tap Save Video to save it to Photos or share it to another app.",
     shareSaveBtn: "Save Video",
     shareFailed: "Couldn't open the share sheet. Please try again.",
+    shareSavingTitle: "Saving to Photos…",
+    shareSavedTitle: "Saved to Photos",
+    shareSavedSub: "The video is in your Photos. You can also share it to another app.",
+    shareShareBtn: "Share",
+    shareSaveFailedSub: "Couldn't save to Photos directly (photo access may be off). Tap Save Video to save it.",
+    doneBtn: "Done",
     aboutSummary: "About & licenses",
     creditsIntro: "ScrollScore uses the following openly licensed sounds, data and libraries. The sound files have been modified (format conversion, level matching, stereo and length adjustments).",
     creditPiano: "Piano",
@@ -1565,40 +1590,31 @@ const I18N = {
     sampleScoreFilename: "sample-score-twinkle.musicxml",
     exitRecTitle: "Exit Record Mode",
 
-    fmtStepType: "Choose Export Type",
-    fmtStepRange: "Choose Export Range",
-    fmtStepAlign: "Choose Score Alignment",
-    fmtStepBrand: "Title & Watermark",
-    fmtStepFormat: "Choose Video Format",
-    fmtTypeScoreTitle: "Score Only",
-    fmtTypeScoreSub: "Score fills the whole frame",
-    fmtTypeKeyboardTitle: "Score + Instrument",
-    fmtTypeKeyboardSub: "Adds keyboard/drum highlight below",
     cancelBtn: "Cancel",
+    expTitle: "Export Video",
+    exportHdrLabel: "Export",
+    previewBusy: "Rendering preview…",
+    expFormatLabel: "Format",
+    expFmtLandscape: "Landscape",
+    expFmtPortrait: "Portrait",
+    expFmtSquare: "Square",
+    expPanelLabel: "Show keyboard / drum kit",
+    expAdvanced: "More options",
+    expAlignLabel: "Score position",
+    expAlignTop: "Top",
+    expAlignCenter: "Center",
+    expAlignBottom: "Bottom",
     exportRangeToggleLabel: "Export a clip only",
     startLabel: "Start",
     endLabel: "End",
     nowPositionBtn: "Current Position",
     backBtn: "Back",
-    nextBtn: "Next",
-    alignTopTitle: "Align Top",
-    alignTopSub: "Space below",
-    alignCenterTitle: "Align Center",
-    alignCenterSub: "Centered top and bottom",
-    alignBottomTitle: "Align Bottom",
-    alignBottomSub: "Space above",
-    watermarkToggleLabel: "Add title/watermark",
     titleLabel: "Title",
     titlePlaceholder: "Score title (centered at top)",
     subtitleLabel: "Subtitle",
     subtitlePlaceholder: "Subtitle (below title, optional)",
     watermarkLabel: "Watermark",
     watermarkPlaceholder: "Channel name (bottom right)",
-    fmtLandscapeTitle: "Landscape 1920 × 1080",
-    fmtLandscapeSub: "YouTube video",
-    fmtPortraitTitle: "Portrait 1080 × 1920",
-    fmtSquareTitle: "Square 1080 × 1080",
-    fmtSquareSub: "Instagram post / Facebook",
 
     exportRenderingPct: "Rendering {pct}%",
     exportAnalyzingPct: "Normalizing loudness {pct}%",
@@ -1607,9 +1623,7 @@ const I18N = {
     exportWarnBody: "Switching apps or letting the screen sleep will cause stuttering frames — you'll have to export again.",
     exportInfoP: "Export time equals the piece's length. Speakers are muted while exporting to avoid crackling; the video's audio is unaffected.",
 
-    previewTitle: "Preview",
     previewImgAlt: "Export preview",
-    previewBody: "This is the actual export frame (based on the current playback position). Confirm the score alignment, title/watermark, and background look right before exporting.",
     previewConfirmBtn: "Start Export",
 
     statusDefault: "No score loaded",
@@ -5608,10 +5622,7 @@ function refreshDynamicI18nText(){
       ? T("bgImportedStatus", { name: importedBgImageName })
       : T("bgImageStatusDefault");
   }
-  if (typeof showFmtStep === "function" && typeof currentFmtStep !== "undefined" &&
-      $("formatOverlay").classList.contains("show")) {
-    showFmtStep(currentFmtStep);
-  }
+  if ($("formatOverlay").classList.contains("show") && typeof refreshExportPreview === "function") refreshExportPreview(true);   // 預覽裡的文字(標題預設值等)跟著語言
 }
 $("langToggle").addEventListener("click", () => {
   applyLanguage(currentLang === "en" ? "zh" : "en");
@@ -5633,7 +5644,8 @@ const HEADER_COLLAPSE_STEPS = [
   { bodyClass: "header-tempo-compact" }, // 「BPM」先收,只留數字
   { bodyClass: "header-icons-only" },    // 其餘按鈕文字改圖示
   { bodyClass: "header-prefs-moved", movePrefs: true },  // 主題/語言搬進設定面板(手機頂欄因此維持單排,不再多一列)
-  { bodyClass: "header-brand-hidden" }    // 360px 以下的小手機:品牌名讓位給播放控制
+  { bodyClass: "header-brand-hidden" },   // 360px 以下的小手機:品牌名讓位給播放控制
+  { bodyClass: "header-export-hidden" }   // 最後才收:頂欄的匯出影片捷徑(設定面板裡還有)
 ];
 const HEADER_PREF_IDS = ["themeToggle", "langToggle"];
 // 手機瀏覽器實際渲染的字型寬度跟這支程式量測當下的環境會有落差(尤其中文字型),
@@ -5810,22 +5822,13 @@ $("scoreBgOpacity").addEventListener("input", () => {
    每首曲子、每次重新打開網頁都不用再輸入一次。開關預設開啟(第一次使用、還沒存過值的情況),
    使用者主動關掉之後才會記住「關閉」這個選擇 */
 const WATERMARK_STORAGE_KEY = "scrollscore_watermark_channel";
-const WATERMARK_TOGGLE_KEY = "scrollscore_watermark_enabled";
 const TITLE_STORAGE_KEY = "scrollscore_export_title";
 try {
   const savedChannel = localStorage.getItem(WATERMARK_STORAGE_KEY);
   if (savedChannel) $("exportWatermarkInput").value = savedChannel;
-  const rawToggle = localStorage.getItem(WATERMARK_TOGGLE_KEY);
-  const savedToggle = rawToggle === null ? true : rawToggle === "1";
-  $("exportWatermarkToggle").checked = savedToggle;
-  $("exportWatermarkFields").style.display = savedToggle ? "flex" : "none";
   const savedTitle = localStorage.getItem(TITLE_STORAGE_KEY);
   if (savedTitle) $("exportTitleInput").value = savedTitle; // 載入新樂譜時仍會被檔案自己的標題/檔名覆蓋(既有行為),這裡只是讓還沒載入新檔前欄位不是空的
 } catch (e) {} // localStorage 在部分隱私模式下可能無法存取,失敗就當作沒有存過,不影響其他功能
-$("exportWatermarkToggle").addEventListener("change", () => {
-  $("exportWatermarkFields").style.display = $("exportWatermarkToggle").checked ? "flex" : "none";
-  try { localStorage.setItem(WATERMARK_TOGGLE_KEY, $("exportWatermarkToggle").checked ? "1" : "0"); } catch (e) {}
-});
 $("exportWatermarkInput").addEventListener("input", () => {
   try { localStorage.setItem(WATERMARK_STORAGE_KEY, $("exportWatermarkInput").value); } catch (e) {}
 });
@@ -9166,29 +9169,17 @@ const exportFps = 60;
 function scheduleFrame(fn, fps){
   setTimeout(fn, 1000 / (fps || 60));
 }
-let chosenAlign = "center";
-let chosenIncludeKeyboard = false;
-let chosenStartSec = null, chosenEndSec = null; // null = 匯出全曲
-
-const FMT_STEP_TITLE_KEY = { type: "fmtStepType", range: "fmtStepRange", align: "fmtStepAlign", brand: "fmtStepBrand", format: "fmtStepFormat" };
-let currentFmtStep = "type";
-function showFmtStep(step){
-  currentFmtStep = step;
-  $("fmtStepType").style.display = step === "type" ? "flex" : "none";
-  $("fmtStepRange").style.display = step === "range" ? "flex" : "none";
-  $("fmtStepAlign").style.display = step === "align" ? "flex" : "none";
-  $("fmtStepBrand").style.display = step === "brand" ? "flex" : "none";
-  $("fmtStepFormat").style.display = step === "format" ? "flex" : "none";
-  $("fmtTitle").textContent = T(FMT_STEP_TITLE_KEY[step] || FMT_STEP_TITLE_KEY.type);
+/* ── 匯出影片(一頁)──────────────────────────────────────────
+   2026-10 使用者要求簡化:以前六步(類型 → 片段 → 對齊 → 標題 → 格式 → 預覽),從主畫面到存好影片要按 10 下。
+   現在一個畫面:即時預覽 + 格式/鍵盤鼓組/標題/浮水印,不常用的副標題、對齊、片段收在「進階」。
+   格式、鍵盤鼓組、對齊記在 localStorage(EXPORT_PREFS_KEY),第二次起打開直接按「開始匯出」 */
+const EXPORT_PREFS_KEY = "scrollscore_export_prefs";
+const exportPrefs = { format: "landscape", panel: true, align: "center" };
+try { Object.assign(exportPrefs, JSON.parse(localStorage.getItem(EXPORT_PREFS_KEY) || "{}") || {}); } catch (e) {}
+function saveExportPrefs(){ try { localStorage.setItem(EXPORT_PREFS_KEY, JSON.stringify(exportPrefs)); } catch (e) {} }
+function syncSeg(segId, value){
+  for (const b of $(segId).querySelectorAll("button")) b.setAttribute("aria-checked", b.dataset.v === value ? "true" : "false");
 }
-$("exportBtn").addEventListener("click", () => {
-  if (!events.length || exporting) return;
-  closeSettingsSheet();
-  showFmtStep("type");
-  $("formatOverlay").classList.add("show");
-});
-$("fmtCancel").addEventListener("click", () => $("formatOverlay").classList.remove("show"));
-
 // 分鐘/秒數各自獨立下拉選單,取代自由輸入文字(避免手動輸入時中間的「:」被誤刪導致格式錯誤)
 function fillMinuteOptions(sel, maxMin){
   sel.innerHTML = "";
@@ -9214,7 +9205,7 @@ function setTimeSelects(minSel, secSel, sec){
 function readTimeSelects(minSel, secSel){
   return parseInt(minSel.value, 10) * 60 + parseInt(secSel.value, 10);
 }
-function enterRangeStep(){
+function resetExportRange(){
   $("exportRangeToggle").checked = false;
   $("exportRangeInputs").style.display = "none";
   const maxMin = Math.max(0, Math.ceil(totalSec() / 60));
@@ -9224,58 +9215,59 @@ function enterRangeStep(){
   fillSecondOptions($("exportEndSec"));
   setTimeSelects($("exportStartMin"), $("exportStartSec"), 0);
   setTimeSelects($("exportEndMin"), $("exportEndSec"), totalSec());
-  showFmtStep("range");
 }
-$("fmtTypeScore").addEventListener("click", () => { chosenIncludeKeyboard = false; enterRangeStep(); });
-$("fmtTypeWithKeyboard").addEventListener("click", () => { chosenIncludeKeyboard = true; enterRangeStep(); });
-
+// 片段區間:沒開 → null(全曲);開了但結束 ≤ 開始 → "bad"
+function exportRangeSel(){
+  if (!$("exportRangeToggle").checked) return { startSec: null, endSec: null };
+  const st = readTimeSelects($("exportStartMin"), $("exportStartSec")), en = readTimeSelects($("exportEndMin"), $("exportEndSec"));
+  if (en - st < 0.5) return "bad";
+  return { startSec: Math.max(0, st), endSec: Math.min(totalSec(), en) };
+}
+function openExportSheet(){
+  if (!events.length || exporting) return;
+  closeSettingsSheet();
+  resetExportRange();
+  syncSeg("expFormatSeg", exportPrefs.format);
+  syncSeg("expAlignSeg", exportPrefs.align);
+  $("expPanelToggle").checked = !!exportPrefs.panel;
+  $("formatOverlay").classList.add("show");
+  refreshExportPreview(true);
+}
+$("exportBtn").addEventListener("click", openExportSheet);
+$("exportHdrBtn").addEventListener("click", openExportSheet);
+$("fmtCancel").addEventListener("click", () => $("formatOverlay").classList.remove("show"));
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && $("formatOverlay").classList.contains("show")) $("formatOverlay").classList.remove("show");
+});
+$("expFormatSeg").addEventListener("click", e => {
+  const b = e.target.closest("button[data-v]"); if (!b) return;
+  exportPrefs.format = b.dataset.v; saveExportPrefs(); syncSeg("expFormatSeg", exportPrefs.format); refreshExportPreview();
+});
+$("expAlignSeg").addEventListener("click", e => {
+  const b = e.target.closest("button[data-v]"); if (!b) return;
+  exportPrefs.align = b.dataset.v; saveExportPrefs(); syncSeg("expAlignSeg", exportPrefs.align); refreshExportPreview();
+});
+$("expPanelToggle").addEventListener("change", () => { exportPrefs.panel = $("expPanelToggle").checked; saveExportPrefs(); refreshExportPreview(); });
+for (const id of ["exportTitleInput", "exportSubtitleInput", "exportWatermarkInput"]) $(id).addEventListener("input", () => refreshExportPreview());
 $("exportRangeToggle").addEventListener("change", () => {
   $("exportRangeInputs").style.display = $("exportRangeToggle").checked ? "flex" : "none";
+  refreshExportPreview();
 });
+for (const id of ["exportStartMin", "exportStartSec", "exportEndMin", "exportEndSec"]) $(id).addEventListener("change", () => refreshExportPreview());
 $("exportStartNowBtn").addEventListener("click", () => {
-  setTimeSelects($("exportStartMin"), $("exportStartSec"), playing ? currentSec() : pausedAtSec);
+  setTimeSelects($("exportStartMin"), $("exportStartSec"), playing ? currentSec() : pausedAtSec); refreshExportPreview();
 });
 $("exportEndNowBtn").addEventListener("click", () => {
-  setTimeSelects($("exportEndMin"), $("exportEndSec"), playing ? currentSec() : pausedAtSec);
+  setTimeSelects($("exportEndMin"), $("exportEndSec"), playing ? currentSec() : pausedAtSec); refreshExportPreview();
 });
-
-$("fmtBackFromRange").addEventListener("click", () => showFmtStep("type"));
-$("fmtNextFromRange").addEventListener("click", () => {
-  if ($("exportRangeToggle").checked) {
-    const s = readTimeSelects($("exportStartMin"), $("exportStartSec"));
-    const e = readTimeSelects($("exportEndMin"), $("exportEndSec"));
-    if (e - s < 0.5) {
-      setStatus(T("statusExportRangeInvalid"));
-      return;
-    }
-    chosenStartSec = Math.max(0, s);
-    chosenEndSec = Math.min(totalSec(), e);
-  } else {
-    chosenStartSec = null;
-    chosenEndSec = null;
-  }
-  showFmtStep("align");
-});
-
-$("fmtBackFromAlign").addEventListener("click", () => showFmtStep("range"));
-$("alignTop").addEventListener("click", () => { chosenAlign = "top"; showFmtStep("brand"); });
-$("alignCenter").addEventListener("click", () => { chosenAlign = "center"; showFmtStep("brand"); });
-$("alignBottom").addEventListener("click", () => { chosenAlign = "bottom"; showFmtStep("brand"); });
-
-$("fmtBackFromBrand").addEventListener("click", () => showFmtStep("align"));
-$("fmtNextFromBrand").addEventListener("click", () => showFmtStep("format"));
-
-$("fmtBackFromFormat").addEventListener("click", () => showFmtStep("brand"));
-function watermarkCfg(){
-  const enabled = $("exportWatermarkToggle").checked;
+function watermarkCfg(){   // 以前有「加上標題/浮水印」開關;一頁式之後拿掉,欄位空白就不畫
   return {
-    watermarkEnabled: enabled,
-    title: enabled ? $("exportTitleInput").value.trim() : "",
-    subtitle: enabled ? $("exportSubtitleInput").value.trim() : "",
-    channel: enabled ? $("exportWatermarkInput").value.trim() : ""
+    watermarkEnabled: true,
+    title: $("exportTitleInput").value.trim(),
+    subtitle: $("exportSubtitleInput").value.trim(),
+    channel: $("exportWatermarkInput").value.trim()
   };
 }
-let pendingExportCfg = null;
 /* Google Fonts 的中文字型是切成一堆只涵蓋特定字的小檔案(unicode-range),瀏覽器只會下載
    「目前頁面上真的有出現的那些字」對應的檔案。使用者在標題/浮水印欄位自己打的字(例如
    「測試」的「測」)如果剛好不在頁面其他地方出現過,對應的字型檔案這時候都還沒下載。
@@ -9386,46 +9378,60 @@ function exportAutoScoreH(cfg, kind){
 }
 // 鼓組面板高度上限(相對畫面寬):直式時以前面板會吃掉半個畫面(957px),樂譜被擠到最上面
 const EXPORT_KIT_MAX_W = 0.72;
-async function showExportPreview(cfg){
+// 直式/方形的鋼琴譜原本的固定高度(現在由 exportAutoScoreH 依音符大小決定,這兩個值只當初始值)
+const EXPORT_PORTRAIT_SCORE_H = 560, EXPORT_SQUARE_SCORE_H = 500;
+const EXPORT_FORMATS = {
+  landscape: () => ({ W: 1920, H: 1080, scoreH: 440, autoKind: "landscape" }),
+  portrait: () => ({ W: 1080, H: 1920, scoreH: isDrumScore ? 380 : EXPORT_PORTRAIT_SCORE_H, autoKind: "portrait" }),
+  square: () => ({ W: 1080, H: 1080, scoreH: isDrumScore ? 400 : EXPORT_SQUARE_SCORE_H, autoKind: "square" }),
+};
+// 目前畫面上的選擇 → 匯出設定(片段不合法時回傳 null)
+function buildExportCfg(){
+  const range = exportRangeSel();
+  if (range === "bad") return null;
+  const cfg = Object.assign((EXPORT_FORMATS[exportPrefs.format] || EXPORT_FORMATS.landscape)(),
+    { align: exportPrefs.align, bitrate: 5000000, fps: exportFps, includeKeyboard: !!exportPrefs.panel, startSec: range.startSec, endSec: range.endSec },
+    watermarkCfg());
   if (cfg.autoKind) cfg.scoreH = exportAutoScoreH(cfg, cfg.autoKind);
   else if (isDrumScore) cfg.scoreH = Math.round(cfg.scoreH * DRUM_EXPORT_SCORE_SCALE);
-  pendingExportCfg = cfg;
-  $("formatOverlay").classList.remove("show");
-  await ensureTitleFontsLoaded(cfg);
-  const layout = computeExportLayout(cfg);
-  const { tiles, scale } = await rasterizeScore(cfg.scoreH);
-  const cv = document.createElement("canvas");
-  cv.width = cfg.W; cv.height = cfg.H;
-  const ctx = cv.getContext("2d");
-  const calib = useCalib();
-  const previewSongSec = cfg.startSec != null ? cfg.startSec : (playing ? currentSec() : pausedAtSec);
-  drawExportFrame(ctx, layout, cfg, tiles, scale, previewSongSec, calib);
-  $("previewImg").src = cv.toDataURL("image/png");
-  $("previewOverlay").classList.add("show");
+  return cfg;
 }
-// 樂譜高度調小一點(原本560/480):樂譜太大時,同樣的移動速度視覺上掃過的範圍更大,
-// 快速橫向捲動會讓人看了很暈;縮小一點在畫面上維持同樣的播放速度感覺會穩定不少
-$("fmtLandscape").addEventListener("click", () => {
-  showExportPreview(Object.assign({ W: 1920, H: 1080, scoreH: 440, autoKind: "landscape", align: chosenAlign, bitrate: 5000000, fps: exportFps, includeKeyboard: chosenIncludeKeyboard, startSec: chosenStartSec, endSec: chosenEndSec }, watermarkCfg()));
-});
-// 直式/方形的鋼琴譜放大(直式 380 → 560、方形 400 → 500;直式再大會一次只看得到 1.5 小節、捲動太快):手機直立看影片時樂譜太小看不清楚,
-// 而且只占畫面 1/5、上下大片空白(使用者反映)。鼓譜照舊(另外乘 DRUM_EXPORT_SCORE_SCALE)
-const EXPORT_PORTRAIT_SCORE_H = 560, EXPORT_SQUARE_SCORE_H = 500;
-$("fmtPortrait").addEventListener("click", () => {
-  showExportPreview(Object.assign({ W: 1080, H: 1920, scoreH: isDrumScore ? 380 : EXPORT_PORTRAIT_SCORE_H, autoKind: "portrait", align: chosenAlign, bitrate: 5000000, fps: exportFps, includeKeyboard: chosenIncludeKeyboard, startSec: chosenStartSec, endSec: chosenEndSec }, watermarkCfg()));
-});
-// 正方形:高度介於橫式(1080)與直式(1920)之間,樂譜高度取 400 —— 比橫式略高一點點,
-// 因為正方形沒有橫式那麼寬,同樣的樂譜高度看起來會相對小
-$("fmtSquare").addEventListener("click", () => {
-  showExportPreview(Object.assign({ W: 1080, H: 1080, scoreH: isDrumScore ? 400 : EXPORT_SQUARE_SCORE_H, autoKind: "square", align: chosenAlign, bitrate: 5000000, fps: exportFps, includeKeyboard: chosenIncludeKeyboard, startSec: chosenStartSec, endSec: chosenEndSec }, watermarkCfg()));
-});
-$("previewBackBtn").addEventListener("click", () => {
-  $("previewOverlay").classList.remove("show");
-  $("formatOverlay").classList.add("show");
-});
+// 預覽:改了選項就重畫(打字時稍微等一下);樂譜點陣化很花時間,同一份樂譜、同一個高度只做一次
+let previewRaster = null, previewTimer = 0, previewToken = 0;
+function refreshExportPreview(now){
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(drawExportPreview, now ? 0 : 180);
+}
+async function drawExportPreview(){
+  const token = ++previewToken;
+  const cfg = buildExportCfg();
+  $("previewConfirmBtn").disabled = !cfg;
+  if (!cfg) { setStatus(T("statusExportRangeInvalid")); return; }
+  const wrap = $("previewImg").parentElement;
+  wrap.classList.add("busy");
+  try {
+    await ensureTitleFontsLoaded(cfg);
+    const svg = $("score").querySelector("svg");
+    if (!previewRaster || previewRaster.svg !== svg || previewRaster.scoreH !== cfg.scoreH) {
+      const r = await rasterizeScore(cfg.scoreH);
+      previewRaster = { svg, scoreH: cfg.scoreH, tiles: r.tiles, scale: r.scale };
+    }
+    if (token !== previewToken) return;   // 已經有更新的選擇,這張不用畫了
+    const layout = computeExportLayout(cfg);
+    const cv = document.createElement("canvas");
+    cv.width = cfg.W; cv.height = cfg.H;
+    const previewSongSec = cfg.startSec != null ? cfg.startSec : (playing ? currentSec() : pausedAtSec);
+    drawExportFrame(cv.getContext("2d"), layout, cfg, previewRaster.tiles, previewRaster.scale, previewSongSec, useCalib());
+    $("previewImg").src = cv.toDataURL("image/jpeg", 0.85);
+  } catch (e) { setStatus(T("exportFailed", { msg: e.message || e })); }
+  finally { if (token === previewToken) wrap.classList.remove("busy"); }
+}
 $("previewConfirmBtn").addEventListener("click", () => {
-  $("previewOverlay").classList.remove("show");
-  exportVideo(pendingExportCfg);
+  const cfg = buildExportCfg();
+  if (!cfg) { setStatus(T("statusExportRangeInvalid")); return; }
+  $("formatOverlay").classList.remove("show");
+  previewRaster = null;   // 匯出會自己重新點陣化;預覽用的放掉(長曲子很大)
+  exportVideo(cfg);
 });
 $("exportCancel").addEventListener("click", () => { exportCancelled = true; });
 
@@ -10084,20 +10090,60 @@ async function exportVideo(cfg){
 /* 匯出完成的影片交給使用者:App(WKWebView)裡 <a download> 沒有作用,iPhone 網頁版下載後也不好找,
    所以 App 與 iOS 用系統分享表單(「儲存影片」直接存到相簿,也能傳 LINE/IG);navigator.share 一定要在使用者點擊時呼叫,
    影片做好時已經不是點擊的當下,所以跳一個小視窗讓使用者點。其他平台照舊直接下載 */
-function deliverExportedVideo(blob, fileName, mime){
+/* App 版直接存相簿(2026-10,使用者同意;要 @capacitor/filesystem + @capacitor-community/media 兩個原生外掛):
+   影片分段(3MB)寫進 App 的暫存資料夾 → Media.saveVideo 存進「照片」(只要求「加入照片」權限,Info.plist 已有說明)→ 刪掉暫存檔。
+   以前要按「儲存影片」再在系統分享選單按一次「儲存影片」;現在匯出完就存好,另外留「分享」給要傳 LINE/IG 的人 */
+function nativeMediaPlugins(){
+  const P = window.IN_NATIVE_APP && window.Capacitor && window.Capacitor.Plugins;
+  return P && P.Filesystem && P.Media ? { FS: P.Filesystem, Media: P.Media } : null;
+}
+function blobToBase64(b){
+  return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1] || ""); r.onerror = () => rej(r.error); r.readAsDataURL(b); });
+}
+async function saveVideoToPhotosNative(blob, fileName){
+  const { FS, Media } = nativeMediaPlugins();
+  const path = "exports/" + fileName, CH = 3 * 1024 * 1024;
+  for (let off = 0; off < blob.size; off += CH) {
+    const data = await blobToBase64(blob.slice(off, off + CH));
+    if (off === 0) await FS.writeFile({ path, data, directory: "CACHE", recursive: true });
+    else await FS.appendFile({ path, data, directory: "CACHE" });
+  }
+  const { uri } = await FS.getUri({ path, directory: "CACHE" });
+  try { await Media.saveVideo({ path: uri }); }
+  finally { try { await FS.deleteFile({ path, directory: "CACHE" }); } catch (e) {} }
+}
+// 匯出完成的小視窗:saving 存相簿中 / saved 已存好(可再分享)/ share 用系統分享存檔(網頁版 iOS、外掛失敗時)
+function showShareOverlay(mode, file, canShare, fileName){
+  const ov = $("shareOverlay"), save = $("shareSaveBtn"), close = $("shareCloseBtn");
+  const share = async () => {
+    try { await navigator.share({ files: [file], title: fileName }); if (mode !== "saved") ov.classList.remove("show"); }
+    catch (e) { if (e && e.name !== "AbortError") setStatus(T("shareFailed")); }
+  };
+  $("shareTitle").textContent = T(mode === "saving" ? "shareSavingTitle" : mode === "saved" ? "shareSavedTitle" : "shareTitle");
+  $("shareSub").textContent = mode === "saving" ? "" : T(mode === "saved" ? "shareSavedSub" : mode === "fallback" ? "shareSaveFailedSub" : "shareSub");
+  save.style.display = mode === "saving" || (mode === "saved" && !canShare) ? "none" : "";
+  save.textContent = T(mode === "saved" ? "shareShareBtn" : "shareSaveBtn");
+  save.onclick = share;
+  close.style.display = mode === "saving" ? "none" : "";
+  close.textContent = T(mode === "saved" ? "doneBtn" : "closeBtn");
+  close.onclick = () => ov.classList.remove("show");
+  ov.classList.add("show");
+}
+async function deliverExportedVideo(blob, fileName, mime){
   let file = null;
   try { file = new File([blob], fileName, { type: (mime || "video/mp4").split(";")[0] }); } catch (e) {}
   const ios = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
   const canShareFile = !!(file && navigator.canShare && (() => { try { return navigator.canShare({ files: [file] }); } catch (e) { return false; } })());
-  if ((window.IN_NATIVE_APP || ios) && canShareFile) {
-    $("shareOverlay").classList.add("show");
-    $("shareSaveBtn").onclick = async () => {
-      try { await navigator.share({ files: [file], title: fileName }); $("shareOverlay").classList.remove("show"); }
-      catch (e) { if (e && e.name !== "AbortError") setStatus(T("shareFailed")); }
-    };
-    $("shareCloseBtn").onclick = () => $("shareOverlay").classList.remove("show");
-    return;
+  if (nativeMediaPlugins()) {
+    showShareOverlay("saving", file, canShareFile, fileName);
+    try { await saveVideoToPhotosNative(blob, fileName); showShareOverlay("saved", file, canShareFile, fileName); return; }
+    catch (e) {
+      console.warn("save to photos", e);
+      if (canShareFile) { showShareOverlay("fallback", file, canShareFile, fileName); return; }
+      $("shareOverlay").classList.remove("show"); setStatus(T("shareFailed")); return;
+    }
   }
+  if ((window.IN_NATIVE_APP || ios) && canShareFile) { showShareOverlay("share", file, canShareFile, fileName); return; }
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
   a.download = fileName;

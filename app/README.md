@@ -25,6 +25,7 @@
   - `NSPhotoLibraryAddUsageDescription`：「儲存影片」存到相簿需要這個說明，沒有的話 App 會當掉。
   - `ITSAppUsesNonExemptEncryption = false`：App 沒有用加密，送審時不用再回答出口合規問題。
   - 裝置需求改成 `arm64`：範本原本寫的是 32 位元的舊架構 `armv7`。
+- **原生外掛**:`@capacitor/filesystem`、`@capacitor-community/media`(匯出影片直接存相簿,`package.json` 已列入,`npm install` + `npm run sync` 會自動加進 Xcode 專案)。
 - **App 圖示**：使用者畫的 logo（`assets/logo-original.png`），用 `assets/make_icon.py` 補掉四個角的白色、裁成 1024×1024 的不透明 PNG（`assets/icon-1024.png`）。iOS 會自己裁圓角，所以圖示本身不能先畫圓角或留白邊。
 - **啟動畫面**：`assets/splash.svg` 轉成 `assets/splash-2732.png`。
 - **Bundle ID**：`com.stevenmusic.scrollscore`。最低支援 iOS 15。
@@ -46,7 +47,7 @@ npm run open         # 用 Xcode 打開
 2. 上方裝置選你的 iPhone，按 ▶ 執行，在手機上實際測試：
    - 播放範例《歡樂頌》和搖滾鼓。打開靜音開關也要有聲音。
    - 匯入一個 MusicXML 檔案。
-   - 匯出影片 → 按「儲存影片」→ 存到相簿。
+   - 按上方攝影機圖示匯出影片 → 開始匯出 → 完成後自動存到「照片」(第一次會問能不能加入照片,要允許)。
 3. 確認沒問題後，裝置選 **Any iOS Device (arm64)** → 選單 **Product → Archive** → **Distribute App → App Store Connect → Upload**。
 4. 到 [App Store Connect](https://appstoreconnect.apple.com) 建立 App，照 `APP_STORE.md` 填資料、選剛上傳的版本，送審。
 

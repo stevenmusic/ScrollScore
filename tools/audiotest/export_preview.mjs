@@ -21,10 +21,15 @@ await page.waitForFunction(() => typeof events !== "undefined" && events.length 
 await page.waitForTimeout(1500);
 for (const [name, W, H, sh] of [["landscape", 1920, 1080, 440], ["portrait", 1080, 1920, await page.evaluate(() => isDrumScore ? 380 : EXPORT_PORTRAIT_SCORE_H)], ["square", 1080, 1080, await page.evaluate(() => isDrumScore ? 400 : EXPORT_SQUARE_SCORE_H)]]) for (const kb of [true, false]) {
   const data = await page.evaluate(async ({ W, H, sh, kb, sec }) => {
-    const cfg = Object.assign({ W, H, scoreH: sh, autoKind: W === H ? "square" : H > W ? "portrait" : "landscape", align: typeof chosenAlign !== "undefined" ? chosenAlign : "center", bitrate: 5e6, fps: 30, includeKeyboard: kb, startSec: sec, endSec: null }, watermarkCfg());
-    await showExportPreview(cfg);
-    $("previewOverlay").classList.remove("show");
-    const L = computeExportLayout(pendingExportCfg);
+    // 匯出畫面(一頁式):設定格式與樂器面板、跳到指定秒數,等預覽畫好
+    seekTo(sec);
+    exportPrefs.format = W === H ? "square" : H > W ? "portrait" : "landscape"; exportPrefs.panel = kb;
+    openExportSheet();
+    await new Promise(r => setTimeout(r, 300));
+    while ($("previewImg").parentElement.classList.contains("busy")) await new Promise(r => setTimeout(r, 100));
+    const cfg = buildExportCfg();
+    $("formatOverlay").classList.remove("show");
+    const L = computeExportLayout(cfg);
     return { src: $("previewImg").src, L };
   }, { W, H, sh, kb, sec: +(secArg || 8) });
   fs.writeFileSync(`${out}/exp_${name}_${kb ? "kb" : "score"}.png`, Buffer.from(data.src.split(",")[1], "base64"));

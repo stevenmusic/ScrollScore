@@ -51,7 +51,7 @@ App 沒有帳號、分析、廣告或追蹤功能。匯入的樂譜和匯出的�
 
 ## 給審核員的備註（App Review Information → Notes）
 
-> No account is needed. To try the app without your own files, tap one of the sample buttons on the start screen ("Twinkle", "Ode to Joy", "Rock drums", "Funk drums"), then press Play. To export a video, open Settings (gear icon) → Export Video, follow the steps, then tap "Save Video" to save it to Photos. You can also import any MusicXML or Guitar Pro file from the Files app via the upload button. All processing happens on the device.
+> No account is needed. To try the app without your own files, tap one of the sample buttons on the start screen ("Twinkle", "Ode to Joy", "Rock drums", "Funk drums"), then press Play. To export a video, tap the camera icon at the top (Export Video), choose a format and tap "Start Export"; when it finishes the video is saved to Photos automatically (the app asks for add-only photo access the first time). You can also import any MusicXML or Guitar Pro file from the Files app via the upload button. All processing happens on the device.
 
 ## 截圖
 
