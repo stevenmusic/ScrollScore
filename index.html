@@ -361,6 +361,7 @@ input[type=range]::-webkit-slider-thumb{
 }
 /* ── 鍵盤/鼓組面板 ───────────────── */
 #keyboardCanvas{display:block;width:100%;height:150px;background:var(--bg);flex:none;margin-bottom:10px}
+body.kb-hidden #keyboardCanvas{display:none}
 /* ── 響應式斷點 ─────────────────── */
 /* 手機寬度:頂欄改成單排「圖示按鈕」,文字標籤收起來(用 aria-label 留給螢幕報讀器),
    這樣 載入/播放/停止/速度/設定 全部擠在一行也不會換行,不會有兩排高低不一的觀感 */
@@ -7361,7 +7362,7 @@ let KB_WHITE_KEYS = [], KB_WHITE_IDX = {};
    每個鍵就會被擠得又窄又長、比例完全跑掉。改成依「目前實際畫面寬度 ÷ 可見白鍵數」反推出
    符合真實比例的高度,畫布高度動態跟著調,而不是每個裝置寬度都套同一個寫死的高度 */
 const WHITE_KEY_ASPECT = 5.2;
-const KB_MIN_H = 54, KB_MAX_H = 170; // 給現場畫面用的預設上下限(校準過的螢幕實際尺寸);匯出影片畫布大很多,呼叫時會另外傳入合適的上下限
+const KB_MIN_H = 54, KB_MAX_H = 170, KB_MAX_VH = 0.24, KB_HIDE_BELOW_H = 500; // 給現場畫面用的預設上下限(校準過的螢幕實際尺寸);匯出影片畫布大很多,呼叫時會另外傳入合適的上下限
 function computeKeyboardHeight(containerWidth, minH = KB_MIN_H, maxH = KB_MAX_H){
   const n = Math.max(KB_WHITE_KEYS.length, 1);
   const whiteW = containerWidth / n;
@@ -7861,11 +7862,17 @@ function getActiveDrumHitsAt(sec, calib){
 function resizeKeyboardCanvas(){
   const cv = $("keyboardCanvas");
   if (!cv) return;
+  // 手機橫放(高度不到 KB_HIDE_BELOW_H)時鋼琴不顯示鍵盤、只顯示譜面(使用者要求,2026-10):樂譜區只剩約 200px,
+  // 有鍵盤時蕭邦敘事曲譜線間距 4px、莫札特 5.8px;鼓譜只有一行,有鼓組面板也放得下(約 11px),照常顯示
+  const hideKb = currentInstrument() !== "drum" && window.innerWidth > window.innerHeight && window.innerHeight < KB_HIDE_BELOW_H;
+  document.body.classList.toggle("kb-hidden", hideKb);
+  if (hideKb) { cv.width = 0; cv.height = 0; return; }
   if (currentInstrument() === "drum") {
     cv.style.height = ""; // 鼓組面板不是白鍵排列,沒有這個比例問題,交回 CSS 斷點控制高度
   } else {
     const w = cv.getBoundingClientRect().width;
-    cv.style.height = computeKeyboardHeight(w) + "px";
+    // 手機橫放時鍵盤最多占畫面高度的 KB_MAX_VH(以前 844×390 鍵盤 150px、樂譜區只剩 144px,樂譜被縮到 5px)
+    cv.style.height = computeKeyboardHeight(w, KB_MIN_H, Math.max(KB_MIN_H, Math.min(KB_MAX_H, window.innerHeight * KB_MAX_VH))) + "px";
   }
   const rect = cv.getBoundingClientRect();
   cv.width = Math.round(rect.width);
@@ -7877,6 +7884,11 @@ function resizeKeyboardCanvas(){
 /* 畫面上的樂譜:#scroller 用 translate + scale 捲動。scoreFit 平常是 { s: 1, ty: 0 }(照原本的排法);
    舞台太矮、樂譜(含播放軸上下留白)放不下時(例如 iPhone 橫放、譜表間距很大的長曲子),縮小到放得下並讓音樂內容置中 */
 let scoreFit = { s: 1, ty: 0 }, lastScrollX = 0;
+/* 畫面上的樂譜大小(使用者要求,2026-10「全部都調大一點」):以前固定 zoom 0.9(譜線間距 9px),手機直式/桌機的樂譜區
+   只用了三成多的高度。現在有空間就放大:譜線間距最多 maxSp px、樂譜(含播放軸上下留白)最多占樂譜區 fill,
+   但播放軸右邊至少要看得到 aheadSec 秒(照目前速度的整首平均捲動速度;巴哈前奏曲這種十六分音符很密的曲子,
+   手機直式 9px 時就只看得到約 1.6 秒,不會再放大)。最小就是原本的大小(放不下時才縮小) */
+const SCREEN_SCORE = { maxSp: 13, fill: 0.8, aheadSec: 2.5, drumAheadSec: 2 };
 function setScrollerX(x){
   lastScrollX = x;
   $("scroller").style.transform = "translate(" + (playlineX() - x * scoreFit.s) + "px," + scoreFit.ty + "px) scale(" + scoreFit.s + ")";
@@ -7894,11 +7906,16 @@ function updatePlaylineExtent(){
   const pad = e.sp * svgH * PLAYLINE_PAD_SPACES_WITH_PANEL;
   const cTop = svgTop + e.top * svgH - pad, cBot = svgTop + e.bottom * svgH + pad;
   const boxTop = scroller.offsetTop, margin = Hs * 0.03;
-  if (boxTop + cTop >= margin && boxTop + cBot <= Hs - margin) scoreFit = { s: 1, ty: 0 };
-  else {
-    const s = Math.min(1, (Hs - 2 * margin) / (cBot - cTop));
-    scoreFit = { s, ty: Hs / 2 - boxTop - s * (cTop + cBot) / 2 };
-  }
+  const fitFull = (Hs - 2 * margin) / (cBot - cTop);
+  let grow = Math.min(SCREEN_SCORE.maxSp / (e.sp * svgH), Hs * SCREEN_SCORE.fill / (cBot - cTop));
+  const dur = totalSec(), svgW = sr.width / s0, ahead = stage.clientWidth - playlineX();
+  if (dur > 0 && svgW > 0) grow = Math.min(grow, ahead / ((isDrumScore ? SCREEN_SCORE.drumAheadSec : SCREEN_SCORE.aheadSec) * svgW / dur));
+  const s = Math.min(fitFull, Math.max(1, grow));
+  const prevS = scoreFit.s;
+  if (Math.abs(s - 1) < 0.01 && boxTop + cTop >= margin && boxTop + cBot <= Hs - margin) scoreFit = { s: 1, ty: 0 };
+  else scoreFit = { s, ty: Hs / 2 - boxTop - s * (cTop + cBot) / 2 };
+  // 放大時讓瀏覽器重新點陣化(will-change: transform 的圖層換比例後會沿用舊的點陣、放大會糊)
+  if (Math.abs(scoreFit.s - prevS) > 0.005) { scroller.style.willChange = "auto"; requestAnimationFrame(() => { scroller.style.willChange = ""; }); }
   const top = boxTop + scoreFit.ty + scoreFit.s * cTop, bot = boxTop + scoreFit.ty + scoreFit.s * cBot;
   pl.style.top = Math.max(0, top) + "px";
   pl.style.bottom = Math.max(0, Hs - bot) + "px";
@@ -9254,9 +9271,11 @@ const DRUM_EXPORT_SCORE_SCALE = 1.4;
    不小於 7px,也不超過扣掉標題與樂器面板後的高度。
    橫式(2026-10,使用者要求確認比例):以前固定 440 高,譜線間距 歡樂頌 19、巴哈 17、莫札特/舒伯特 9.5、蕭邦敘事曲 6px(比直式還小),
    上下大片空白;現在一樣照音符大小:目標 18px(橫式畫面寬,看得到的秒數不是限制,巴哈 4 秒、其他 8 秒以上),
-   鼓 36(跟以前 440×1.4 的鼓譜大小一樣;使用者沒反映過太大或太小) */
+   鼓 36(跟以前 440×1.4 的鼓譜大小一樣;使用者沒反映過太大或太小)。
+   2026-10 使用者「全部都調大一點」:鋼琴譜 橫式 18 → 22、直式 12 → 15、方形 11 → 14(鼓不變);
+   十六分音符很密的曲子仍受「看得到 3 秒」限制(不會一次只看到半小節) */
 // 鼓譜(使用者反映 18/15 太小):節奏型一直重複、讀譜不用看很遠,看前面 2 秒就夠,所以可以放更大
-const EXPORT_AUTO_SCORE = { landscape: { space: 18, drumSpace: 36, aheadSec: 3, drumAheadSec: 2 }, portrait: { space: 12, drumSpace: 26, aheadSec: 3, drumAheadSec: 2 }, square: { space: 11, drumSpace: 22, aheadSec: 3, drumAheadSec: 2 } };
+const EXPORT_AUTO_SCORE = { landscape: { space: 22, drumSpace: 36, aheadSec: 3, drumAheadSec: 2 }, portrait: { space: 15, drumSpace: 26, aheadSec: 3, drumAheadSec: 2 }, square: { space: 14, drumSpace: 22, aheadSec: 3, drumAheadSec: 2 } };
 function exportAutoScoreH(cfg, kind){
   const svg = $("score").querySelector("svg");
   const P = EXPORT_AUTO_SCORE[kind];
