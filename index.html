@@ -110,13 +110,15 @@ html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
    頂欄要讓出上方、左右(橫放時瀏海在側邊)。
    頁面內容整個往內縮(body 的 padding,不動各元素自己依螢幕寬度調的 padding);固定位置的設定面板、對話框各自讓開 */
 body{padding:env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left)}
+/* 狀態列那一條塗成頂欄的顏色,跟頂欄接起來(body 本身的底色在後面設定,這裡用 background-image 疊上去) */
+body{background-image:linear-gradient(var(--panel), var(--panel));background-repeat:no-repeat;background-size:100% env(safe-area-inset-top);background-position:top left}
 #settingsPanel{left:env(safe-area-inset-left) !important;right:env(safe-area-inset-right) !important}
 #formatOverlay,#exportOverlay,#trackOverlay,#shareOverlay,#shortcutOverlay{box-sizing:border-box;padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom);padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right)}
 /* iPhone 點到字級小於 16px 的輸入框會自動放大整頁,而且離開後常常不縮回(也會像「字變大」) */
 @media (pointer:coarse){input[type=text],input[type=number],input:not([type]),textarea{font-size:16px !important}}
 html,body{height:100%;overflow:hidden}
 body{
-  background:var(--bg);color:var(--ivory);
+  background-color:var(--bg);color:var(--ivory);
   font-family:"Noto Sans TC",sans-serif;
   display:flex;flex-direction:column;
 }
@@ -1378,6 +1380,7 @@ const I18N = {
 
     // ── 執行期狀態列 / 彈出訊息(透過 T() 呼叫)──────────────
     statusParsing: "解析中:{name}",
+    unsupportedFile: "不支援這種檔案:{name}(請選 MusicXML 或 Guitar Pro 檔)",
     statusLoaded: "已載入:{name}({events} 個節點,{repeats} 組重複音型){note}",
     statusLoadFailed: "載入失敗:{msg}",
     statusDropHint: "請拖曳 .musicxml / .xml / .mxl 或 Guitar Pro(.gp / .gpx / .gp5 / .gp4 / .gp3)檔案",
@@ -1613,6 +1616,7 @@ const I18N = {
     closeBtn: "Close",
 
     statusParsing: "Parsing: {name}",
+    unsupportedFile: "Unsupported file: {name} (choose a MusicXML or Guitar Pro file)",
     statusLoaded: "Loaded: {name} ({events} events, {repeats} repeat patterns){note}",
     statusLoadFailed: "Load failed: {msg}",
     statusDropHint: "Please drop a .musicxml / .xml / .mxl or Guitar Pro (.gp / .gpx / .gp5 / .gp4 / .gp3) file",
@@ -2204,9 +2208,23 @@ function syncTempoDisplay(){
   // 語言切換時才會跟著換,見 metronomeUnitLabel() 的說明
   if (tempoDisplayBeatUnit) tempoDisplayUnitLabel = metronomeUnitLabel(tempoDisplayBeatUnit, tempoDisplayDotCount);
   $("tempoUnitSuffix").textContent = tempoDisplayUnitLabel ? " " + tempoDisplayUnitLabel : "";
+  tempoForPos = rawTempo();   // 每次速度改完都會呼叫這裡:記下來,下次改速度時才換算得回樂譜位置
+}
+/* 暫停時改速度:暫停位置存的是秒數,換了速度同一個秒數就不是同一個音了(審查發現:畫面停在原處、
+   時間/進度條卻跳到別處,轉個方向樂譜就跳走)。用舊速度換回樂譜位置,再用新速度換回秒數 */
+let tempoForPos = null;
+function keepPausedPositionOnTempo(){
+  if (playing || !events.length || tempoForPos == null || tempoForPos === rawTempo() || !(pausedAtSec > 0)) return;
+  const now = $("tempo").value;
+  $("tempo").value = tempoForPos;
+  const w = secToWhole(pausedAtSec);
+  $("tempo").value = now;
+  seekTo(Math.max(0, posToSec(w, useCalib())));
 }
 async function loadScoreFile(file){
   if (!file) return;
+  // iPhone 的檔案選擇器不限制副檔名(見下方 fileInput),選錯檔案時說清楚
+  if (/\.[a-z0-9]{1,8}$/i.test(file.name) && !/\.(xml|musicxml|mxl|gp|gpx|gp5|gp4|gp3)$/i.test(file.name)) { setStatus(T("unsupportedFile", { name: file.name })); return; }
   stopPlayback();
   setStatus(T("statusParsing", { name: file.name }));
   try {
@@ -2304,6 +2322,14 @@ $("fileInput").addEventListener("change", async e => {
 /* ── 拖放檔案到樂譜區直接載入(桌面版方便) ─────────────────── */
 const SCORE_FILE_RE = /\.(xml|musicxml|mxl|gp|gpx|gp5|gp4|gp3)$/i;
 const GP_FILE_RE = /\.(gp|gpx|gp5|gp4|gp3)$/i;
+/* iPhone/iPad 的檔案選擇器把 accept 的副檔名換成系統檔案類型,.mxl、.gp5 這類系統不認得的會變灰色選不到,
+   所以 iOS 不限制,選了再檢查(loadScoreFile)。App 裡「支援與聯絡」「隱私權政策」改連網址(用 Safari 打開;
+   App 內的相對路徑是 capacitor:// 開不了,審查發現) */
+(function(){
+  if (isIOSDevice() || window.IN_NATIVE_APP) document.getElementById("fileInput").removeAttribute("accept");
+  if (window.IN_NATIVE_APP) for (const a of document.querySelectorAll('a[href="support.html"], a[href="privacy.html"]'))
+    a.href = "https://stevenmusic.github.io/ScrollScore/" + a.getAttribute("href");
+})();
 let dragDepth = 0;
 $("stage").addEventListener("dragenter", e => {
   if (!Array.from(e.dataTransfer.types || []).includes("Files")) return;
@@ -5420,6 +5446,7 @@ $("calibRetapBtn").addEventListener("click", () => {
 
 $("tempo").addEventListener("input", () => {
   $("tempoVal").value = rawTempo();
+  keepPausedPositionOnTempo();
   syncTempoDisplay();
   if (playing) { // 播放中改速度:重新以目前位置起算
     const cur = currentSec();
@@ -5434,6 +5461,7 @@ function applyTempo(t){
   t = Math.min(400, Math.max(40, Math.round(t)));
   $("tempoVal").value = t;
   $("tempo").value = t;
+  keepPausedPositionOnTempo();
   syncTempoDisplay();
   if (playing) {
     const cur = currentSec();
@@ -5474,6 +5502,8 @@ function applyTheme(){
   $("themeToggle").setAttribute("aria-pressed", String(on));
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) meta.setAttribute("content", on ? "#FBF7EE" : "#0C0A07");
+  // App:狀態列(時間、電量)的字色跟著主題,不然系統淺色模式時是黑字壓在深色頂欄上(審查發現)
+  try { const SB = window.IN_NATIVE_APP && window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.StatusBar; if (SB) SB.setStyle({ style: on ? "LIGHT" : "DARK" }).catch(() => {}); } catch (e) {}
   applyHighlightStyles();                       // 游標顏色在淺底上要換算,見下方
   resizeKeyboardCanvas();                       // 鍵盤畫布底色吃 --bg,換主題要重畫
   drawKeyboardLive(playing ? currentSec() : pausedAtSec);
@@ -10121,22 +10151,29 @@ function raceWatch(p, check){
 }
 /* 離線合成的三個等待點都要有時限,逾時要寫出卡在哪一步(載入限幅器 addModule / 合成 render / 讀響度 dump),
    iPhone 回報時才知道問題在哪;不能無限等(全域的 audioCtx 會一直是離線那個) */
+/* 「畫面看得到的時間」:切到別的 App / 鎖螢幕時 iPhone 會暫停網頁,這段時間不能算成卡住(審查發現:離開 25 秒回來就被判逾時) */
+let hiddenTotalMs = 0, hiddenSinceMs = document.hidden ? performance.now() : null;
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) { if (hiddenSinceMs == null) hiddenSinceMs = performance.now(); }
+  else if (hiddenSinceMs != null) { hiddenTotalMs += performance.now() - hiddenSinceMs; hiddenSinceMs = null; }
+});
+function activeNow(){ const now = performance.now(); return now - hiddenTotalMs - (hiddenSinceMs != null ? now - hiddenSinceMs : 0); }
 function offlineStep(stage, p, ms){
-  const t0 = performance.now();
-  return raceWatch(p, () => exportCancelled ? exportCancelError() : (performance.now() - t0 > ms ? new Error("離線合成逾時(" + stage + ")") : null));
+  const t0 = activeNow();
+  return raceWatch(p, () => exportCancelled ? exportCancelError() : (activeNow() - t0 > ms ? new Error("離線合成逾時(" + stage + ")") : null));
 }
 /* 等離線合成:進度(真的進度沒來就照時間推)、取消、卡住偵測。有真的進度時超過 max(20 秒, 2×估計)沒前進算卡住;
    沒有進度回報(Safari 可能不照 suspend 停)時總時間超過 max(60 秒, 音訊長度 × 4)算卡住 */
 async function awaitOfflineRender(ctx, total, tick){
-  const sr = ctx.sampleRate, t0 = performance.now(), est = Math.max(3, total * 0.3) * 1000;
+  const sr = ctx.sampleRate, t0 = activeNow(), est = Math.max(3, total * 0.3) * 1000;
   let gotReal = false, lastReal = t0;
   for (let k = 1; k < 20; k++) {   // 進度:每 5% 暫停一下更新畫面
     const at = Math.floor(total * k / 20 * sr / 128) * 128 / sr;
-    ctx.suspend(at).then(() => { gotReal = true; lastReal = performance.now(); tick.real(k / 20); ctx.resume(); }).catch(() => {});
+    ctx.suspend(at).then(() => { gotReal = true; lastReal = activeNow(); tick.real(k / 20); ctx.resume(); }).catch(() => {});
   }
   return raceWatch(ctx.startRendering(), () => {
     if (exportCancelled) return exportCancelError();
-    const now = performance.now();
+    const now = activeNow();
     const stalled = gotReal ? now - lastReal > Math.max(20000, 2 * est) : now - t0 > Math.max(60000, total * 4000);
     return stalled ? new Error("離線合成逾時(render)") : null;
   });
@@ -10239,7 +10276,15 @@ async function pickFastExportFormat(W, H, fps, bitrate){
   if (typeof AudioEncoder === "undefined" || typeof AudioData === "undefined") return { fail: "audio" };   // iPhone/iPad:iOS 26 才有 AudioEncoder
   const sr = fastExportSampleRate();
   // avc 格式:瀏覽器不認得的設定會被默默丟掉、isConfigSupported 照樣說支援,所以要看它回傳的 config 裡真的有這個格式
-  const vTry = async (codec, avcFormat) => { try { const r = await VideoEncoder.isConfigSupported({ codec, width: W, height: H, bitrate, framerate: fps, ...(avcFormat ? { avc: { format: avcFormat } } : {}) }); return !!(r && r.supported && (!avcFormat || (r.config && r.config.avc && r.config.avc.format === avcFormat))); } catch (e) { return false; } };
+  //    回傳的 config 沒有 avc 這一項(瀏覽器沒回報)就先算支援,交給試編判斷(試編會確認拿得到 SPS/PPS);明確回報別的格式才不算
+  const vTry = async (codec, avcFormat) => {
+    try {
+      const r = await VideoEncoder.isConfigSupported({ codec, width: W, height: H, bitrate, framerate: fps, ...(avcFormat ? { avc: { format: avcFormat } } : {}) });
+      const echoed = r && r.config && r.config.avc && r.config.avc.format;
+      if (avcFormat && r && r.supported) console.info("快速匯出格式檢查:" + codec + " " + avcFormat + " → 回報 " + (echoed || "(沒有 avc)"));
+      return !!(r && r.supported && (!avcFormat || !echoed || echoed === avcFormat));
+    } catch (e) { return false; }
+  };
   const vOk = async codec => vTry(codec, null);
   const aOk = async codec => { try { const r = await AudioEncoder.isConfigSupported({ codec, sampleRate: sr, numberOfChannels: 2, bitrate: FAST_EXPORT.audioBitrate }); return r && r.supported; } catch (e) { return false; } };
   // H.264:先找 Annex B(SPS/PPS 跟著關鍵格在位元流裡,不靠編碼器給 decoderConfig;各 profile 都先試 Annex B),
@@ -10361,13 +10406,23 @@ function h264SplitNals(u8, format){
   if (start >= 0 && start < u8.length) out.push(u8.subarray(start));
   return out;
 }
+/* 長度前綴(AVCC)的長度串能不能剛好走完整段資料 */
+function avccExact(u8){
+  let i = 0;
+  while (i + 4 <= u8.length) { const n = ((u8[i] << 24) | (u8[i + 1] << 16) | (u8[i + 2] << 8) | u8[i + 3]) >>> 0; if (!n) return false; i += 4 + n; }
+  return i === u8.length;
+}
+const annexbLike = u8 => u8.length > 4 && u8[0] === 0 && u8[1] === 0 && (u8[2] === 1 || (u8[2] === 0 && u8[3] === 1));
 const bytesEqual = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
 function makeH264Packer(format){
   let sps = null, pps = null, desc = null, metaDesc = false;
   return (u8, meta) => {
     const d = meta && meta.decoderConfig && meta.decoderConfig.description;
     if (d && !desc) { desc = d instanceof ArrayBuffer ? new Uint8Array(d.slice(0)) : new Uint8Array(d.buffer.slice(d.byteOffset, d.byteOffset + d.byteLength)); metaDesc = true; }
-    if (format !== "annexb" && metaDesc) return { data: u8, desc };   // 標準的 avc 格式:資料原封不動
+    // 編碼器有給 description = 標準的 avc 格式(長度前綴),資料原封不動;
+    // 只有要求 Annex B、資料又確實不是長度前綴(長度串不能剛好走完整段)時才當 Annex B 拆
+    if (metaDesc && (format !== "annexb" || avccExact(u8))) return { data: u8, desc };
+    if (format === "annexb" && !metaDesc && avccExact(u8) && !annexbLike(u8)) format = "avc";   // 要了 Annex B 卻拿到長度前綴(瀏覽器忽略設定)
     const keep = [];
     for (const n of h264SplitNals(u8, format)) {
       const t = n[0] & 31;
@@ -10656,10 +10711,12 @@ async function exportVideo(cfg){
     stopPlayback();
     ensureAudio();
     await Promise.race([masterReady, new Promise(r => setTimeout(r, 500))]);   // 匯出時一定要用正式的母帶限幅器
-    if (kitLoading) await kitLoading;
-    if (pianoLoading && currentInstrument() === "piano") await pianoLoading;
-    if (GTR_INSTS[currentInstrument()] && GTR_INSTS[currentInstrument()].loading) await GTR_INSTS[currentInstrument()].loading;
-    await ensureTitleFontsLoaded(cfg); // 保險:萬一使用者看到預覽秒按確認,字型下載可能還沒跑完
+    // 音色還在下載:等它,但按取消就不等了
+    const untilCancel = p => raceWatch(Promise.resolve(p), () => exportCancelled ? exportCancelError() : null);
+    if (kitLoading) await untilCancel(kitLoading);
+    if (pianoLoading && currentInstrument() === "piano") await untilCancel(pianoLoading);
+    if (GTR_INSTS[currentInstrument()] && GTR_INSTS[currentInstrument()].loading) await untilCancel(GTR_INSTS[currentInstrument()].loading);
+    await untilCancel(ensureTitleFontsLoaded(cfg)); // 保險:萬一使用者看到預覽秒按確認,字型下載可能還沒跑完
     if (exportCancelled) throw new Error("cancelled");
     // 先試快速匯出(WebCodecs,不用照時間跑);不支援或還沒產生影片前就失敗,才往下走原本的即時錄影
     fastExportGainCache = null;

@@ -25,7 +25,7 @@
   - `NSPhotoLibraryAddUsageDescription`：「儲存影片」存到相簿需要這個說明，沒有的話 App 會當掉。
   - `ITSAppUsesNonExemptEncryption = false`：App 沒有用加密，送審時不用再回答出口合規問題。
   - 裝置需求改成 `arm64`：範本原本寫的是 32 位元的舊架構 `armv7`。
-- **原生外掛**:`@capacitor/filesystem`、`@capacitor-community/media`(匯出影片直接存相簿,`package.json` 已列入,`npm install` + `npm run sync` 會自動加進 Xcode 專案)。
+- **原生外掛**:`@capacitor/filesystem`、`@capacitor-community/media`(匯出影片直接存相簿)、`@capacitor/status-bar`(狀態列字色跟著深淺主題)(`package.json` 已列入,`npm install` + `npm run sync` 會自動加進 Xcode 專案)。
 - **App 圖示**：使用者畫的 logo（`assets/logo-original.png`），用 `assets/make_icon.py` 補掉四個角的白色、裁成 1024×1024 的不透明 PNG（`assets/icon-1024.png`）。iOS 會自己裁圓角，所以圖示本身不能先畫圓角或留白邊。
 - **啟動畫面**：`assets/splash.svg` 轉成 `assets/splash-2732.png`。
 - **Bundle ID**：`com.stevenmusic.scrollscore`。最低支援 iOS 15。

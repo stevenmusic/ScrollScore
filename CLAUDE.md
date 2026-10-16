@@ -101,6 +101,12 @@
   - 離線合成逾時:addModule 15 秒、dump 10 秒、合成(有進度:max(20 秒, 2×估計)沒前進;沒進度回報:max(60 秒, 音訊長度 × 4)),錯誤訊息寫出卡在哪一步;快速匯出逾時就不再讓即時錄影重算響度(照原本音量)
   - 快速匯出算完聲音後才失敗:即時錄影直接用算好的增益(fastExportGainCache),不再算一次。iPhone/App 不會選 WebM(照片不能存)。編碼器/封裝建立都在 try 裡、出錯照樣退回即時錄影;stopFastPrepTick 在 finally
   - 畫面:暫停在曲子中間時旋轉/改視窗大小停在原位(keepPausedScroll,以前跳回第一小節);瀏海/動態島:body 用 env(safe-area-inset-*) 往內縮、設定面板左右、對話框都讓開;觸控裝置輸入框字級 16px(iPhone 點小於 16px 的輸入框會放大整頁、常常不縮回);fitHeaderRow 量測後放回設定面板捲動位置與焦點、頂欄變了就重算樂譜大小(手機橫放剛載入時樂譜小一號);匯出畫面副標題每次清掉;進度 ticker 停了之後不再蓋標題;存相簿 20 秒還沒好也能關;不支援 WebCodecs 的說明只在 iOS 寫「需要 iOS 16.4」
+- 審查員第二輪(2026-10):
+  - 逾時只算畫面看得到的時間(activeNow,切 App/鎖螢幕不算卡住);isConfigSupported 回傳沒有 avc 這一項就先算支援、交給試編確認 SPS/PPS(console 會印「快速匯出格式檢查」看 WebKit 回報什麼);有 description 時資料照原樣,除非要了 Annex B 而長度串走不完(avccExact);要了 Annex B 卻拿到長度前綴也認得(mux_check 的 ignored-* 兩種);等音色下載時按取消也會停
+  - 暫停時改速度:keepPausedPositionOnTempo 用舊速度換回樂譜位置再換成新秒數(tempoForPos 在 syncTempoDisplay 記錄;以前時間/進度條跳走、樂譜停在原處)
+  - App 狀態列:@capacitor/status-bar 8.0.4,applyTheme 設 DARK(淺色字)/LIGHT;狀態列那一條塗頂欄顏色(body 的 background-image,所以 body 的底色要寫 background-color 不能用 background 簡寫)
+  - App 裡「支援與聯絡」「隱私權政策」改連 https://stevenmusic.github.io/ScrollScore/(capacitor:// 的相對路徑開不了)
+  - iPhone/iPad/App 的檔案選擇器拿掉 accept(.mxl、.gp5 等系統不認得的副檔名會變灰色選不到),loadScoreFile 遇到其他副檔名顯示「不支援這種檔案」
 - 旋轉螢幕字變大(使用者反映,2026-10:設定頁直式 → 橫式 → 直式字變大):iPhone Safari 橫式會自動放大文字(text autosizing),轉回直式不一定縮回。html 一律 -webkit-text-size-adjust:100%(index/privacy/support 都有;新頁面也要加)。檢查:tools/audiotest/rotate_check.mjs(手機尺寸 × 載入前後 × 設定/匯出/主畫面 × 各種轉法,轉回來要跟直接打開一樣;Chromium 沒有 iOS 的放大行為,抓的是程式本身的問題)
 - 頂欄(使用者指定,2026-10):左邊品牌名 ScrollScore(一定保留);載入前右邊只有 深淺模式、語言、設定;載入後依序 上傳樂譜、播放、從頭(品牌名後面)、深淺模式、語言、匯出影片、設定。**速度不在頂欄**(以前的「100 BPM ▾」按鈕 + 彈出滑桿已拿掉),搬到設定面板「播放與顯示」第一列(#tempoRow:滑桿 + 數字 + BPM + 附點音符單位提示);跟樂譜上的「♩=100」速度記號(#showTempoMarks)是兩件事。放不下單排時 fitHeaderRow 依序:按鈕只留圖示 → 深淺/語言搬進設定面板最上面的「外觀與語言」(#headerPrefSlot)→ 匯出影片捷徑收起(設定面板裡還有)→ 最後才藏品牌名(折疊機外螢幕這種極窄畫面)。實測:桌機全部帶文字;iPad 直式、平板只留圖示;手機直式 390/320 是 品牌名 + 上傳/播放/從頭 + 匯出/設定(深淺、語言在設定裡)。按鈕保留的是整顆按鈕的寬度(圖示與文字置中貼齊),不是文字的寬度。版面檢查 tools/audiotest/layout_check.mjs(19 種尺寸 × 中英文)、模擬操作 human_check.mjs(隨機種子)
 

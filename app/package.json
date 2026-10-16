@@ -12,7 +12,8 @@
     "@capacitor/core": "8.5.3",
     "@capacitor/ios": "8.5.3",
     "@capacitor/filesystem": "8.1.5",
-    "@capacitor-community/media": "9.1.0"
+    "@capacitor-community/media": "9.1.0",
+    "@capacitor/status-bar": "8.0.4"
   },
   "devDependencies": {
     "@capacitor/cli": "8.5.3"
