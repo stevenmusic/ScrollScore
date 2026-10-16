@@ -22,7 +22,7 @@ const SCAN = (rootSel) => {
   const groups = new Map();
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   for (let t = walker.nextNode(); t; t = walker.nextNode()) {
-    if (!t.textContent.trim()) continue;
+    // 元素之間的空白(例如 <b>…</b> <a>…</a>)也要留著,不然兩個單字看起來黏在一起
     const p = t.parentElement;
     if (!p || p.closest("svg,script,style,option,select,textarea")) continue;
     const r = p.getBoundingClientRect();
