@@ -56,7 +56,7 @@
 - 試過吉他繞過 loudnessComp、改用自己的母帶段（慢起音壓縮 + 補增益，像鼓那樣）：mf→ff 還是只有約 3dB（瓶頸是最後的限幅器上限，不是壓縮器），整體要小聲 2.5dB 才換到 pp→ff 多 2dB，不划算，維持走 masterGain → loudnessComp。也不要把門檻設在音量之下（−26dB、2:1 會把所有大小聲差砍半）
 - 測試：tools/audiotest/render.mjs 用 OfflineAudioContext 離線渲染（比即時錄 masterOut 快、結果固定），jsdelivr 在雲端環境被擋，要從 npm 拿 OSMD/JSZip 再用 page.route 攔截
 - 樂器只保留鋼琴、吉他（民謠、古典兩把）、鼓組
-- 民謠吉他、古典吉他目前標「開發中」並停用（使用者要求）：樂器選單的 <option disabled>，文字加「・開發中」；舊設定存了吉他時退回鋼琴。程式與取樣都保留，拿掉 disabled 即可恢復
+- **吉他不在樂器選單裡(2026-10,上架準備)**:App Store 不能有未完成/預告中的功能,原本的「開發中」灰色選項已拿掉;程式與取樣都保留,加回 <option value="guitar"> / <option value="guitarnylon"> 即可恢復,舊設定存了吉他時退回鋼琴。評估結論(都不達標):民謠 FSS 是 GPL(跟 App Store 條款衝突,例外只涵蓋用聲音做的音樂作品)、弱層只有 17/45 音;古典 MF 是 CC-BY-NC-SA(不可商用,作者例外只涵蓋商業音樂製作)、只有 8 個音;Philharmonia(CC BY-SA,授權可以)C5 以上缺 7 個音(72、73、77、78、81、82、83)、強層頻寬只到 7kHz(原檔 MP3 96kbps,鋼琴/鼓 21kHz);HarmonyMap 用的 tonejs 間隔 3 半音。guitar/classical/ 不能刪(HarmonyMap、HarmonyHands 從這裡讀)
 - 匯出影片用 canvas.captureStream + MediaRecorder
 - 「匯入音檔取代合成音」已移除(2026-10,使用者確認):當初是因為鼓音色差才留,而且錄音要完全照節拍器才對得上樂譜、對齊用的校準功能早就隱藏,現在鼓與鋼琴都是真實取樣
 - 匯出影片版面(computeExportLayout):鍵盤/鼓組面板一律貼底;樂譜位置完全照使用者選的「靠上/置中/靠下」(使用者強調:不要自作主張改對齊)。直式/方形的樂譜大小照音符大小決定(2026-10,使用者交給 Claude 設計;exportAutoScoreH、cfg.autoKind):以前固定輸出高度(直式 560、方形 500),但每首樂譜本身高度差很多(巴哈前奏曲 239、蕭邦敘事曲 641、鼓譜 155),直式畫面巴哈譜線間距 21px 一次只看到 1 小節、蕭邦只有 8px、鼓譜 31px 只看到 1.3 小節。現在 EXPORT_AUTO_SCORE:譜線間距目標 直式 12px(鼓 26)、方形 11px(鼓 22;使用者反映鼓 18/15 太小),播放軸右邊至少看得到 3 秒(鼓 2 秒:節奏型重複、不用看很遠;整首平均捲動速度),不小於 7px、不超過扣掉標題與面板的高度。鼓組面板最高 0.72×畫面寬(EXPORT_KIT_MAX_W,以前直式吃掉半個畫面 957px)。橫式照舊(固定 440,鼓 ×1.4)。檢查:tools/audiotest/export_preview.mjs(橫/直/方 × 有無面板的實際匯出畫面)
@@ -77,6 +77,17 @@
 - 測試鼓譜的記譜規則(使用者強調,寫錯過好幾次):照 Weinberg/PAS 與 MuseScore 4 預設鼓組(drumset.cpp)——音符與休止符不跨拍、休止符對齊拍子(空兩拍且從第 1 或 3 拍開始才用二分休止)、手(符桿上)腳(符桿下)兩個聲部各自寫滿、符尾以拍為單位、搖擺用三連音記、開放 hi-hat 是 x 符頭 + 上方「o」、中鼓 48 E5 / 47 D5 / 45 B4、落地鼓 43 A4 / 41 G4。MuseScore 網站上使用者上傳的譜品質參差,不能拿來當記譜依據
 
 - 頂欄收合(fitHeaderRow,依序試到放得下單排為止):BPM 字樣 → 按鈕只留圖示 → 主題/語言兩顆搬進設定面板最上面的「外觀與語言」(#headerPrefSlot)→ 品牌名讓位(360px 以下)。2026-10 起手機載入樂譜後頂欄一律單排(以前 280~430px 都是兩排,多吃約 60px 樂譜高度)。按鈕保留的是整顆按鈕的寬度(圖示與文字置中貼齊),不是文字的寬度。版面檢查 tools/audiotest/layout_check.mjs(19 種尺寸 × 中英文)、模擬操作 human_check.mjs(隨機種子)
+
+## 上架 App Store(2026-10)
+- 包裝:app/(Capacitor 8.5.3,說明見 app/README.md,App Store Connect 填寫內容見 app/APP_STORE.md)。npm run build(build-www.mjs)把 index.html、privacy.html、vendor/、samples/、piano/、drums/ 複製到 app/www(不放 guitar/、tools/、build/ 腳本,約 226MB);ios/ 是 cap add ios 產生的專案,Info.plist 加了 NSPhotoLibraryAddUsageDescription(存影片到相簿,沒有會當掉)、ITSAppUsesNonExemptEncryption false、arm64;AppDelegate 設 AVAudioSession .playback(靜音開關)。編譯送審要在 Mac 上用 Xcode
+- App 圖示:使用者畫的 logo(app/assets/logo-original.png),make_icon.py 把四個角的白色補成背景漸層、裁成 1024 RGB(iOS 自己裁圓角,圖不能先畫圓角/白邊);啟動畫面 splash.svg
+- window.IN_NATIVE_APP(Capacitor 原生環境):不載入 Google Fonts(用系統字型,隱私權政策寫 App 版不連外部字型)、匯出標題不抓字型
+- 程式庫先讀本機 vendor/(OSMD 2.0.0、JSZip 3.10.1、alphaTab 1.8.4,跟 npm 同一份,附授權檔),讀不到才退回 jsDelivr;App 離線可用、不從網路下載程式碼(審核規則 2.5.2)。升級程式庫要同時換 vendor/ 檔案與 CDN 網址
+- iPhone 靜音開關:ensureAudio() 設 navigator.audioSession.type = "playback"(Safari/WKWebView 17+)
+- 匯出影片:deliverExportedVideo()——App 或 iOS 而且 navigator.canShare 支援檔案時跳 #shareOverlay,使用者點「儲存影片」才呼叫 navigator.share(一定要在點擊當下);其他平台照舊 <a download>
+- 設定面板最下面「關於與授權」(#aboutCredits):CC BY 要求在使用者看得到的地方標示來源與「有修改」;鋼琴、鼓、音樂廳殘響、OSMD/VexFlow、alphaTab、JSZip、演奏參考資料(ASAP、MAESTRO、GMD)。新增音色或程式庫要加在這裡。彈性速度模型是用 ASAP(CC BY-NC-SA 4.0)訓練的 200 棵決策樹,不含原始資料,依 CC 的立場訓練通常不算改作,風險低
+- privacy.html:隱私權政策(中英),網址 https://stevenmusic.github.io/ScrollScore/privacy.html。App 不收集任何資料(App 隱私選「不收集資料」);有新增連線或資料處理要同步改
+- 範例樂譜:開始畫面一排按鈕(小星星內建在 SAMPLE_MUSICXML;歡樂頌、搖滾鼓、放克鼓在 samples/,build_samples.py 產生,標題 {{TITLE}} 依語言替換)。網路上的 MusicXML 多半有排版版權、ASAP 不可商用,所以範例都是自己寫/產生的
 
 ## Git 流程
 - 所有改動完成後直接 commit 並 push 到 main，不用先問我

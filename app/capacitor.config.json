@@ -1,0 +1,10 @@
+{
+  "appId": "com.stevenmusic.scrollscore",
+  "appName": "ScrollScore",
+  "webDir": "www",
+  "ios": {
+    "contentInset": "never",
+    "backgroundColor": "#16130F",
+    "allowsLinkPreview": false
+  }
+}

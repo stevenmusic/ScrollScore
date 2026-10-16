@@ -7,10 +7,18 @@
      不然頁面變白了、上面那條還是黑的,看起來像沒對齊 -->
 <meta name="theme-color" content="#0C0A07">
 <title data-i18n="pageTitle">ScrollScore — 橫向捲動樂譜播放器</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@600;700&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/opensheetmusicdisplay@2.0.0/build/opensheetmusicdisplay.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script>
+/* 包成 App(Capacitor)時:程式庫、範例、音色都包在 App 裡,不從網路下載程式碼;字型用系統字型(iPhone 是蘋方),
+   不連 Google Fonts(隱私權政策寫的是 App 版不連外部字型服務)。網頁版照舊載入 Noto 字型 */
+window.IN_NATIVE_APP = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+if (!window.IN_NATIVE_APP) document.write('<link rel="preconnect" href="https://fonts.googleapis.com">'
+  + '<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@600;700&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">');
+</script>
+<!-- 程式庫先讀本機 vendor/(跟 npm 套件同一份檔案,App 離線可用),讀不到才退回 jsDelivr -->
+<script src="vendor/opensheetmusicdisplay.min.js"></script>
+<script>window.opensheetmusicdisplay || document.write('<script src="https://cdn.jsdelivr.net/npm/opensheetmusicdisplay@2.0.0/build/opensheetmusicdisplay.min.js"><\/script>');</script>
+<script src="vendor/jszip.min.js"></script>
+<script>window.JSZip || document.write('<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"><\/script>');</script>
 <style>
 :root{
   --bg:#0C0A07;
@@ -547,6 +555,9 @@ body.score-loaded #playline{display:block}
   cursor:pointer;margin-top:4px;padding:4px;
 }
 .link-btn:active{color:var(--gold-bright)}
+.sample-row{display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:2px 6px;margin-top:4px}
+.sample-row .sample-label{font-size:var(--fs-xs);color:var(--muted)}
+.sample-row .link-btn{margin-top:0;min-height:28px;min-width:28px;padding:4px 6px}
 /* Hub 頁是後來才生的,工具頁原本沒有回首頁的路徑——這裡補一個安靜的小連結,
    不用 .btn 那套實心/邊框樣式,免得跟品牌字並排時搶視覺重量 */
 .home-link{
@@ -559,6 +570,12 @@ body.score-loaded #playline{display:block}
 .contact-link{color:var(--muted);font-size:var(--fs-xs);padding:2px 4px}
 .contact-link a{color:var(--muted-bright);text-decoration:none;border-bottom:1px solid var(--line)}
 .contact-link a:hover,.contact-link a:focus-visible{color:var(--gold-bright)}
+.credits{gap:8px}
+.credits-intro{margin:0;color:var(--muted);font-size:var(--fs-xs);line-height:1.5}
+.credits-list{margin:0;padding-left:18px;color:var(--muted);font-size:var(--fs-xs);line-height:1.5;overflow-wrap:anywhere}
+.credits-list li{margin:2px 0}
+.credits-list b{color:var(--muted-bright);font-weight:600;margin-right:4px}
+.credits-list a{color:var(--muted-bright);text-decoration:none;border-bottom:1px solid var(--line)}
 /* fitHeaderRow() 放不下單排時的收窄手段:只藏文字,不動按鈕本身的 padding/height——
    按鈕邊框(圓角/高度)維持跟平常一樣,只是裡面的字不見了、寬度跟著內容自然變窄,
    不會因為收合層級不同而讓同一顆按鈕忽大忽小、形狀跑掉。 */
@@ -740,15 +757,23 @@ body.exporting-active .empty-card{
   background:var(--scrim);backdrop-filter:blur(3px);
 }
 #trackOverlay .fmt b{overflow-wrap:anywhere}
-#formatOverlay.show,#trackOverlay.show{display:flex}
-#formatOverlay .box,#trackOverlay .box{
+#shareOverlay{
+  position:fixed;inset:0;z-index:46;display:none;
+  align-items:center;justify-content:center;
+  background:var(--scrim);backdrop-filter:blur(3px);
+}
+#shareOverlay .box{display:flex;flex-direction:column;gap:10px}
+#shareOverlay .share-sub{margin:0;color:var(--muted);font-size:var(--fs-sm);line-height:1.6}
+#shareOverlay .btn{min-height:40px;justify-content:center}
+#formatOverlay.show,#trackOverlay.show,#shareOverlay.show{display:flex}
+#formatOverlay .box,#trackOverlay .box,#shareOverlay .box{
   text-align:center;padding:26px 28px;border:1px solid var(--gold);
   border-radius:var(--radius-md);background:var(--panel-2);width:min(300px, 86vw);
   max-height:86vh;max-height:86dvh;overflow-y:auto;box-sizing:border-box;
   box-shadow:var(--shadow-lg);
 }
 .fmt-step{display:flex;flex-direction:column;align-items:stretch}
-#formatOverlay .title,#trackOverlay .title{
+#formatOverlay .title,#trackOverlay .title,#shareOverlay .title{
   font-family:"Noto Serif TC",serif;font-size:var(--fs-xl);color:var(--gold);
   letter-spacing:.1em;margin-bottom:18px;
 }
@@ -878,9 +903,8 @@ body.exporting-active .empty-card{
     <div class="tempo-box combo-row">
       <select id="instrument" data-i18n-attr="aria-label:instrumentAria">
         <option value="piano" data-i18n="instPiano">鋼琴</option>
-        <!-- 兩把吉他的音色還在開發中(使用者要求先停用),程式與取樣都保留,拿掉 disabled 就能恢復 -->
-        <option value="guitar" data-i18n="instGuitar" disabled>木吉他(民謠)</option>
-        <option value="guitarnylon" data-i18n="instGuitarNylon" disabled>古典吉他(尼龍弦)</option>
+        <!-- 吉他不在選單裡(2026-10):找得到的吉他取樣授權不能上架(GPL / 不可商用)或品質、音域不夠,
+             上架版不能出現未完成的功能。程式保留,要恢復就加回 <option value="guitar"> / <option value="guitarnylon"> -->
         <option value="drum" data-i18n="instDrum">鼓組</option>
       </select>
       <span class="trans-group" role="group" data-i18n-attr="aria-label:transposeAria">
@@ -940,6 +964,24 @@ body.exporting-active .empty-card{
     </div>
   </details>
 
+  <!-- 關於與授權(2026-10,上架準備):CC BY 要求在使用者看得到的地方標示來源、授權與「有修改」;程式庫照各自授權標示 -->
+  <details class="settings-group settings-collapse" id="aboutCredits">
+    <summary class="settings-group-title"><span data-i18n="aboutSummary">關於與授權</span><span class="chev">›</span></summary>
+    <div class="collapse-body credits">
+      <p class="credits-intro" data-i18n="creditsIntro">ScrollScore 使用以下開放授權的音色、資料與程式庫。音色檔經過處理(格式轉換、音量對齊、立體聲與長度調整)。</p>
+      <ul class="credits-list">
+        <li><b data-i18n="creditPiano">鋼琴音色</b> Accurate-Salamander Grand Piano V6.2 (Chisato Yamauchi), based on Salamander Grand Piano V3 by Alexander Holm — <a href="https://creativecommons.org/licenses/by/3.0/" target="_blank" rel="noopener">CC BY 3.0</a></li>
+        <li><b data-i18n="creditDrums">鼓組音色</b> Naked Drums by Wilkinson Audio (SFZ edition by kinwie) — <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a></li>
+        <li><b data-i18n="creditHall">音樂廳殘響</b> <a href="https://zenodo.org/records/4116247" target="_blank" rel="noopener">Open Database of Spatial Room Impulse Responses at Detmold University of Music</a> (S. V. Amengual Garí, B. Şahin, D. Eddy, M. Kob) — <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a></li>
+        <li><b data-i18n="creditScore">樂譜顯示</b> <a href="https://github.com/opensheetmusicdisplay/opensheetmusicdisplay" target="_blank" rel="noopener">OpenSheetMusicDisplay</a> (BSD-3-Clause), VexFlow (MIT)</li>
+        <li><b data-i18n="creditGp">Guitar Pro 匯入</b> <a href="https://github.com/CoderLine/alphaTab" target="_blank" rel="noopener">alphaTab</a> (MPL-2.0)</li>
+        <li><b data-i18n="creditZip">壓縮樂譜(.mxl)</b> <a href="https://github.com/Stuk/jszip" target="_blank" rel="noopener">JSZip</a> (MIT)</li>
+        <li><b data-i18n="creditData">演奏參考資料</b> ASAP dataset (F. Foscarin et al.), MAESTRO and Groove MIDI Dataset (Google Magenta)</li>
+      </ul>
+      <p class="contact-link"><a href="privacy.html" target="_blank" rel="noopener" data-i18n="privacyLink">隱私權政策</a></p>
+    </div>
+  </details>
+
   <p class="contact-link"><span data-i18n="contactLabel">問題回報：</span><a href="mailto:steventsaimusic@gmail.com">steventsaimusic@gmail.com</a></p>
   <div class="export-row panel-actions">
     <button class="btn" id="recBtn" disabled title="請先載入樂譜" data-i18n="recBtnLabel">錄影模式</button>
@@ -972,13 +1014,28 @@ body.exporting-active .empty-card{
       </div>
       <p class="empty-title" data-i18n="emptyTitle">點這裡載入樂譜</p>
       <p class="empty-sub" data-i18n="emptySub">支援 MusicXML 與 Guitar Pro 檔案</p>
-      <button id="trySampleBtn" class="link-btn" data-i18n="trySampleBtn">或先試用範例樂譜看看 →</button>
+      <!-- 範例樂譜(上架準備:審核員/新使用者手邊沒有樂譜也能試到鋼琴與鼓的完整功能)。小星星內建,其他在 samples/(build_samples.py) -->
+      <div class="sample-row" role="group" data-i18n-attr="aria-label:sampleRowAria">
+        <span class="sample-label" data-i18n="sampleRowLabel">或先試用範例:</span>
+        <button id="trySampleBtn" class="link-btn" data-i18n="sampleTwinkle">小星星</button>
+        <button class="link-btn" data-sample="ode-to-joy" data-i18n="sampleOde">歡樂頌</button>
+        <button class="link-btn" data-sample="drums-rock" data-i18n="sampleRock">搖滾鼓</button>
+        <button class="link-btn" data-sample="drums-funk" data-i18n="sampleFunk">放克鼓</button>
+      </div>
     </div>
   </div>
   <div id="scroller"><div id="measureHighlight"></div><div id="score"></div></div>
   <div id="playline"></div>
   <div id="countdown">3</div>
   <button id="exitrec" data-i18n-attr="title:exitRecTitle">✕</button>
+  <div id="shareOverlay" role="dialog" aria-modal="true" aria-labelledby="shareTitle">
+    <div class="box">
+      <div class="title" id="shareTitle" data-i18n="shareTitle">影片完成</div>
+      <p class="share-sub" data-i18n="shareSub">點「儲存影片」存到相簿,或分享到其他 App。</p>
+      <button class="btn primary" id="shareSaveBtn" data-i18n="shareSaveBtn">儲存影片</button>
+      <button class="btn" id="shareCloseBtn" data-i18n="closeBtn">關閉</button>
+    </div>
+  </div>
   <div id="trackOverlay" role="dialog" aria-modal="true" aria-labelledby="trackTitle">
     <div class="box">
       <div class="title" id="trackTitle" data-i18n="gpTrackTitle">選擇要顯示的音軌</div>
@@ -1152,6 +1209,20 @@ const I18N = {
     pageTitle: "ScrollScore — 橫向捲動樂譜播放器",
     homeLinkLabel: "首頁",
     contactLabel: "問題回報：",
+    shareTitle: "影片完成",
+    shareSub: "點「儲存影片」存到相簿,或分享到其他 App。",
+    shareSaveBtn: "儲存影片",
+    shareFailed: "無法開啟分享,請再試一次",
+    aboutSummary: "關於與授權",
+    creditsIntro: "ScrollScore 使用以下開放授權的音色、資料與程式庫。音色檔經過處理(格式轉換、音量對齊、立體聲與長度調整)。",
+    creditPiano: "鋼琴音色",
+    creditDrums: "鼓組音色",
+    creditHall: "音樂廳殘響",
+    creditScore: "樂譜顯示",
+    creditGp: "Guitar Pro 匯入",
+    creditZip: "壓縮樂譜(.mxl)",
+    creditData: "演奏參考資料",
+    privacyLink: "隱私權政策",
     loadBtnLabel: "載入樂譜",
     playLabelPlay: "播放",
     playLabelPause: "暫停",
@@ -1213,6 +1284,16 @@ const I18N = {
     emptyTitle: "點這裡載入樂譜",
     emptySub: "支援 MusicXML 與 Guitar Pro 檔案",
     trySampleBtn: "或先試用範例樂譜看看 →",
+    sampleRowLabel: "或先試用範例:",
+    sampleRowAria: "範例樂譜",
+    sampleTwinkle: "小星星",
+    sampleOde: "歡樂頌",
+    sampleRock: "搖滾鼓",
+    sampleFunk: "放克鼓",
+    sampleOdeTitle: "歡樂頌(貝多芬)",
+    sampleRockTitle: "範例:搖滾鼓節奏",
+    sampleFunkTitle: "範例:放克鼓節奏",
+    sampleLoadFailed: "範例樂譜載入失敗,請檢查網路後再試",
     sampleScoreTitle: "ScrollScore 範例樂譜:小星星",
     sampleScoreFilename: "範例樂譜-小星星.musicxml",
     exitRecTitle: "離開錄影模式",
@@ -1356,6 +1437,20 @@ const I18N = {
     pageTitle: "ScrollScore — Scrolling Sheet Music Player",
     homeLinkLabel: "Home",
     contactLabel: "Feedback: ",
+    shareTitle: "Video ready",
+    shareSub: "Tap Save Video to save it to Photos or share it to another app.",
+    shareSaveBtn: "Save Video",
+    shareFailed: "Couldn't open the share sheet. Please try again.",
+    aboutSummary: "About & licenses",
+    creditsIntro: "ScrollScore uses the following openly licensed sounds, data and libraries. The sound files have been modified (format conversion, level matching, stereo and length adjustments).",
+    creditPiano: "Piano",
+    creditDrums: "Drum kit",
+    creditHall: "Concert hall reverb",
+    creditScore: "Score rendering",
+    creditGp: "Guitar Pro import",
+    creditZip: "Compressed scores (.mxl)",
+    creditData: "Performance reference data",
+    privacyLink: "Privacy policy",
     loadBtnLabel: "Load Score",
     playLabelPlay: "Play",
     playLabelPause: "Pause",
@@ -1417,6 +1512,16 @@ const I18N = {
     emptyTitle: "Tap here to load a score",
     emptySub: "MusicXML and Guitar Pro files",
     trySampleBtn: "Or try the sample score first →",
+    sampleRowLabel: "Or try a sample:",
+    sampleRowAria: "Sample scores",
+    sampleTwinkle: "Twinkle",
+    sampleOde: "Ode to Joy",
+    sampleRock: "Rock drums",
+    sampleFunk: "Funk drums",
+    sampleOdeTitle: "Ode to Joy (Beethoven)",
+    sampleRockTitle: "Sample: Rock Drum Groove",
+    sampleFunkTitle: "Sample: Funk Drum Groove",
+    sampleLoadFailed: "Couldn't load the sample score. Check your connection and try again.",
     sampleScoreTitle: "ScrollScore Sample: Twinkle Twinkle Little Star",
     sampleScoreFilename: "sample-score-twinkle.musicxml",
     exitRecTitle: "Exit Record Mode",
@@ -2029,6 +2134,18 @@ $("trySampleBtn").addEventListener("click", (e) => {
   loadScoreFile(file);
 });
 
+const SAMPLE_FILES = { "ode-to-joy": "sampleOdeTitle", "drums-rock": "sampleRockTitle", "drums-funk": "sampleFunkTitle" };
+document.querySelectorAll("[data-sample]").forEach(btn => btn.addEventListener("click", async (e) => {
+  e.stopPropagation();
+  const id = btn.dataset.sample, title = T(SAMPLE_FILES[id]);
+  try {
+    const res = await fetch("samples/" + id + ".musicxml");
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const xml = (await res.text()).replace("{{TITLE}}", title.replace(/&/g, "&amp;").replace(/</g, "&lt;"));
+    loadScoreFile(new File([xml], title + ".musicxml", { type: "application/vnd.recordare.musicxml+xml" }));
+  } catch (err) { setStatus(T("sampleLoadFailed")); }
+}));
+
 /* 整張空狀態卡片都可以點擊觸發上傳,不用精準點到小按鈕(手機上更好按) */
 $("emptyCard").addEventListener("click", () => $("fileInput").click());
 $("emptyCard").addEventListener("keydown", (e) => {
@@ -2202,18 +2319,22 @@ $("stage").addEventListener("drop", async e => {
    第二聲部朝下、多聲部時第一聲部朝上、單聲部看符尾組最高最低兩音的中點(在中線以下朝上);符尾分組照小節的 beaming 規則
    (檔案有存就用,沒有用 Guitar Pro 預設)與每拍的 beamingMode;重音、斷音、choke 記號放在符頭那側(Guitar Pro 的位置)。
    文字:標題、作者、段落標記、拍上的文字、速度文字、歌詞、力度、反覆/第幾次結尾/D.S./Coda 照原檔 */
-const ALPHATAB_URL = "https://cdn.jsdelivr.net/npm/@coderline/alphatab@1.8.4/dist/alphaTab.min.js";
+const ALPHATAB_URLS = ["vendor/alphaTab.min.js", "https://cdn.jsdelivr.net/npm/@coderline/alphatab@1.8.4/dist/alphaTab.min.js"];   // 先本機,再 CDN
 // GP7 預設鼓件表(alphaTab PercussionMapper.instrumentArticulations):id → "譜上位置(0 = 第五線 F5,往下每格 +1),輸出 GM 鼓號,符頭,技法記號,位置"
 const GP_DRUM_ARTS = {38:"3,38,N,",37:"3,37,X,",91:"3,38,D,",42:"-1,42,X,",92:"-1,46,CS,",46:"-1,46,CX,",44:"9,44,X,",35:"8,35,N,",36:"7,36,N,",50:"1,50,N,",48:"2,48,N,",47:"4,47,N,",45:"5,45,N,",43:"6,43,N,",93:"0,51,X,ed,a",51:"0,51,X,",53:"0,53,D,",94:"0,51,X,st,o",55:"-2,55,X,",95:"-2,55,X,st,o",52:"-3,52,HXH,",96:"-3,52,HXH,",49:"-2,49,HX,",97:"-2,49,HX,st,o",57:"-1,57,HX,",98:"-1,57,HX,st,o",99:"1,56,T,",100:"1,56,X,",56:"0,56,T,",101:"0,56,X,",102:"-1,56,T,",103:"-1,56,X,",77:"-9,77,T,",76:"-10,76,T,",60:"-4,60,N,",104:"-5,60,N,pa,i",105:"-6,60,X,",61:"-7,61,N,",106:"-8,61,N,pa,i",107:"-16,61,X,",66:"10,66,N,",65:"9,65,N,",68:"12,68,N,",67:"11,67,N,",64:"17,64,N,",108:"16,64,X,",109:"15,64,N,pa,i",63:"14,63,N,",110:"13,63,X,",62:"19,62,N,pa,i",72:"-11,72,N,",71:"-17,71,N,",73:"38,73,N,",74:"37,74,N,",86:"36,86,N,",87:"35,87,X,pa,i",54:"3,54,T,",111:"2,54,T,ub,a",112:"1,54,T,db,a",113:"-7,54,X,",79:"30,79,N,",78:"29,78,X,",58:"28,58,N,",81:"27,81,N,",80:"26,80,X,pa,i",114:"25,43,N,",115:"18,49,N,",116:"24,49,X,",69:"23,69,N,",117:"22,69,N,ub,o",85:"21,85,N,",75:"20,75,N,",70:"-12,70,N,",118:"-13,70,N,ub,o",119:"-14,70,N,",120:"-15,70,N,ub,o",82:"-23,82,N,",122:"-24,82,N,ub,o",84:"-18,53,N,",123:"-19,53,N,ub,o",83:"-20,53,N,",83:"-20,53,N,",124:"-21,62,0,go,b",125:"-22,62,0,go,a",39:"3,39,N,",40:"3,40,N,",31:"3,40,S,",41:"5,41,N,",59:"2,59,X,ed,a",126:"2,59,X,",127:"2,59,D,",29:"2,59,X,st,o",30:"-3,49,X,",33:"3,37,X,",34:"3,38,N,"};
 let alphaTabPromise = null;
 function loadAlphaTab(){
   if (window.alphaTab) return Promise.resolve(window.alphaTab);
   if (!alphaTabPromise) alphaTabPromise = new Promise((resolve, reject) => {
-    const s = document.createElement("script");
-    s.src = ALPHATAB_URL;
-    s.onload = () => window.alphaTab ? resolve(window.alphaTab) : reject(new Error("alphaTab"));
-    s.onerror = () => { alphaTabPromise = null; reject(new Error(T("gpLoadLibFailed"))); };
-    document.head.appendChild(s);
+    const tryLoad = i => {
+      if (i >= ALPHATAB_URLS.length) { alphaTabPromise = null; reject(new Error(T("gpLoadLibFailed"))); return; }
+      const s = document.createElement("script");
+      s.src = ALPHATAB_URLS[i];
+      s.onload = () => window.alphaTab ? resolve(window.alphaTab) : tryLoad(i + 1);
+      s.onerror = () => { s.remove(); tryLoad(i + 1); };
+      document.head.appendChild(s);
+    };
+    tryLoad(0);
   });
   return alphaTabPromise;
 }
@@ -5604,7 +5725,7 @@ function restorePrefs(){
     if (el && data[f.id] !== undefined && data[f.id] !== null) el[f.prop] = data[f.id];
   }
   // 舊版存過已下架的樂器(小提琴、長笛等)時,select 會變成空值,退回鋼琴
-  if (!$("instrument").value || $("instrument").selectedOptions[0]?.disabled) $("instrument").value = "piano";   // 開發中(停用)的樂器也退回鋼琴
+  if (!$("instrument").value || $("instrument").selectedOptions[0]?.disabled) $("instrument").value = "piano";   // 舊設定存了吉他(選單已拿掉)時退回鋼琴
   // 還原後要補做的畫面同步(這些平常是由各自的 change/input 事件負責的)
   $("scoreBgOpacityVal").textContent = $("scoreBgOpacity").value;
   $("scoreBg").style.opacity = $("scoreBgOpacity").value / 100;
@@ -5689,7 +5810,7 @@ $("stage").addEventListener("click", (e) => {
   if (didSwipeMeasure) { didSwipeMeasure = false; return; } // 剛才是滑動導覽,不當作點擊暫停
   if (exporting) return;
   if (e.timeStamp - trackPickerClosedAt < 500) return;   // 用事件發生的時間:載入樂譜時主執行緒忙,第二下會晚好幾秒才送到
-  if (e.target.closest("#formatOverlay, #trackOverlay, #empty, #exitrec, button, input, select, a, textarea")) return;
+  if (e.target.closest("#formatOverlay, #trackOverlay, #shareOverlay, #empty, #exitrec, button, input, select, a, textarea")) return;
   $("playBtn").click();
 });
 
@@ -5701,7 +5822,7 @@ const SWIPE_MEASURE_PX = 70; // 每多滑這麼多px,多跳一個小節
 let swipeStartX = null, swipeStartY = null, swipeStatusTimer = null;
 $("stage").addEventListener("pointerdown", (e) => {
   if (exporting || !measureRanges.length) return;
-  if (e.target.closest("#formatOverlay, #trackOverlay, #empty, #exitrec, button, input, select, a, textarea")) return;
+  if (e.target.closest("#formatOverlay, #trackOverlay, #shareOverlay, #empty, #exitrec, button, input, select, a, textarea")) return;
   swipeStartX = e.clientX; swipeStartY = e.clientY;
 });
 $("stage").addEventListener("pointerup", (e) => {
@@ -5729,6 +5850,9 @@ function ensureAudio(){
     // latencyHint "playback":音訊緩衝加大(播放不需要即時反應,App 也沒有按鍵即時發聲),負荷高時比較不會爆音;
     // 多出來的輸出延遲在 currentSec() 扣掉,畫面跟聽到的聲音對齊
     const AC = window.AudioContext || window.webkitAudioContext;
+    // iPhone 的靜音開關:網頁音訊預設跟鈴聲一樣會被靜音(使用者按播放卻沒聲音)。Safari / WKWebView 17 起
+    // 有 Audio Session API,設成 "playback" 就跟音樂 App 一樣不受靜音開關影響;舊版本沒有這個 API,不影響
+    try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch (e) {}
     try { audioCtx = new AC({ latencyHint: "playback" }); } catch (e) { audioCtx = new AC(); }
     initAudioGraph();
   }
@@ -8954,6 +9078,7 @@ let pendingExportCfg = null;
 const EXPORT_FONT_FAMILY = "ScrollScore Export CJK";
 const loadedExportFontChars = new Set(); // 已經成功註冊過的字,同一批字不用重複抓
 async function registerExportFontFaces(uniqueChars){
+  if (window.IN_NATIVE_APP) return;   // App 版不連 Google Fonts,匯出標題用系統字型
   const [css600, css700] = await Promise.all([600, 700].map(w =>
     fetch("https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@" + w + "&text=" + encodeURIComponent(uniqueChars))
       .then(r => r.text())
@@ -9700,12 +9825,9 @@ async function exportVideo(cfg){
       const blob = new Blob(chunks, { type: mime || "video/webm" });
       const ext = mimeExt(mime);
       const rangeTag = cfg.startSec != null ? "-" + fmt(rangeStart).replace(":","m") + "s-" + fmt(rangeEnd).replace(":","m") + "s" : "";
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = "scrollscore-" + W + "x" + H + rangeTag + "." + ext;
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(()=>URL.revokeObjectURL(a.href), 30000);
+      const fileName = "scrollscore-" + W + "x" + H + rangeTag + "." + ext;
       setStatus(T("exportComplete", { mb: (blob.size/1048576).toFixed(1), fmt: mimeLabel(mime) }));
+      deliverExportedVideo(blob, fileName, mime);
     } else {
       setStatus(T("exportCancelledStatus"));
     }
@@ -9720,6 +9842,30 @@ async function exportVideo(cfg){
   $("exportOverlay").classList.remove("show");
   exporting = false;
   document.body.classList.remove("exporting-active");
+}
+
+/* 匯出完成的影片交給使用者:App(WKWebView)裡 <a download> 沒有作用,iPhone 網頁版下載後也不好找,
+   所以 App 與 iOS 用系統分享表單(「儲存影片」直接存到相簿,也能傳 LINE/IG);navigator.share 一定要在使用者點擊時呼叫,
+   影片做好時已經不是點擊的當下,所以跳一個小視窗讓使用者點。其他平台照舊直接下載 */
+function deliverExportedVideo(blob, fileName, mime){
+  let file = null;
+  try { file = new File([blob], fileName, { type: (mime || "video/mp4").split(";")[0] }); } catch (e) {}
+  const ios = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const canShareFile = !!(file && navigator.canShare && (() => { try { return navigator.canShare({ files: [file] }); } catch (e) { return false; } })());
+  if ((window.IN_NATIVE_APP || ios) && canShareFile) {
+    $("shareOverlay").classList.add("show");
+    $("shareSaveBtn").onclick = async () => {
+      try { await navigator.share({ files: [file], title: fileName }); $("shareOverlay").classList.remove("show"); }
+      catch (e) { if (e && e.name !== "AbortError") setStatus(T("shareFailed")); }
+    };
+    $("shareCloseBtn").onclick = () => $("shareOverlay").classList.remove("show");
+    return;
+  }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = fileName;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 30000);
 }
 
 window.addEventListener("resize", () => { if (!playing) resetScroll(); });
