@@ -19,6 +19,7 @@ pip install numpy scipy soundfile pyloudnorm
 | `gp_ui_test.mjs` | GP 選音軌對話框:19 種尺寸 × 中英文的版面檢查 + 隨機種子的真人操作模擬(選軌、取消、Esc、連點、旋轉、切語言、播放中匯入、重新整理),`--seed N` |
 | `piano_tone_eval.py` | 鋼琴音色校正:用 App 的取樣與播放規則(含 PIANO_TONE、PIANO_EQ)彈 MAESTRO 真人演奏的 MIDI,跟同一份演奏的真實 Yamaha 錄音逐音比較各力度的亮度、起音高頻、1/3 八度頻譜。`python3 piano_tone_eval.py <放 曲名.flac + 曲名.mid 的目錄> 設定.json [秒數]`(MAESTRO 只拿來測試,不放 repo;另需 `pip install mido`) |
 | `ir_compare.py` | 殘響 IR 比較(`python3 ir_compare.py a.flac b.flac …`):各倍頻程 EDT/T30、C80、左右相關性、單聲道相容、後段頻譜、殘響密度(Abel & Huang,1 = 完全擴散)、尾端剩多少、聽得到的音量內的離散回聲。換 IR 後的音量用 `render.mjs --taps --tapsrc verb` 直接量殘響回送(ConvolverNode 會自動正規化,不能用檔案音量算) |
+| `gmd_stats.py` | 真人鼓手統計(Groove MIDI Dataset):各鼓件力度、hi-hat/ride 各拍位置的相對力度、鬼音、各肢體時間差、扣掉節奏型後的力度起伏與相鄰相關。對照 App 的 humanizeDrumHit(用法與 2026-10 的數字寫在檔案開頭) |
 | `shot.mjs` | 樂譜畫面截圖,`--eval '<js>'` 印出頁面裡的變數(events、perfMeasures、tempoMap…) |
 
 Guitar Pro 測試檔:alphaTab repo(github.com/CoderLine/alphaTab)packages/alphatab/test-data 裡的 .gp/.gpx/.gp5/.gp4(例如 conversion/full-song.gp、guitarpro4/fade-to-black.gp4、guitarpro7/drum-tabs.gp),只拿來測試,不放進 repo。

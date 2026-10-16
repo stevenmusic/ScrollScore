@@ -4488,8 +4488,9 @@ function computeDrumSongDynamics(){
    一般「人性化」只是每一下加亂數;真人的力度是被身體與技巧決定的,這裡模擬幾個鼓手教學與演奏研究裡都會提到的現象:
    1) 肢體分配:hi-hat/ride/銅鈸 → 右手、跟 hi-hat 同時的小鼓/中鼓 → 左手、大鼓 → 右腳、踩 hi-hat → 左腳;
       過門(沒有 hi-hat 的段落)左右手輪流(single stroke),慣用手(右)稍重
-   2) 連續起伏:每個肢體的力度是「緩慢飄移」的(AR(1),前一下的狀態保留 70%),而不是每一下獨立亂跳——
-      真人會一連幾下稍重、再一連幾下稍輕
+   2) 每一下的起伏:Groove MIDI Dataset(Magenta,10 位職業鼓手、搖滾/流行 219 段)扣掉節奏型之後,
+      hi-hat 力度標準差約 15(MIDI 力度)、相鄰兩下幾乎無關(lag-1 0.08~0.13)。以前假設「緩慢飄移」(保留 70%)
+      而且幅度只有 4.8,量出來太機械;電子鼓感應器本身也有雜訊,所以取一半左右(約 8)、只保留 15%
    3) 速度 → 抬棒高度:同一隻手兩下間隔越短,棒子抬不高,越快的音越輕(16 分音符的 hi-hat、快速過門)
    4) 重音技巧:重音前一下要把棒子抬高預備(upstroke,較輕),重音那一下打下去之後棒子停在低處(downstroke),
       下一下也會比較輕
@@ -4498,6 +4499,7 @@ function computeDrumSongDynamics(){
    7) 樂句:以 4 小節為一句,最後一小節稍微往前推
    所有亂數都以時間點為種子,同一首曲子每次播放/匯出都一樣 */
 const DRUM_CYMBAL_KEYS = new Set([49, 52, 55, 57]);
+const DRUM_VEL_JITTER = 0.15, DRUM_VEL_AR = 0.15;   // 三角分布 ±0.15(標準差約 0.06 = 力度 8)
 function computeDrumPerformance(){
   if (!events.length) return;
   const calib = useCalib();
@@ -4526,8 +4528,8 @@ function computeDrumPerformance(){
   for (const seq of Object.values(byLimb)) {
     let x = 0, runIdx = 0;
     seq.forEach((h, i) => {
-      const r = (seededRand01(h.ev.tWhole * 91.3 + h.n.key * 3.7 + 11) + seededRand01(h.ev.tWhole * 57.1 + h.n.key * 5.3 + 7) - 1) * 0.06;
-      x = 0.7 * x + r;                                    // 2) 連續起伏
+      const r = (seededRand01(h.ev.tWhole * 91.3 + h.n.key * 3.7 + 11) + seededRand01(h.ev.tWhole * 57.1 + h.n.key * 5.3 + 7) - 1) * DRUM_VEL_JITTER;
+      x = DRUM_VEL_AR * x + r;                            // 2) 每一下的起伏(見 DRUM_VEL_AR)
       let p = x;
       const prev = seq[i - 1], next = seq[i + 1];
       const gapPrev = prev ? h.t - prev.t : Infinity, gapNext = next ? next.t - h.t : Infinity;
@@ -4589,13 +4591,14 @@ function isGhostDrumNote(n, tWhole){
    - 律動重音:hi-hat/ride 這種打拍子的聲部,正拍重、反拍(八分音符的 and)輕、十六分音符的 e/a 更輕;
      小鼓在 backbeat(4/4 的第 2、4 拍)打得最紮實;每小節第一拍再稍微加重
    - 記譜力度:鬼音(括號符頭)極輕、重音記號明顯加重
-   - 每一下都有少量隨機起伏(力度 ±0.08;時間是整拍共用 ±4ms + 各肢體 ±1.5ms,三角分佈,越接近 0 越常見)
-   - 小鼓 backbeat 稍微往後拖 3ms(laid-back,流行/搖滾鼓手常見的手感)
-   力度用 0~1 的連續值表示,再換算成 v3/v4/v5 力度層 + 層內音量微調,
-   所以不會只有三種固定音量。亂數用 seededRand01 以「時間點+鼓件」為種子,
+   - 每一下都有隨機起伏(力度見 computeDrumPerformance;時間是整拍共用 ±4ms + 各肢體 ±8ms,三角分佈,越接近 0 越常見)
+   - hi-hat/ride 比同一拍的大鼓、小鼓晚 3ms(Groove MIDI Dataset 的平均)
+   力度用 0~1 的連續值表示,換成 MIDI 力度後照原廠力度分區挑層、音量照原廠力度曲線(pickDrumLayers),
+   所以不會只有幾種固定音量。亂數用 seededRand01 以「時間點+鼓件」為種子,
    同一首曲子每次播放/匯出的結果都一樣,不會這次聽到跟匯出的不同 */
 const DRUM_TIMEKEEPERS = new Set([42, 44, 46, 51, 53, 59]); // hi-hat 與 ride
-const DRUM_LAYER_STRENGTH = { 3: 0.3, 4: 0.62, 5: 0.9 };    // 各力度層代表的力度值
+const DRUM_HAT_BEAT_4_4 = [-0.016, 0.041, -0.061, 0.037];   // 4/4 各拍 hi-hat 相對四分音符平均(Groove MIDI Dataset:+12.7/+19.9/+7.0/+19.4)
+const DRUM_LIMB_JITTER = 0.008;                            // 各肢體自己的時間偏移:三角分布 ±8ms
 function drumHitRand(ev, key, salt){ return seededRand01(ev.tWhole * 131.7 + key * 7.31 + salt * 3.17); }
 function humanizeDrumHit(ev, n){
   const key = n.key;
@@ -4608,10 +4611,16 @@ function humanizeDrumHit(ev, n){
     const inBeat = beatF - beatIdx;
     const onBeat = inBeat < 0.02 || inBeat > 0.98;
     const offEighth = Math.abs(inBeat - 0.5) < 0.02;
-    if (DRUM_TIMEKEEPERS.has(key)) s += onBeat ? 0.1 : offEighth ? -0.06 : -0.1;
+    if (DRUM_TIMEKEEPERS.has(key)) {
+      // Groove MIDI Dataset 的 hi-hat(扣掉每段平均):正拍 +14、八分反拍 −2、十六分 e/a −13(力度);
+      // 4/4 裡第 2、4 拍最重(跟著 backbeat)、第 1 拍其次、第 3 拍最輕。ride 的重音幅度約 hi-hat 的 6 成
+      const k = (key === 51 || key === 53 || key === 59) ? 0.6 : 1;
+      const four = ev.barLen > 0 && Math.abs(ev.barLen / ev.beatLen - 4) < 0.01;
+      s += k * (onBeat ? 0.1 + (four ? DRUM_HAT_BEAT_4_4[beatIdx % 4] : beatIdx === 0 ? 0.03 : 0) : offEighth ? -0.03 : -0.1);
+    }
     else if ((key === 38 || key === 40) && !n.ghost) s += onBeat ? (beatIdx % 2 === 1 ? 0.05 : 0.02) : -0.04;
-    else if (key === 35 || key === 36) s += onBeat ? 0.03 : -0.03;
-    if (onBeat && beatIdx === 0 && !n.ghost) s += 0.03;
+    else if (key === 35 || key === 36) s += onBeat ? 0.05 : -0.05;     // 真人正拍 66、其他 52(力度)
+    if (onBeat && beatIdx === 0 && !n.ghost && !DRUM_TIMEKEEPERS.has(key)) s += 0.03;
   }
   s += (ev.macro || 0) * (n.ghost ? 0.5 : 1); // 整首歌的力度起伏(段落、記號、過門漸強),鬼音只跟一半
   // 演奏細節(肢體、速度、重音前後、連續起伏…)由 computeDrumPerformance() 預先算好放在 n.perf;
@@ -4619,15 +4628,14 @@ function humanizeDrumHit(ev, n){
   s += (n.perf != null ? n.perf : (drumHitRand(ev, key, 1) + drumHitRand(ev, key, 2) - 1) * 0.08)
      + (drumHitRand(ev, key, 5) + drumHitRand(ev, key, 6) - 1) * 0.02;
   s = Math.max(0.08, Math.min(1, s));
-  const vel = s < 0.42 ? 3 : s < 0.78 ? 4 : 5;
-  // 層內微調:每 0.1 力度約 1.6dB,讓同一層裡的每一下也有大小聲
-  const gainMul = Math.pow(10, (s - DRUM_LAYER_STRENGTH[vel]) * 16 / 20);
-  // 時間:同一拍的所有鼓件共用一個整體偏移(整個人這一拍稍早或稍晚,±4ms),再加上各肢體各自的小偏移(±1.5ms)。
-  // 各鼓件完全獨立亂數的話,同時打的大鼓和 hi-hat 會分開到 9ms 以上,聽起來像拖泥帶水的 flam
+  // 時間:同一拍的所有鼓件共用一個整體偏移(整個人這一拍稍早或稍晚,±4ms),再加上各肢體各自的偏移(±8ms)。
+  // Groove MIDI Dataset 搖滾/流行:同一拍大鼓與 hi-hat 相差中位數 9.5ms、小鼓與 hi-hat 6.3ms;以前 ±1.5ms 只差 0.5ms,
+  // 四肢像機器一樣完全同步。電子鼓觸發也有誤差,取約三分之一(中位數約 3ms),不會到聽得出 flam 的 10ms 以上
   let dt = (seededRand01(ev.tWhole * 131.7 + 17.3) + seededRand01(ev.tWhole * 131.7 + 29.9) - 1) * 0.004
-         + (drumHitRand(ev, key, 3) + drumHitRand(ev, key, 4) - 1) * 0.0015;
-  if ((key === 38 || key === 40) && !n.ghost) dt += 0.003;
-  return { vel, gainMul, dt, s };
+         + (drumHitRand(ev, key, 3) + drumHitRand(ev, key, 4) - 1) * DRUM_LIMB_JITTER;
+  // Groove MIDI Dataset(搖滾/流行):大鼓、小鼓都比同一拍的 hi-hat 早約 3ms(hi-hat 稍晚),不是小鼓拖拍
+  if (DRUM_TIMEKEEPERS.has(key) && key !== 44) dt += 0.003;
+  return { dt, s };
 }
 function normalizeDrumKey(k){
   /* MusicXML 的 midi-unpitched 是 1–128(1 起算),GM 鼓號是 0–127,一律要減 1。
@@ -6094,7 +6102,7 @@ let playStartSec = 0;
 function startAudioFrom(fromSec){
   startCtxTime = audioCtx.currentTime - fromSec;
   playStartSec = fromSec;
-  scheduled = []; ringingCymbals = {};
+  scheduled = []; ringingCymbals = {}; ringingOpenHat = null;
   const calib = useCalib();
   computeDrumPerformance(); // 依目前的速度重算(速度會影響「越快越輕」)
   pianoResetVoices(); gtrRR = {}; pianoPedalQueue = [];
@@ -6428,7 +6436,7 @@ function pianoPlan(need, auxBytes){
 /* 取樣檔快取(Cache Storage):第一次下載後存在裝置上,之後開 App / 換曲子直接從本機讀,不用再下載
    (鋼琴 16 層全部約 156MB,手機網路下載是載入最慢的部分)。取樣檔重新產生時要把 SAMPLE_CACHE 的版本號加一,
    不然使用者會繼續用到舊檔。不支援 Cache Storage(非 https、無痕模式、儲存空間不足)時照原本直接下載 */
-const SAMPLE_CACHE = "scrollscore-samples-v2";   // v2(2026-10):piano/hall.flac 換成真實音樂廳
+const SAMPLE_CACHE = "scrollscore-samples-v3";   // v2(2026-10):piano/hall.flac 換成真實音樂廳;v3:銅鈸補回完整尾巴
 let sampleCachePromise = null;
 function sampleCache(){
   if (!sampleCachePromise) sampleCachePromise = (typeof caches !== "undefined" && window.isSecureContext)
@@ -8093,11 +8101,22 @@ const kitBuffers = {};   // 鼓件 → [力度層(輕→重)][round-robin] = {bu
 const kitRoundRobin = {};
 let kitLoading = null;
 
-/* fixedNorm 沒給時(只有 Tone.js 備援鼓組會走到),量峰值正規化;有給就照給的倍率,保留原本的力度差異 */
-async function fetchDrumBuffer(url, fixedNorm){
+/* fixedNorm 沒給時(只有 Tone.js 備援鼓組會走到),量峰值正規化;有給就照給的倍率,保留原本的力度差異。
+   maxSec:記憶體有限的裝置把長的銅鈸截短(最後 0.3 秒淡出) */
+async function fetchDrumBuffer(url, fixedNorm, maxSec){
   const res = await fetchSample(url);
   if (!res.ok) throw new Error("HTTP " + res.status);
-  const buffer = await audioCtx.decodeAudioData(await res.arrayBuffer());
+  let buffer = await audioCtx.decodeAudioData(await res.arrayBuffer());
+  if (maxSec && buffer.duration > maxSec) {
+    const len = Math.floor(maxSec * buffer.sampleRate), fade = Math.floor(0.3 * buffer.sampleRate);
+    const cut = audioCtx.createBuffer(buffer.numberOfChannels, len, buffer.sampleRate);
+    for (let c = 0; c < buffer.numberOfChannels; c++) {
+      const d = cut.getChannelData(c);
+      d.set(buffer.getChannelData(c).subarray(0, len));
+      for (let i = 0; i < fade; i++) d[len - fade + i] *= Math.pow(Math.cos(i / fade * Math.PI / 2), 2);
+    }
+    buffer = cut;
+  }
   if (fixedNorm) return { buffer, norm: fixedNorm };
   let peak = 0;
   for (let c = 0; c < buffer.numberOfChannels; c++) {
@@ -8118,7 +8137,11 @@ async function loadDrumManifest(){
 /* 記憶體預算:解碼後的取樣是 32-bit 浮點,整套 560 下全載入約數百 MB。桌機直接全載;
    iPhone/iPad(Safari 分頁記憶體上限低,超過會被系統直接關掉)與低記憶體裝置設上限。
    不管預算多少,每個鼓件的「每一個力度層」都至少載入一個錄音,所以力度永遠是完整的,
-   預算只決定每層能有幾個 round-robin */
+   預算只決定每層能有幾個 round-robin。有預算上限時銅鈸截到 DRUM_LOWMEM_CYMBAL_SEC 秒(完整的 crash 4~5.5 秒、
+   ride 6 秒,全載會讓 iPhone 每層的 round-robin 從 4 個掉到 3 個;截 3.5 秒 crash 還是只有 3 個,3 秒時跟以前一樣 4 個,
+   而且尾巴是自然衰減到 2.7 秒才淡出,以前的檔案 2.2 秒就開始淡出) */
+const DRUM_LOWMEM_CYMBAL_SEC = 3.0;
+const DRUM_LONG_PIECES = new Set(["crashL", "crashR", "ride", "rideBell", "china", "splash"]);
 function drumMemoryBudgetBytes(){
   const ios = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
   const dm = navigator.deviceMemory;
@@ -8155,11 +8178,12 @@ function loadDrumKit(){
         const jobs = [];
         for (const [name, p] of pieces) p.layers.forEach((l, li) => {
           if (rr > l.rr) return;
-          const bytes = l.frames / l.rr * 8;
+          const maxSec = budget < Infinity && DRUM_LONG_PIECES.has(name) ? DRUM_LOWMEM_CYMBAL_SEC : 0;
+          const bytes = Math.min(l.frames / l.rr, maxSec ? maxSec * 48000 : Infinity) * 8;
           if (rr > 1 && used + bytes > budget) return;
           used += bytes;
           const file = p.prefix + "-L" + (li + 1) + "." + String(rr).padStart(2, "0") + ".flac";
-          jobs.push(async () => { try { kitBuffers[name][li].push(await fetchDrumBuffer(base + file, OWN_KIT_GAIN)); } catch (e) {} });
+          jobs.push(async () => { try { kitBuffers[name][li].push(await fetchDrumBuffer(base + file, OWN_KIT_GAIN, maxSec)); } catch (e) {} });
         });
         await runLimited(jobs, SAMPLE_FETCH_CONCURRENCY);
         if (rr === 1) setStatus(T("statusDrumKitReady"));   // 第一輪載完就能播,其餘在背景補
@@ -8326,9 +8350,9 @@ function getDrumBus(){
 function drumVerbWetTarget(){ return DRUM_BUS.verb * reverbAmount() / 0.3; }
 function drumRoomWetTarget(){ return DRUM_BUS.roomWet * reverbAmount() / 0.3; }
 
-/* sustainSec:銅鈸/開放 hi-hat 的真實錄音自然延音長達 5~8 秒,快速段落直接整段播會糊成一片,
-   要主動包一個振幅包絡收尾;鼓皮類不傳,讓它自然結束。
-   pan/send:鼓件在鼓組上的左右位置、送進共用殘響的量。回傳這一下的播放資訊(給 hi-hat 止音用) */
+/* sustainSec:要主動收尾時的長度(目前沒有鼓件用:銅鈸照原廠的做法自然響完,同一片鈸太多聲音時由 DRUM_POLY 收掉最舊的)。
+   pan/send:鼓件在鼓組上的左右位置、送進共用殘響的量。
+   回傳這一下的播放資訊 {g, when, level, sustainSec, end(聲音結束的時間), srcs}(給止音、同時發聲數用) */
 function playSample(name, when, gain, rate, sustainSec, strength, pan, send){
   const pick = pickDrumLayers(name, strength != null ? strength : 0.72);
   if (!pick) return null;
@@ -8340,6 +8364,8 @@ function playSample(name, when, gain, rate, sustainSec, strength, pan, send){
     g.gain.setValueAtTime(level, when + sustainSec * 0.5);
     g.gain.exponentialRampToValueAtTime(0.0001, when + sustainSec);
   }
+  const srcs = [];
+  let dur = 0;
   for (const part of pick.parts) {
     // round-robin 隨機挑,但不連續挑到同一個(依序輪播在規律節奏裡反而會聽出固定循環)
     const n = part.list.length;
@@ -8354,7 +8380,8 @@ function playSample(name, when, gain, rate, sustainSec, strength, pan, send){
     src.connect(w); w.connect(g);
     src.start(when);
     if (sustainSec) src.stop(when + sustainSec + 0.1);
-    scheduled.push(src);
+    scheduled.push(src); srcs.push(src);
+    dur = Math.max(dur, buffer.duration / (rate || 1));
   }
   let out = g;
   if (pan && audioCtx.createStereoPanner) {
@@ -8369,7 +8396,7 @@ function playSample(name, when, gain, rate, sustainSec, strength, pan, send){
     sg.gain.value = send;
     out.connect(sg); sg.connect(drumVerbIn);
   }
-  return { g, when, level, sustainSec };
+  return { g, when, level, sustainSec, end: when + (sustainSec ? sustainSec + 0.1 : dur), srcs };
 }
 
 /* Hi-Hat 止音:真實 hi-hat 是同一組鈸,腳一踩下去(閉合或踩 hi-hat),還在響的開放 hi-hat 會立刻被夾住停止。
@@ -8377,22 +8404,17 @@ function playSample(name, when, gain, rate, sustainSec, strength, pan, send){
 let ringingOpenHat = null;
 function chokeOpenHat(when){
   const v = ringingOpenHat;
-  if (!v || when <= v.when || when >= v.when + v.sustainSec) return;
-  // 算出止音這一刻原本包絡的音量,從那裡快速收掉,避免音量跳動產生爆音
-  const holdEnd = v.when + v.sustainSec * 0.5;
-  const cur = when <= holdEnd ? v.level
-    : v.level * Math.pow(0.0001 / v.level, (when - holdEnd) / (v.sustainSec * 0.5));
-  v.g.gain.cancelScheduledValues(when);
-  v.g.gain.setValueAtTime(cur, when);
-  v.g.gain.exponentialRampToValueAtTime(0.0001, when + 0.04);
+  if (!v || when <= v.when) return;
+  chokeCymbal("hhOpen", when);   // 同一組 hi-hat:前面幾下還在響的開放 hi-hat 也一起停
   ringingOpenHat = null;
 }
 
 /* 鈸的止音(choke):真實鼓手打完用手抓住鈸,聲音約 50ms 內收掉(還在響的同一片鈸——包括前面打的——也一起停)。
    ringingCymbals[鼓件] = 還在響的聲音;止音時從當下包絡的音量快速收掉,避免爆音。殘響/鼓房的尾巴照常自然消失 */
 let ringingCymbals = {};
+/* 從 when 開始把這一下在 tau 秒內收掉(從當下包絡的音量收,避免爆音),收完就停止播放(省 CPU);同一下只收一次 */
 function fadeDrumVoice(v, when, tau){
-  if (!v || when <= v.when || (v.sustainSec && when >= v.when + v.sustainSec)) return;
+  if (!v || v.faded || when <= v.when || when >= v.end) return;
   let cur = v.level;
   if (v.sustainSec) {
     const holdEnd = v.when + v.sustainSec * 0.5;
@@ -8401,6 +8423,8 @@ function fadeDrumVoice(v, when, tau){
   v.g.gain.cancelScheduledValues(when);
   v.g.gain.setValueAtTime(cur, when);
   v.g.gain.exponentialRampToValueAtTime(0.0001, when + tau);
+  v.faded = true;
+  for (const src of v.srcs || []) try { src.stop(when + tau + 0.02); } catch (e) {}
 }
 function chokeCymbal(piece, when){
   const list = ringingCymbals[piece];
@@ -8460,19 +8484,25 @@ const DRUM_VOICES = {
   clap:      { piece: "snare",    gain: 0.8,  send: 0.35, synth: (w, V) => synthSnare(w, 0.8 * V) },
   hhClosed:  { piece: "hhClosed", gain: 0.27, send: 0.06, synth: (w, V) => synthCymbal(w, 0.06, 8000, 0.25 * V, 0.25), choke: true },
   hhPedal:   { piece: "hhPedal",  gain: 0.355, send: 0.05, synth: (w, V) => synthCymbal(w, 0.05, 8000, 0.16 * V, 0.2), choke: true },
-  hhOpen:    { piece: "hhOpen",   gain: 0.26, send: 0.08, sustain: 1.2, synth: (w, V) => synthCymbal(w, 0.45, 7000, 0.28 * V, 0.4), openHat: true },
+  hhOpen:    { piece: "hhOpen",   gain: 0.26, send: 0.08, synth: (w, V) => synthCymbal(w, 0.45, 7000, 0.28 * V, 0.4), openHat: true },
   tomHigh:   { piece: "tom1",     gain: 1.117,  rate: 1.05, send: 0.3, synth: (w, V) => synthTom(w, 190) },
   tom1:      { piece: "tom1",     gain: 1.117,  send: 0.3, synth: (w, V) => synthTom(w, 175) },
   tom2:      { piece: "tom2",     gain: 1.306,  send: 0.3, synth: (w, V) => synthTom(w, 150) },
   tom3:      { piece: "tom3",     gain: 1.233,  send: 0.3, synth: (w, V) => synthTom(w, 130) },
   tom4:      { piece: "tom4",     gain: 1.174,  send: 0.3, synth: (w, V) => synthTom(w, 100) },
   tom5:      { piece: "tom5",     gain: 1.057,  send: 0.3, synth: (w, V) => synthTom(w, 85) },
-  crash1:    { piece: "crashL",   gain: 0.26,  send: 0.1, sustain: 2.8, synth: (w, V) => synthCymbal(w, 1.6, 5500, 0.4 * V, 0.45) },
-  crash2:    { piece: "crashR",   gain: 0.255,  send: 0.1, sustain: 2.8, synth: (w, V) => synthCymbal(w, 1.6, 5500, 0.4 * V, 0.45) },
-  splash:    { piece: "splash",   gain: 0.401,  send: 0.1, sustain: 1.6, synth: (w, V) => synthCymbal(w, 0.9, 6500, 0.35 * V, 0.45) },
-  china:     { piece: "china",    gain: 0.274,  send: 0.1, sustain: 2.4, synth: (w, V) => synthCymbal(w, 1.4, 4500, 0.4 * V, 0.5) },
-  ride:      { piece: "ride",     gain: 0.425, send: 0.08, sustain: 2.4, synth: (w, V) => synthCymbal(w, 1.3, 8500, 0.22 * V, 0.55) },
-  rideBell:  { piece: "rideBell", gain: 0.361,  send: 0.08, sustain: 2.2, synth: (w, V) => synthCymbal(w, 0.6, 11000, 0.32 * V, 0.12) }
+  crash1:    { piece: "crashL",   gain: 0.26,  send: 0.1, synth: (w, V) => synthCymbal(w, 1.6, 5500, 0.4 * V, 0.45) },
+  crash2:    { piece: "crashR",   gain: 0.255,  send: 0.1, synth: (w, V) => synthCymbal(w, 1.6, 5500, 0.4 * V, 0.45) },
+  splash:    { piece: "splash",   gain: 0.401,  send: 0.1, synth: (w, V) => synthCymbal(w, 0.9, 6500, 0.35 * V, 0.45) },
+  china:     { piece: "china",    gain: 0.274,  send: 0.1, synth: (w, V) => synthCymbal(w, 1.4, 4500, 0.4 * V, 0.5) },
+  ride:      { piece: "ride",     gain: 0.425, send: 0.08, synth: (w, V) => synthCymbal(w, 1.3, 8500, 0.22 * V, 0.55) },
+  rideBell:  { piece: "rideBell", gain: 0.361,  send: 0.08, synth: (w, V) => synthCymbal(w, 0.6, 11000, 0.32 * V, 0.12) }
+};
+/* 同一片鈸同時發聲數(照原廠 sfz 的 note_polyphony 與 off_time):真的鈸再打一下不會「多一片鈸」一起響,
+   取樣疊太多層會越疊越大聲、糊成一片。超過上限時最舊的那一下在 off 秒內收掉。
+   以前是每一下都包固定的淡出(crash 1.4 秒就開始收、2.8 秒結束),鈸聲比真的短很多;現在照錄音自然響完 */
+const DRUM_POLY = {
+  crashL: [4, 0.65], crashR: [4, 0.65], ride: [4, 0.5], rideBell: [4, 0.5], china: [4, 0.4], splash: [4, 0.2], hhOpen: [3, 0.35]
 };
 /* GM 鼓號 → 鼓件。五顆鼓照 Naked Drums 原廠鍵位:48 Tom1(10")、47 Tom2(12")、45 Tom3(13")、43 Tom4(14")、41 Tom5(16"),
    記譜常用的高音鼓/中音鼓/落地鼓都是原音;50(最高的中鼓)才用 Tom1 微幅升調 */
@@ -8482,7 +8512,7 @@ const DRUM_KEY_VOICE = {
   50: "tomHigh", 48: "tom1", 47: "tom2", 45: "tom3", 43: "tom4", 41: "tom5",
   49: "crash1", 57: "crash2", 55: "splash", 52: "china", 51: "ride", 59: "ride", 53: "rideBell"
 };
-/* hit:humanizeDrumHit() 算出來的 {s(0~1 力度), vel, gainMul};沒有給就當一般力度。
+/* hit:humanizeDrumHit() 算出來的 {s(0~1 力度), dt};沒有給就當一般力度。
    chokeAt:要止音的鈸在這個時間被抓住(譜上 Mute/Choke,見 markDrumChokes) */
 function scheduleDrum(key, when, hit, chokeAt){
   const s = hit && hit.s != null ? hit.s : 0.72;
@@ -8492,10 +8522,12 @@ function scheduleDrum(key, when, hit, chokeAt){
   const played = playSample(voice.piece, when, gain, voice.rate || 0, voice.sustain || 0, s, voice.pan, voice.send);
   if (played) {
     if (voice.openHat) ringingOpenHat = played;
-    if (DRUM_CHOKE_KEYS.has(key)) {
-      const list = (ringingCymbals[voice.piece] = (ringingCymbals[voice.piece] || []).filter(v => v.when + v.sustainSec > when));
+    const poly = DRUM_POLY[voice.piece];
+    if (poly || DRUM_CHOKE_KEYS.has(key)) {
+      const list = (ringingCymbals[voice.piece] = (ringingCymbals[voice.piece] || []).filter(v => v.end > when && !v.faded));
       list.push(played);
-      if (chokeAt != null) chokeCymbal(voice.piece, Math.max(chokeAt, when + 0.04));   // 用實際擊打時間(含人性化偏移)算
+      if (poly) while (list.length > poly[0]) fadeDrumVoice(list.shift(), when, poly[1]);
+      if (chokeAt != null && DRUM_CHOKE_KEYS.has(key)) chokeCymbal(voice.piece, Math.max(chokeAt, when + 0.04));   // 用實際擊打時間(含人性化偏移)算
     }
     return;
   }
