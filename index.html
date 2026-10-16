@@ -175,7 +175,13 @@ body:not(.header-prefs-moved) #headerPrefGroup{display:none}
 body.header-brand-hidden header .brand{display:none}
 .tempo-box{display:flex;align-items:center;gap:8px;font-size:var(--fs-sm);color:var(--muted);white-space:nowrap}
 .tempo-unit{color:var(--muted);font-size:var(--fs-xs)}
+.swatches{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.swatch{width:28px;height:28px;flex:none;padding:0;border:none;border-radius:50%;cursor:pointer;
+  background:var(--sw);box-shadow:inset 0 0 0 1px rgba(0,0,0,.25)}
+.swatch[aria-checked="true"]{box-shadow:0 0 0 2px var(--panel),0 0 0 4px var(--sw)}
+.swatch:focus-visible{outline:2px solid var(--gold);outline-offset:4px}
 #tempoRow{flex-wrap:nowrap}
+#bgOpacityRow[hidden]{display:none}
 #tempoRow input[type=range]{flex:1 1 auto;width:auto;min-width:60px}
 .tempo-box b{color:var(--gold-bright);font-size:var(--fs-lg);min-width:34px;text-align:right;font-variant-numeric:tabular-nums}
 .tempo-box input[type=number]{
@@ -946,6 +952,9 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
     <div class="settings-group-title" data-i18n="settingsGroupPlayback">播放與顯示</div>
     <!-- 速度(2026-10 使用者要求頂欄精簡):以前是頂欄的「100 BPM ▾」按鈕 + 彈出滑桿,現在放在設定面板第一列 -->
     <div class="tempo-box" id="tempoRow"><span class="row-label" data-i18n="tempoAriaLabel">速度</span> <input type="range" id="tempo" min="40" max="400" value="100" step="1" data-i18n-attr="aria-label:tempoAriaLabel"><input type="number" id="tempoVal" min="40" max="400" value="100" data-i18n-attr="aria-label:tempoAriaLabel"><span class="tempo-unit">BPM<span id="tempoUnitSuffix"></span></span></div>
+    <!-- 游標顏色(2026-10 使用者請 Claude 設計):6 個色票,點一下就換、會記住。播放軸、小節色塊、匯出影片的標題共用;
+         淺色主題與匯出影片照 exportInkColor 換成同色相的深色(色票也顯示換算後的顏色)。以前是任意調色盤 + 濃度滑桿,重開就回到金色 -->
+    <div class="tempo-box" id="cursorColorRow"><span class="row-label" data-i18n="cursorColorLabel">游標顏色</span><span class="swatches" role="radiogroup" data-i18n-attr="aria-label:cursorColorLabel"><button type="button" class="swatch" role="radio" aria-checked="false" data-color="#E9CB7A" data-i18n-attr="aria-label:colorGold,title:colorGold"></button><button type="button" class="swatch" role="radio" aria-checked="false" data-color="#F2877A" data-i18n-attr="aria-label:colorRed,title:colorRed"></button><button type="button" class="swatch" role="radio" aria-checked="false" data-color="#7DB9F2" data-i18n-attr="aria-label:colorBlue,title:colorBlue"></button><button type="button" class="swatch" role="radio" aria-checked="false" data-color="#86D19A" data-i18n-attr="aria-label:colorGreen,title:colorGreen"></button><button type="button" class="swatch" role="radio" aria-checked="false" data-color="#B9A1F2" data-i18n-attr="aria-label:colorPurple,title:colorPurple"></button><button type="button" class="swatch" role="radio" aria-checked="false" data-color="#C6C6C6" data-i18n-attr="aria-label:colorGray,title:colorGray"></button></span><input type="hidden" id="cursorColor" value="#E9CB7A"></div>
     <div class="switch-grid">
       <!-- 排列順序是照「這個開關做什麼事」分的,每一列兩個是同一類:
            1. 預備拍 / 小節高亮   —— 切換是即時的,不動樂譜內容
@@ -979,21 +988,15 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
   <details class="settings-group settings-collapse">
     <summary class="settings-group-title"><span data-i18n="advancedSummary">進階</span><span class="chev">›</span></summary>
     <div class="collapse-body">
-      <div class="tempo-box" data-i18n-attr="title:cursorColorTitle">
-        <span class="row-label" data-i18n="cursorColorLabel">游標顏色</span>
-        <input type="color" id="cursorColor" value="#E9CB7A" data-i18n-attr="aria-label:cursorColorAria">
-        <span class="row-hint" data-i18n="cursorColorHint">重開網頁會回到金色</span>
-      </div>
-      <div class="tempo-box"><span class="row-label" data-i18n="cursorOpacityLabel">游標濃度</span>
-        <input type="range" id="cursorOpacity" min="10" max="100" value="100"><b id="cursorOpacityVal">100</b>
-      </div>
-      <div class="tempo-box"><span class="row-label" data-i18n="scoreBgOpacityLabel">背景濃度</span> <input type="range" id="scoreBgOpacity" min="0" max="100" value="0"><b id="scoreBgOpacityVal">0</b></div>
+      <!-- 2026-10 使用者請 Claude 判斷「進階」要留什麼:游標顏色、游標濃度拿掉(固定金色、100%);
+           背景圖是做影片會用到的功能,留著;背景濃度匯入圖片後才出現(匯入時已依亮度自動設好) -->
       <div class="tempo-box"><span class="row-label" data-i18n="bgImageRowLabel">背景圖</span>
         <button class="btn" id="bgImageBtn" data-i18n="bgImageBtn">匯入背景圖片</button>
         <input type="file" id="bgImageFile" accept="image/*">
         <span id="bgImageStatus" style="font-size:12px;opacity:0.75" data-i18n="bgImageStatusDefault">未匯入</span>
         <button class="btn" id="bgImageClearBtn" style="padding:4px 10px" disabled data-i18n="removeBtn">移除</button>
       </div>
+      <div class="tempo-box" id="bgOpacityRow" hidden><span class="row-label" data-i18n="scoreBgOpacityLabel">背景濃度</span> <input type="range" id="scoreBgOpacity" min="0" max="100" value="0"><b id="scoreBgOpacityVal">0</b></div>
     </div>
   </details>
 
@@ -1269,6 +1272,13 @@ const I18N = {
     drumNotTransposable: "鼓組不需要移調",
 
     settingsGroupPlayback: "播放與顯示",
+    cursorColorLabel: "游標顏色",
+    colorGold: "金色",
+    colorRed: "紅色",
+    colorBlue: "藍色",
+    colorGreen: "綠色",
+    colorPurple: "紫色",
+    colorGray: "灰色",
     settingsGroupPrefs: "外觀與語言",
     countInTitle: "播放前先敲一小節節拍器,留時間把手放到樂器上",
     countInLabel: "預備拍",
@@ -1283,13 +1293,8 @@ const I18N = {
     measureHlTitle: "把正在演奏的那一小節整段用色塊標起來,視讀時更容易抓到位置",
     measureHlLabel: "小節高亮",
 
-    advancedSummary: "進階",
+    advancedSummary: "背景圖片",
     removeBtn: "移除",
-    cursorColorTitle: "游標線、上方三角標記、小節色塊、匯出影片的主標題共用這個顏色",
-    cursorColorLabel: "游標顏色",
-    cursorColorAria: "游標與小節高亮顏色",
-    cursorColorHint: "重開網頁會回到金色",
-    cursorOpacityLabel: "游標濃度",
     scoreBgOpacityLabel: "背景濃度",
     bgImageRowLabel: "背景圖",
     bgImageBtn: "匯入背景圖片",
@@ -1496,6 +1501,13 @@ const I18N = {
     drumNotTransposable: "Drums don't need transposing",
 
     settingsGroupPlayback: "Playback & Display",
+    cursorColorLabel: "Cursor Color",
+    colorGold: "Gold",
+    colorRed: "Red",
+    colorBlue: "Blue",
+    colorGreen: "Green",
+    colorPurple: "Purple",
+    colorGray: "Gray",
     settingsGroupPrefs: "Appearance & language",
     countInTitle: "Clicks a metronome bar before playback, giving you time to get your hands ready",
     countInLabel: "Count-in",
@@ -1510,13 +1522,8 @@ const I18N = {
     measureHlTitle: "Highlight the currently playing measure with a color band, making it easier to track while reading",
     measureHlLabel: "Highlight",
 
-    advancedSummary: "More",
+    advancedSummary: "Background Image",
     removeBtn: "Remove",
-    cursorColorTitle: "Shared by the cursor line, the triangle marker above it, the measure highlight, and the exported video's title",
-    cursorColorLabel: "Cursor Color",
-    cursorColorAria: "Cursor and measure highlight color",
-    cursorColorHint: "Resets to gold on page reload",
-    cursorOpacityLabel: "Intensity",
     scoreBgOpacityLabel: "BG Opacity",
     bgImageRowLabel: "Background",
     bgImageBtn: "Import Background",
@@ -5444,13 +5451,16 @@ $("tempoVal").addEventListener("change", () => {
 /* ── 游標與小節高亮的外觀設定 ──────────────────────────────
    顏色/濃度寫進 CSS 變數,現場畫面直接吃;匯出影片則在 drawExportFrame() 讀同一組值,
    確保預覽跟實際輸出長得一樣 */
-function hlCursorColor(){ return $("cursorColor").value; }
-function hlCursorOpacity(){ return +$("cursorOpacity").value / 100; }
+// 游標顏色:設定面板的 6 個色票(#cursorColor 存目前的選擇,記在 PREF_FIELDS);濃度固定 100%(畫面上的播放軸另外 × 0.5)
+const CURSOR_COLOR = "#E9CB7A";
+const CURSOR_SWATCHES = ["#E9CB7A", "#F2877A", "#7DB9F2", "#86D19A", "#B9A1F2", "#C6C6C6"];
+function hlCursorColor(){ const v = ($("cursorColor") || {}).value; return CURSOR_SWATCHES.includes(v) ? v : CURSOR_COLOR; }
+function hlCursorOpacity(){ return 1; }
 /* 小節色塊跟游標共用同一個顏色。濃度也共用同一個滑桿,但色塊必須明顯淡得多——
    它是鋪在音符底下的一整塊面積,跟只有 2px 寬的游標用同樣濃度的話會蓋掉音符、非常吃力。
    實測 0.22 是「看得出小節範圍、又完全不影響讀譜」的比例,所以色塊 = 濃度 × 0.22。 */
 const MEASURE_BAND_RATIO = 0.22;
-function hlMeasureColor(){ return $("cursorColor").value; }
+function hlMeasureColor(){ return hlCursorColor(); }
 function hlMeasureOpacity(){ return hlCursorOpacity() * MEASURE_BAND_RATIO; }
 function measureHlOn(){ return $("measureHl").checked; }
 /* 淺色/深色主題切換。版面與元件完全共用,只換 :root 那組語意變數。
@@ -5477,11 +5487,21 @@ function applyHighlightStyles(){
   root.setProperty("--cursor-op", String(hlCursorOpacity()));
   root.setProperty("--measure-col", ink(hlMeasureColor()));
   root.setProperty("--measure-op", String(hlMeasureOpacity()));
-  $("cursorOpacityVal").textContent = $("cursorOpacity").value;
-
   document.body.classList.toggle("measure-hl", measureHlOn());
   updateMeasureHighlight(playing ? currentSec() : pausedAtSec);
+  // 色票:淺色主題顯示換算後的深色,選到的那個加外圈
+  const cur = hlCursorColor();
+  for (const b of document.querySelectorAll("#cursorColorRow .swatch")) {
+    b.style.setProperty("--sw", ink(b.dataset.color));
+    b.setAttribute("aria-checked", String(b.dataset.color === cur));
+  }
 }
+$("cursorColorRow").addEventListener("click", e => {
+  const b = e.target.closest(".swatch"); if (!b) return;
+  $("cursorColor").value = b.dataset.color;
+  $("cursorColor").dispatchEvent(new Event("input"));   // savePrefs 記住
+  applyHighlightStyles();
+});
 /* 找出某個時間點落在第幾小節,回傳它在樂譜上的左右邊界(px)。
    measureRanges 存的是全音符座標,直接用 xAtWhole() 換算,不用繞道秒數 */
 /* 演奏位置 → 記譜位置(反覆記號展開後,重播段對應回樂譜上同一個位置) */
@@ -5527,9 +5547,6 @@ function updateMeasureHighlight(sec){
   if (!b) { el.style.width = "0px"; return; }
   el.style.left = b.left + "px";
   el.style.width = Math.max(0, b.right - b.left) + "px";
-}
-for (const id of ["cursorColor","cursorOpacity"]) {
-  $(id).addEventListener("input", applyHighlightStyles);
 }
 $("measureHl").addEventListener("change", applyHighlightStyles);
 $("lightTheme").addEventListener("change", applyTheme);
@@ -5794,11 +5811,8 @@ const PREF_FIELDS = [
   { id: "rubatoOn",          prop: "checked" },
   /* lightTheme 已經搬到共用的 sm_theme(見下方「主題偏好」),不再存在這包 JSON 裡。
      舊值還留在既有使用者的 localStorage 中,storedTheme() 會讀它當備援。 */
-  // cursorColor 刻意不存:游標/播放軸/小節色塊每次重新開啟都回到預設金色。
-  // 改顏色通常是為了某支影片的當下需求,不是長期偏好,下次打開又是上次那個顏色反而困擾。
-  // 濃度與「小節高亮」開關屬於使用習慣,照樣記住。
-  { id: "cursorOpacity",     prop: "value" },
   { id: "measureHl",         prop: "checked" },
+  { id: "cursorColor",       prop: "value" },   // 游標色票(2026-10 起會記住)
 ];
 function savePrefs(){
   try {
@@ -8263,6 +8277,7 @@ $("bgImageFile").addEventListener("change", async e => {
     importedBgImageName = file.name;
     $("bgImageStatus").textContent = T("bgImportedStatus", { name: file.name });
     $("bgImageClearBtn").disabled = false;
+    $("bgOpacityRow").hidden = false;
     setStatus(statusMsg);
   } catch (err) {
     setStatus(T("statusBgReadFailed", { msg: err.message || err }));
@@ -8274,6 +8289,7 @@ $("bgImageClearBtn").addEventListener("click", () => {
   $("scoreBg").style.backgroundImage = "";
   $("bgImageStatus").textContent = T("bgImageStatusDefault");
   $("bgImageClearBtn").disabled = true;
+  $("bgOpacityRow").hidden = true;
   setStatus(T("statusBgRemoved"));
 });
 
