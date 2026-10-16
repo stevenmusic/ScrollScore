@@ -174,6 +174,9 @@ header h1 span{color:var(--ivory);font-weight:600}
 body:not(.header-prefs-moved) #headerPrefGroup{display:none}
 body.header-brand-hidden header .brand{display:none}
 .tempo-box{display:flex;align-items:center;gap:8px;font-size:var(--fs-sm);color:var(--muted);white-space:nowrap}
+.tempo-unit{color:var(--muted);font-size:var(--fs-xs)}
+#tempoRow{flex-wrap:nowrap}
+#tempoRow input[type=range]{flex:1 1 auto;width:auto;min-width:60px}
 .tempo-box b{color:var(--gold-bright);font-size:var(--fs-lg);min-width:34px;text-align:right;font-variant-numeric:tabular-nums}
 .tempo-box input[type=number]{
   color:var(--gold-bright);font-size:var(--fs-lg);width:56px;height:32px;line-height:32px;
@@ -193,14 +196,6 @@ input[type=range]::-webkit-slider-thumb{
   -webkit-appearance:none;width:20px;height:20px;border-radius:50%;
   background:var(--gold);border:2px solid var(--bg);
 }
-/* ── 速度:收成 "100 BPM ▾" 小按鈕,點擊才彈出滑桿,平常不佔 Header 空間 ── */
-.tempo-compact{position:relative}
-#tempoToggle{color:var(--gold-bright);font-variant-numeric:tabular-nums}
-#tempoToggle .caret{font-size:10px;color:var(--muted);margin-left:1px}
-/* 速度可以是 40~400(2或3位數),數字位數不同的話這個按鈕(連帶右邊的設定鈕)寬度會跟著變、
-   位置就跟著跳動——固定保留 3 位數的寬度、靠右對齊,不管樂譜實際是幾 BPM,按鈕寬度都一樣,
-   後面的按鈕也就不會跟著移動 */
-#tempoDisplay{display:inline-block;min-width:3ch;text-align:right}
 /* 中英文切換時文字長度不同,按鈕會跟著變寬、把右邊(或同排)的按鈕一起擠動——
    固定保留較長那個語言的寬度,兩種語言下按鈕大小都一樣,切換語言按鈕不會位移 */
 /* 保留的是整顆按鈕的寬度(不是文字的寬度),圖示和文字貼在一起置中,不會中間空一段 */
@@ -211,19 +206,6 @@ input[type=range]::-webkit-slider-thumb{
   body:not(.header-icons-only) #stopBtn{min-width:110px}
   body:not(.header-icons-only) #playBtn{min-width:94px}
 }
-#tempoPopover{
-  position:absolute;top:calc(100% + 10px);right:0;z-index:60;
-  display:flex;flex-direction:column;gap:10px;min-width:190px;
-  background:var(--surface-glass); /* --panel-2 的半透明版本,搭配blur維持玻璃感,同時比--panel亮一階 */
-  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
-  border:1px solid var(--gold);border-radius:var(--radius-md);
-  padding:14px 16px;box-shadow:var(--shadow-md);
-  opacity:0;transform:translateY(-6px);pointer-events:none;
-  transition:opacity .18s,transform .18s;
-}
-#tempoPopover.open{opacity:1;transform:translateY(0);pointer-events:auto}
-#tempoPopover .tempo-box{font-size:var(--fs-xs)}
-#tempoPopover input[type=range]{flex:1;width:auto}
 /* ── 設定面板:改成從螢幕底部滑出的抽屜(Bottom Sheet),不再往下推擠樂譜區 ── */
 #settingsBackdrop{
   position:fixed;inset:0;z-index:58;background:var(--scrim-soft);
@@ -369,19 +351,12 @@ body.kb-hidden #keyboardCanvas{display:none}
    這樣 載入/播放/停止/速度/設定 全部擠在一行也不會換行,不會有兩排高低不一的觀感 */
 /* 速度按鈕上的「(附點四分音符)」這類單位提示會讓按鈕寬到 195px,平板直向時足以把頂欄
    擠成兩排。900px 以下一律只留數字,平板才能維持單排又保留品牌名 */
-@media (max-width:900px){
-  #tempoUnitSuffix{display:none}
-}
 @media (max-width:600px){
   /* 頂欄的內距與間距同樣跟著寬度連續縮放,不用斷點硬切。
      之前用階梯式斷點會出現「375px 比 390px 還寬鬆」的反轉(375 落在 ≤380 那一階,
      按鈕跟間距都比較小),流體值就不會有這種跳動 */
   header,#transportBar{padding:8px clamp(6px, 2.2vw, 10px);gap:clamp(4px, 1.4vw, 6px)}
   .header-left,.header-right{gap:clamp(4px, 1.4vw, 6px)}
-  #tempoToggle{padding:0 clamp(8px, 2.4vw, 12px);font-size:var(--fs-sm)}
-  /* 「BPM」剛出現的那一段(約 385~400px)是整條頂欄最擠的地方,只剩個位數的餘裕。
-     讓這三個字自己也跟著寬度縮放,把那一段的餘裕拉回兩位數 */
-  #tempoBpmLabel{font-size:clamp(11px, 3.1vw, 13px)}
   .btn{padding:0 10px;height:34px;font-size:var(--fs-sm)}
   .btn-label{display:none}
   #transportBar .btn svg,#settingsToggle svg{margin:0}
@@ -397,10 +372,6 @@ body.kb-hidden #keyboardCanvas{display:none}
 /* 螢幕更窄(iPhone SE 等):按鈕內距再收緊,確保單排絕對放得下。
    頂欄的內距/間距/品牌名字級都已經是流體值,這裡不再用固定值覆蓋它們 */
 @media (max-width:380px){
-  /* 「BPM」三個字是文字,沒辦法無段縮放,只能整組留或整組拿掉。
-     這個寬度以下留著的話,載入樂譜後頂欄會換行,多吃 47px 的樂譜高度。
-     只留數字跟下拉箭頭,展開的速度面板裡仍然寫著「速度」,不會不知道那個數字是什麼 */
-  #tempoBpmLabel{display:none}
   .btn{padding:0 8px;height:32px}
   input[type=range]{width:48px}
   /* 320~380px 的機身高度也短(SE 只有 568px),面板卡片的內距與列距再收一輪,
@@ -582,7 +553,6 @@ body.score-loaded #playline{display:block}
 /* fitHeaderRow() 放不下單排時的收窄手段:只藏文字,不動按鈕本身的 padding/height——
    按鈕邊框(圓角/高度)維持跟平常一樣,只是裡面的字不見了、寬度跟著內容自然變窄,
    不會因為收合層級不同而讓同一顆按鈕忽大忽小、形狀跑掉。 */
-body.header-tempo-compact #tempoBpmLabel{display:none} /* BPM 三個字先收,數字保留 */
 body.header-icons-only .btn-label{display:none}        /* 其餘按鈕的文字都收起來,只留圖示 */
 /* ── 底部狀態列 ─────────────────── */
 footer{
@@ -712,7 +682,6 @@ input[type=file]{display:none}
    這種昂貴的即時模糊還是會被持續計算,只是最後合成時整層變透明看不到。平常這點浪費感覺不出來,
    但匯出時同時要即時編碼影片,這些「看不到但還在算」的模糊層一樣會排擠到音訊/畫面的
    CPU餘裕。匯出期間直接整批關掉,不會有人在匯出過程中同時想開設定面板。 */
-body.exporting-active #tempoPopover,
 body.exporting-active #settingsBackdrop,
 body.exporting-active #settingsPanel,
 body.exporting-active #seekPopover,
@@ -917,14 +886,6 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
     </button>
     <input type="checkbox" id="lightTheme" hidden>
     <button class="btn" id="langToggle" aria-label="Switch to English" title="Switch to English" aria-pressed="false">EN</button>
-    <div class="tempo-compact">
-      <button class="btn" id="tempoToggle" data-i18n-attr="aria-label:tempoAriaLabel">
-        <span id="tempoDisplay">100</span><span id="tempoBpmLabel"> BPM</span><span id="tempoUnitSuffix"></span><span class="caret">▾</span>
-      </button>
-      <div id="tempoPopover">
-        <div class="tempo-box"><span class="tempo-label" data-i18n="tempoAriaLabel">速度</span> <input type="range" id="tempo" min="40" max="400" value="100" step="1"><input type="number" id="tempoVal" min="40" max="400" value="100"></div>
-      </div>
-    </div>
     <button class="btn" id="exportHdrBtn" data-i18n-attr="aria-label:exportBtnLabel,title:exportBtnLabel">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="14" height="12" rx="2"/><path d="M16 10.5l6-3.5v10l-6-3.5z"/></svg>
       <span class="btn-label" data-i18n="exportHdrLabel">匯出影片</span>
@@ -983,6 +944,8 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
 
   <div class="settings-group">
     <div class="settings-group-title" data-i18n="settingsGroupPlayback">播放與顯示</div>
+    <!-- 速度(2026-10 使用者要求頂欄精簡):以前是頂欄的「100 BPM ▾」按鈕 + 彈出滑桿,現在放在設定面板第一列 -->
+    <div class="tempo-box" id="tempoRow"><span class="row-label" data-i18n="tempoAriaLabel">速度</span> <input type="range" id="tempo" min="40" max="400" value="100" step="1" data-i18n-attr="aria-label:tempoAriaLabel"><input type="number" id="tempoVal" min="40" max="400" value="100" data-i18n-attr="aria-label:tempoAriaLabel"><span class="tempo-unit">BPM<span id="tempoUnitSuffix"></span></span></div>
     <div class="switch-grid">
       <!-- 排列順序是照「這個開關做什麼事」分的,每一列兩個是同一類:
            1. 預備拍 / 小節高亮   —— 切換是即時的,不動樂譜內容
@@ -2219,7 +2182,6 @@ $("emptyCard").addEventListener("keydown", (e) => {
 });
 
 function openSettingsSheet(){
-  $("tempoPopover").classList.remove("open");
   closeSeekPopover();
   $("settingsPanel").classList.add("open");
   $("settingsBackdrop").classList.add("open");
@@ -2233,23 +2195,8 @@ $("settingsToggle").addEventListener("click", () => {
 });
 $("settingsBackdrop").addEventListener("click", closeSettingsSheet);
 
-/* 速度收成小按鈕,點擊才彈出滑桿,不再常駐佔用 Header 空間 */
-$("tempoToggle").addEventListener("click", e => {
-  e.stopPropagation();
-  closeSettingsSheet();
-  closeSeekPopover();
-  $("tempoPopover").classList.toggle("open");
-});
-document.addEventListener("click", e => {
-  if (!$("tempoPopover").classList.contains("open")) return;
-  if (e.target === $("tempoToggle") || $("tempoToggle").contains(e.target)) return;
-  if ($("tempoPopover").contains(e.target)) return;
-  $("tempoPopover").classList.remove("open");
-});
-// 單位提示(如"(附點四分音符)")拆成獨立的span,手機寬度時用CSS隱藏它——
-// 不然這段文字會讓速度按鈕變超寬,把旁邊的停止鈕、設定鈕擠到自動換行,版面就跑掉了
+// 速度單位提示(如「(附點四分音符)」):譜上的速度是附點四分音符時,設定面板的數字後面標出單位
 function syncTempoDisplay(){
-  $("tempoDisplay").textContent = String(rawTempo());
   // 用目前語言重新組一次單位提示(而不是直接沿用 tempoDisplayUnitLabel 那份舊字串),
   // 語言切換時才會跟著換,見 metronomeUnitLabel() 的說明
   if (tempoDisplayBeatUnit) tempoDisplayUnitLabel = metronomeUnitLabel(tempoDisplayBeatUnit, tempoDisplayDotCount);
@@ -5641,12 +5588,14 @@ $("langToggle").addEventListener("click", () => {
    文字改圖示;兩步都試過還是放不下,就不再繼續壓縮按鈕大小,直接放棄合併——
    三顆按鈕搬回 #transportBar,自己獨立成右下方的第二排,按鈕維持原本舒適的大小。 */
 const TRANSPORT_BTN_IDS = ["loadBtn", "playBtn", "stopBtn"];
+/* 2026-10 使用者指定頂欄:左邊品牌名 ScrollScore(一定保留);右邊 深淺模式、語言、設定;載入樂譜後依序
+   上傳樂譜、播放、從頭(左邊品牌名後)、深淺模式、語言、匯出影片、設定(右邊)。速度搬進設定面板。
+   放不下時依序:按鈕只留圖示 → 深淺/語言搬進設定面板 → 匯出影片捷徑收起(設定面板裡還有)→ 最後才讓品牌名讓位 */
 const HEADER_COLLAPSE_STEPS = [
-  { bodyClass: "header-tempo-compact" }, // 「BPM」先收,只留數字
-  { bodyClass: "header-icons-only" },    // 其餘按鈕文字改圖示
+  { bodyClass: "header-icons-only" },    // 按鈕文字改圖示
   { bodyClass: "header-prefs-moved", movePrefs: true },  // 主題/語言搬進設定面板(手機頂欄因此維持單排,不再多一列)
-  { bodyClass: "header-brand-hidden" },   // 360px 以下的小手機:品牌名讓位給播放控制
-  { bodyClass: "header-export-hidden" }   // 最後才收:頂欄的匯出影片捷徑(設定面板裡還有)
+  { bodyClass: "header-export-hidden" },  // 頂欄的匯出影片捷徑(設定面板裡還有)
+  { bodyClass: "header-brand-hidden" }    // 最後才收:品牌名(折疊機外螢幕這種極窄畫面)
 ];
 const HEADER_PREF_IDS = ["themeToggle", "langToggle"];
 // 手機瀏覽器實際渲染的字型寬度跟這支程式量測當下的環境會有落差(尤其中文字型),
@@ -5673,7 +5622,7 @@ function headerIsOneRow(hl, hr){
 function setHeaderCollapseStep(step, on){
   document.body.classList.toggle(step.bodyClass, on);
   if (!step.movePrefs) return;
-  const slot = document.getElementById("headerPrefSlot"), hr = document.querySelector(".header-right"), anchor = hr && hr.querySelector(".tempo-compact");
+  const slot = document.getElementById("headerPrefSlot"), hr = document.querySelector(".header-right"), anchor = hr && document.getElementById("exportHdrBtn");
   for (const id of HEADER_PREF_IDS) {
     const el = document.getElementById(id);
     if (!el || !slot || !hr) continue;
@@ -9109,7 +9058,6 @@ $("progressbar").addEventListener("pointercancel", () => {
 function openSeekPopover(){
   if (!events.length) return;
   closeSettingsSheet();
-  $("tempoPopover").classList.remove("open");
   $("seekInput").value = fmt(playing ? currentSec() : pausedAtSec);
   $("seekPopover").classList.add("open");
   $("seekInput").focus();

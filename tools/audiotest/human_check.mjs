@@ -28,7 +28,7 @@ for (const seed of (seeds.length ? seeds : ["1", "2", "3"]).map(Number)) {
     async () => page.click("#settingsToggle").catch(() => {}),
     async () => page.click("#themeToggle", { timeout: 800 }).catch(() => {}),
     async () => page.click("#langToggle", { timeout: 800 }).catch(() => {}),
-    async () => page.click("#tempoToggle").catch(() => {}),
+    async () => { const v = 40 + Math.floor(rnd() * 200); await page.evaluate(v => { const t = $("tempo"); t.value = v; t.dispatchEvent(new Event("input")); }, v).catch(() => {}); },   // 速度在設定面板裡(2026-10 起頂欄沒有速度按鈕)
     async () => page.keyboard.press("Escape"),
     async () => page.keyboard.press("Space"),
     async () => { const s = sizes[Math.floor(rnd() * sizes.length)]; await page.setViewportSize({ width: s[0], height: s[1] }); },
