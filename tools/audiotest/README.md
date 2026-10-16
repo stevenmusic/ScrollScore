@@ -24,6 +24,8 @@ pip install numpy scipy soundfile pyloudnorm
 | `score_crop.mjs` | 樂譜局部截圖(指定小節,或 0 = 自動找上下兩行最擠的地方),可帶 OSMD 排版規則 |
 | `text_wrap_check.mjs` | 中文換行檢查:打開每個畫面(開始畫面、設定、匯出各步驟、快捷鍵…)× 8 種寬度,逐字算換行位置,列出括號被拆開、數字和單位被拆開、最後一行只剩 1~2 字、標點在行首。`--lang en` 掃英文 |
 | `page_export_check.mjs` | 直式翻頁影片:實際跑一段直式匯出(`<樂譜> <輸出目錄> [開始秒] [結束秒] [piano\|drum]`),列出每次換頁的時間、應該在哪一頁 vs 畫出哪一頁(反覆記號跳回時要立刻換),存下換頁那一格的畫面 |
+| `fast_export_check.mjs` | 匯出影片(快速匯出 / 即時錄影):實際跑一次「開始匯出」,存下影片、印出花的時間(`<樂譜> <輸出目錄> [landscape\|portrait\|square] [開始秒] [結束秒] [--realtime] [--webmtest] [--mp4test] [--inst drum]`)。雲端沒有硬體編碼器,快速匯出會因為試編太慢自動改即時錄影;--webmtest / --mp4test 強制走快速匯出檢查輸出。用 ffprobe / ffmpeg ebur128 看長度與響度 |
+| `feature_check.mjs` | 功能總檢查:範例載入、頂欄、播放/暫停/從頭、跳轉、速度、移調、所有開關、色票、背景圖、深淺模式、語言、重新整理後記住設定、鼓譜、匯出頁三種格式預覽、Guitar Pro 匯入(用 alphaTab 把歡樂頌轉成 .gp)、全程沒有錯誤訊息 |
 | `shot.mjs` | 樂譜畫面截圖,`--eval '<js>'` 印出頁面裡的變數(events、perfMeasures、tempoMap…) |
 
 Guitar Pro 測試檔:alphaTab repo(github.com/CoderLine/alphaTab)packages/alphatab/test-data 裡的 .gp/.gpx/.gp5/.gp4(例如 conversion/full-song.gp、guitarpro4/fade-to-black.gp4、guitarpro7/drum-tabs.gp),只拿來測試,不放進 repo。

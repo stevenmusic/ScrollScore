@@ -648,27 +648,6 @@ footer{
   font-size:var(--fs-2xs);color:var(--muted);line-height:1.7;margin:16px 0 14px;text-align:center;
 }
 #shortcutOverlay .btn{width:100%}
-/* ── 錄影模式 ───────────────────── */
-body.recording header, body.recording footer{display:none}
-body.recording #stage{background:#FFFDF6}
-body.recording #score{filter:none}
-body.recording #playline{
-  background:linear-gradient(to bottom,transparent,#B8860B 12%,#B8860B 88%,transparent);
-  box-shadow:0 0 10px 1px rgba(184,134,11,.35);
-}
-body.recording #playline::before{border-top-color:#B8860B}
-#countdown{
-  position:absolute;inset:0;display:none;align-items:center;justify-content:center;
-  font-family:"Noto Serif TC",serif;font-size:120px;font-weight:700;color:var(--gold);
-  background:var(--scrim-thin);z-index:20;
-}
-body.recording #countdown{color:#B8860B;background:rgba(255,253,246,.7)}
-#exitrec{
-  position:absolute;top:10px;right:10px;z-index:30;display:none;
-  width:36px;height:36px;border-radius:50%;border:1px solid #B8860B;
-  color:#B8860B;background:rgba(255,253,246,.8);font-size:18px;line-height:1;
-}
-body.recording #exitrec{display:block}
 input[type=file]{display:none}
 /* ── 匯出覆蓋層 ─────────────────── */
 #exportOverlay{
@@ -1012,6 +991,7 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
         <li><b data-i18n="creditScore">樂譜顯示</b> <a href="https://github.com/opensheetmusicdisplay/opensheetmusicdisplay" target="_blank" rel="noopener">OpenSheetMusicDisplay</a> (BSD‑3‑Clause), VexFlow (MIT)</li>
         <li><b data-i18n="creditGp">Guitar Pro 匯入</b> <a href="https://github.com/CoderLine/alphaTab" target="_blank" rel="noopener">alphaTab</a> (MPL-2.0)</li>
         <li><b data-i18n="creditZip">壓縮樂譜(.mxl)</b> <a href="https://github.com/Stuk/jszip" target="_blank" rel="noopener">JSZip</a> (MIT)</li>
+        <li><b data-i18n="creditMux">影片封裝</b> <a href="https://github.com/Vanilagy/mp4-muxer" target="_blank" rel="noopener">mp4-muxer</a>, <a href="https://github.com/Vanilagy/webm-muxer" target="_blank" rel="noopener">webm-muxer</a> (MIT)</li>
         <li><b data-i18n="creditData">演奏參考資料</b> ASAP dataset (F. Foscarin et al.), MAESTRO and Groove MIDI Dataset (Google Magenta)</li>
       </ul>
       <p class="contact-link"><a href="support.html" target="_blank" rel="noopener" data-i18n="supportLink">支援與聯絡</a> · <a href="privacy.html" target="_blank" rel="noopener" data-i18n="privacyLink">隱私權政策</a></p>
@@ -1020,7 +1000,6 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
 
   <p class="contact-link"><span data-i18n="contactLabel">問題回報：</span><a href="mailto:steventsaimusic@gmail.com">steventsaimusic@gmail.com</a></p>
   <div class="export-row panel-actions">
-    <button class="btn" id="recBtn" disabled title="請先載入樂譜" data-i18n="recBtnLabel">錄影模式</button>
     <button class="btn primary" id="exportBtn" disabled title="請先載入樂譜"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m-5-5l5 5 5-5M4 21h16"/></svg><span data-i18n="exportBtnLabel">匯出影片</span></button>
   </div>
 </div>
@@ -1062,8 +1041,6 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
   </div>
   <div id="scroller"><div id="measureHighlight"></div><div id="score"></div></div>
   <div id="playline"></div>
-  <div id="countdown">3</div>
-  <button id="exitrec" data-i18n-attr="title:exitRecTitle">✕</button>
   <div id="shareOverlay" role="dialog" aria-modal="true" aria-labelledby="shareTitle">
     <div class="box">
       <div class="title" id="shareTitle" data-i18n="shareTitle">影片完成</div>
@@ -1157,9 +1134,9 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
       <div id="exportBar"><div id="exportFill"></div></div>
       <div class="export-warn">
         <b data-i18n="exportWarnTitle">⚠ 請讓這個畫面保持在最前面</b>
-        <span data-i18n="exportWarnBody"></span>
+        <span id="exportWarnBodyEl" data-i18n="exportWarnBody"></span>
       </div>
-      <p data-i18n="exportInfoP"></p>
+      <p id="exportInfoEl" data-i18n="exportInfoP"></p>
       <button class="btn" id="exportCancel" data-i18n="cancelBtn">取消</button>
     </div>
   </div>
@@ -1242,6 +1219,7 @@ const I18N = {
     creditScore: "樂譜顯示",
     creditGp: "Guitar Pro 匯入",
     creditZip: "壓縮樂譜(.mxl)",
+    creditMux: "影片封裝",
     creditData: "演奏參考資料",
     privacyLink: "隱私權政策",
     supportLink: "支援與聯絡",
@@ -1302,9 +1280,7 @@ const I18N = {
     bgImportedStatus: "已匯入:{name}",
 
     loadScoreFirstTitle: "請先載入樂譜",
-    recBtnLabel: "錄影模式",
     exportBtnLabel: "匯出影片",
-    recBtnTitleReady: "清空畫面成純樂譜視圖,方便你自行用手機/電腦內建的螢幕錄影工具錄製",
     exportBtnTitleReady: "自動產生可下載的影片檔",
 
     emptyTitle: "點這裡載入樂譜",
@@ -1322,7 +1298,6 @@ const I18N = {
     sampleLoadFailed: "範例樂譜載入失敗,請檢查網路後再試",
     sampleScoreTitle: "ScrollScore 範例樂譜:小星星",
     sampleScoreFilename: "範例樂譜-小星星.musicxml",
-    exitRecTitle: "離開錄影模式",
 
     cancelBtn: "取消",
     expTitle: "匯出影片",
@@ -1356,6 +1331,8 @@ const I18N = {
     exportWarnTitle: "⚠ 請讓這個畫面保持在最前面",
     exportWarnBody: "切到其他 App 或讓螢幕熄滅,|錄出來會一格一格卡住,|只能重新匯出。",
     exportInfoP: "輸出時間 = 樂曲長度。|匯出時喇叭靜音|(避免爆音),|影片裡的聲音不受影響。",
+    exportWarnBodyFast: "切到其他 App 或讓螢幕熄滅,|匯出可能會中斷。",
+    exportInfoPFast: "不用等樂曲播完,|通常比樂曲長度快很多。",
 
     previewImgAlt: "匯出預覽",
     previewConfirmBtn: "開始匯出",
@@ -1471,6 +1448,7 @@ const I18N = {
     creditScore: "Score rendering",
     creditGp: "Guitar Pro import",
     creditZip: "Compressed scores (.mxl)",
+    creditMux: "Video muxing",
     creditData: "Performance reference data",
     privacyLink: "Privacy policy",
     supportLink: "Support & contact",
@@ -1531,9 +1509,7 @@ const I18N = {
     bgImportedStatus: "Imported: {name}",
 
     loadScoreFirstTitle: "Load a score first",
-    recBtnLabel: "Record Mode",
     exportBtnLabel: "Export Video",
-    recBtnTitleReady: "Clears the screen to a plain score view so you can record it with your phone/computer's built-in screen recorder",
     exportBtnTitleReady: "Automatically generates a downloadable video file",
 
     emptyTitle: "Tap here to load a score",
@@ -1551,7 +1527,6 @@ const I18N = {
     sampleLoadFailed: "Couldn't load the sample score. Check your connection and try again.",
     sampleScoreTitle: "ScrollScore Sample: Twinkle Twinkle Little Star",
     sampleScoreFilename: "sample-score-twinkle.musicxml",
-    exitRecTitle: "Exit Record Mode",
 
     cancelBtn: "Cancel",
     expTitle: "Export Video",
@@ -1585,6 +1560,8 @@ const I18N = {
     exportWarnTitle: "⚠ Keep this window in the foreground",
     exportWarnBody: "Switching apps or letting the screen sleep will cause stuttering frames — you'll have to export again.",
     exportInfoP: "Export time equals the piece's length. Speakers are muted while exporting to avoid crackling; the video's audio is unaffected.",
+    exportWarnBodyFast: "Switching apps or letting the screen sleep may interrupt the export.",
+    exportInfoPFast: "No need to wait for the piece to play through — usually much faster than its length.",
 
     previewImgAlt: "Export preview",
     previewConfirmBtn: "Start Export",
@@ -3548,7 +3525,6 @@ async function renderScore(xmlText){
   resetScroll();
   $("playBtn").disabled = false;
   $("stopBtn").disabled = false;
-  $("recBtn").disabled = false;
   $("exportBtn").disabled = false;
   // 原本這裡只是把「請先載入樂譜」移除;現在改成換上真正的說明,
   // 因為面板裡那段解說文字已經拿掉了(太佔手機版面),說明改由 tooltip 承載
@@ -5717,7 +5693,7 @@ document.addEventListener("keydown", e => {
     if (e.code === "Escape") { e.preventDefault(); closeShortcuts(); }
     return;
   }
-  if (document.body.classList.contains("recording") || exporting) return;
+  if (exporting) return;
   if ($("formatOverlay").classList.contains("show") || $("exportOverlay").classList.contains("show") || $("trackOverlay").classList.contains("show")) return;
   if (!events.length) return;
   if (e.code === "Space") {
@@ -5945,7 +5921,7 @@ $("stage").addEventListener("click", (e) => {
   if (didSwipeMeasure) { didSwipeMeasure = false; return; } // 剛才是滑動導覽,不當作點擊暫停
   if (exporting) return;
   if (e.timeStamp - trackPickerClosedAt < 500) return;   // 用事件發生的時間:載入樂譜時主執行緒忙,第二下會晚好幾秒才送到
-  if (e.target.closest("#formatOverlay, #trackOverlay, #shareOverlay, #empty, #exitrec, button, input, select, a, textarea")) return;
+  if (e.target.closest("#formatOverlay, #trackOverlay, #shareOverlay, #empty, button, input, select, a, textarea")) return;
   $("playBtn").click();
 });
 
@@ -5957,7 +5933,7 @@ const SWIPE_MEASURE_PX = 70; // 每多滑這麼多px,多跳一個小節
 let swipeStartX = null, swipeStartY = null, swipeStatusTimer = null;
 $("stage").addEventListener("pointerdown", (e) => {
   if (exporting || !measureRanges.length) return;
-  if (e.target.closest("#formatOverlay, #trackOverlay, #shareOverlay, #empty, #exitrec, button, input, select, a, textarea")) return;
+  if (e.target.closest("#formatOverlay, #trackOverlay, #shareOverlay, #empty, button, input, select, a, textarea")) return;
   swipeStartX = e.clientX; swipeStartY = e.clientY;
 });
 $("stage").addEventListener("pointerup", (e) => {
@@ -6378,12 +6354,11 @@ function currentInstrument(){ return $("instrument").value; }
    所以樂器選到鼓組時,移調按鈕要維持變暗/停用,離開鼓組才恢復。
    還沒載入樂譜前也要維持停用(樂器選單本身沒有停用,使用者可能在載入前就先選好樂器),
    不能因為切樂器就搶先解除「請先載入樂譜」的停用狀態 */
-/* recBtn/exportBtn 的 title:載入樂譜前顯示「請先載入樂譜」,載入後換成各自的用途說明。
+/* exportBtn 的 title:載入樂譜前顯示「請先載入樂譜」,載入後換成各自的用途說明。
    跟 updateTransposeAvailability() 一樣用 score-loaded class 判斷狀態,語言切換時
    (refreshDynamicI18nText)也會重新呼叫一次,才不會維持上一個語言寫死的文字 */
 function updateActionButtonTitles(){
   const scoreLoaded = document.body.classList.contains("score-loaded");
-  $("recBtn").title = scoreLoaded ? T("recBtnTitleReady") : T("loadScoreFirstTitle");
   $("exportBtn").title = scoreLoaded ? T("exportBtnTitleReady") : T("loadScoreFirstTitle");
 }
 function updateTransposeAvailability(){
@@ -9100,30 +9075,6 @@ document.addEventListener("click", e => {
   closeSeekPopover();
 });
 
-/* ── 錄影模式 ─────────────────────────────── */
-$("recBtn").addEventListener("click", () => {
-  stopPlayback();
-  closeSettingsSheet();
-  document.body.classList.add("recording");
-  resetScroll();
-  // 倒數 3 秒後自動播放,留時間開啟 iOS 螢幕錄製
-  let n = 3;
-  const cd = $("countdown");
-  cd.style.display = "flex"; cd.textContent = n;
-  const iv = setInterval(() => {
-    n--;
-    if (n <= 0) {
-      clearInterval(iv);
-      cd.style.display = "none";
-      startPlayback(0);
-    } else { cd.textContent = n; }
-  }, 1000);
-});
-$("exitrec").addEventListener("click", () => {
-  document.body.classList.remove("recording");
-  stopPlayback();
-});
-
 /* ── 影片匯出 ─────────────────────────────── */
 let exporting = false, exportCancelled = false;
 // 60fps 本身不是問題根源(同一份程式碼在 Chrome 上60fps完全順暢,問題是 Safari 自己的
@@ -10114,11 +10065,13 @@ function solveExportGain(E, P, block, releaseSec){
   return g;
 }
 function exportHasDrums(){ return events.some(ev => ev.notes.some(n => n.drum)); }
-async function measureExportGain(rangeStart, rangeEnd, onProgress){
-  if (typeof OfflineAudioContext === "undefined" || typeof AudioWorkletNode === "undefined") return null;
-  const KEEP = ["audioCtx", "masterGain", "masterLimiter", "masterOut", "monitorOut", "masterBus", "masterLimiterNode", "masterReady", "reverbBus", "reverbConvolver", "reverbWet", "reverbPreDelay",
+// 離線算聲音時要暫時換掉的全域狀態(audioCtx 與所有快取的匯流排),算完還原
+const EXPORT_AUDIO_KEEP = ["audioCtx", "masterGain", "masterLimiter", "masterOut", "monitorOut", "masterBus", "masterLimiterNode", "masterReady", "reverbBus", "reverbConvolver", "reverbWet", "reverbPreDelay",
     "pianoRoomBus", "pianoBusIn", "pianoBusCtx", "pianoVerbIn", "pianoVerbWet", "pianoVerbCtx", "pianoVerbConv", "pianoVerbPre", "pianoVerbHp", "pianoVerbHall", "pianoResIn", "pianoResGate", "pianoResCtx", "gtrVerbIn", "gtrVerbWet", "gtrVerbCtx", "drumBus", "drumVerbIn", "drumVerbWet", "drumRoomConv", "drumRoomWet", "drumRoomIn",
     "scheduled", "startCtxTime", "ringingOpenHat", "ringingCymbals", "noteSched", "pianoPedalQueue", "pianoVoices", "pianoLastByKey", "pianoRRFlip", "gtrRR"];
+async function measureExportGain(rangeStart, rangeEnd, onProgress){
+  if (typeof OfflineAudioContext === "undefined" || typeof AudioWorkletNode === "undefined") return null;
+  const KEEP = EXPORT_AUDIO_KEEP;
   const saved = {};
   for (const k of KEEP) saved[k] = eval(k);
   const restore = () => { for (const k of KEEP) eval(k + " = saved['" + k + "']"); };
@@ -10157,6 +10110,239 @@ function scheduleExportRange(rangeStart, rangeEnd, calib){
   if (currentInstrument() === "piano") pianoSchedulePedalNoise(rangeStart, rangeEnd, sec => startCtxTime + sec - rangeStart);
   startNoteScheduler(rangeStart, rangeEnd, startCtxTime - rangeStart, calib);   // 即時匯出邊錄邊排;離線量響度一次排完
 }
+/* ── 快速匯出(2026-10,使用者要求「匯出影片有辦法更快速嗎?不用真的跟著樂譜跑」)──────────────
+   以前一定要即時錄影(canvas.captureStream + MediaRecorder):影片多長就要等多久,中途切出去畫面會卡。
+   瀏覽器有 WebCodecs(VideoEncoder + AudioEncoder)時改成不照時間跑:
+   1) 聲音:用 OfflineAudioContext 把匯出區間整段算好(跟即時播放同一套排程與效果鏈),同時接響度分析,
+      拿到母帶限幅器之前的立體聲 → solveExportGain 求 −14 LUFS 的增益 → 在主執行緒用同一份限幅器程式
+      (MASTER_LIMITER_SRC,補上 AudioWorkletProcessor 的殼)乘增益、壓峰值,結果跟即時匯出一樣
+   2) 畫面:一格一格用 drawExportFrame / drawExportPageFrame 畫好就交給 VideoEncoder,不用等真實時間
+   3) 封裝:mp4-muxer(H.264 + AAC,iPhone「照片」、QuickTime 都能播)或 webm-muxer(VP9 + Opus,沒有 AAC 編碼器的瀏覽器)
+   瀏覽器不支援、或中途任何一步失敗(還沒產生影片前),自動退回原本的即時錄影,使用者不會拿不到影片。
+   影片開頭留 FAST_EXPORT.lead 秒、結尾留 tail 秒讓殘響收尾(即時匯出是 0.4 / 0.6 秒) */
+const FAST_EXPORT = { lead: 0.4, tail: 1.2, audioBitrate: 192000, keyEverySec: 2, minSpeed: 1.5 };   // minSpeed:試編至少要幾倍速才用快速匯出
+// 取樣率跟著播放用的 AudioContext(殘響等 ConvolverNode 的 IR 是照它解碼的,離線 context 取樣率不同會出錯);通常 48000 或 44100
+function fastExportSampleRate(){ return (audioCtx && audioCtx.sampleRate) || 48000; }
+const MUXER_URLS = {
+  mp4: ["vendor/mp4-muxer.js", "https://cdn.jsdelivr.net/npm/mp4-muxer@5.2.2/build/mp4-muxer.js"],
+  webm: ["vendor/webm-muxer.js", "https://cdn.jsdelivr.net/npm/webm-muxer@5.1.4/build/webm-muxer.js"],
+};
+const muxerPromises = {};
+function loadMuxer(kind){
+  const g = kind === "mp4" ? "Mp4Muxer" : "WebMMuxer";
+  if (window[g]) return Promise.resolve(window[g]);
+  if (!muxerPromises[kind]) muxerPromises[kind] = new Promise((resolve, reject) => {
+    const tryLoad = i => {
+      if (i >= MUXER_URLS[kind].length) { muxerPromises[kind] = null; reject(new Error("muxer")); return; }
+      const s = document.createElement("script");
+      s.src = MUXER_URLS[kind][i];
+      s.onload = () => window[g] ? resolve(window[g]) : tryLoad(i + 1);
+      s.onerror = () => { s.remove(); tryLoad(i + 1); };
+      document.head.appendChild(s);
+    };
+    tryLoad(0);
+  });
+  return muxerPromises[kind];
+}
+// 找一組這台機器能編碼的格式:先 MP4(H.264 + AAC),再 WebM(VP9/VP8 + Opus);都不行回傳 null(改用即時錄影)
+async function pickFastExportFormat(W, H, fps, bitrate){
+  if (window.FAST_EXPORT_DISABLE) return null;            // 測試工具:強制走即時錄影
+  if (window.FAST_EXPORT_FORCE) return window.FAST_EXPORT_FORCE;   // 測試工具:指定格式(例如 MP4 容器 + VP9/Opus,測 mp4-muxer)
+  if (typeof VideoEncoder === "undefined" || typeof AudioEncoder === "undefined" || typeof VideoFrame === "undefined"
+    || typeof AudioData === "undefined" || typeof OfflineAudioContext === "undefined" || typeof AudioWorkletNode === "undefined") return null;
+  const sr = fastExportSampleRate();
+  const vOk = async codec => { try { const r = await VideoEncoder.isConfigSupported({ codec, width: W, height: H, bitrate, framerate: fps, ...(codec.startsWith("avc") ? { avc: { format: "avc" } } : {}) }); return r && r.supported; } catch (e) { return false; } };
+  const aOk = async codec => { try { const r = await AudioEncoder.isConfigSupported({ codec, sampleRate: sr, numberOfChannels: 2, bitrate: FAST_EXPORT.audioBitrate }); return r && r.supported; } catch (e) { return false; } };
+  if (await aOk("mp4a.40.2"))
+    for (const v of ["avc1.640028", "avc1.4d0028", "avc1.42e028"]) if (await vOk(v)) return { container: "mp4", vCodec: v, aCodec: "mp4a.40.2", muxV: "avc", muxA: "aac", mime: "video/mp4;codecs=avc1,mp4a.40.2", ext: "mp4" };
+  if (await aOk("opus"))
+    for (const [v, mv] of [["vp09.00.40.08", "V_VP9"], ["vp8", "V_VP8"]]) if (await vOk(v)) return { container: "webm", vCodec: v, aCodec: "opus", muxV: mv, muxA: "A_OPUS", mime: "video/webm;codecs=" + (mv === "V_VP9" ? "vp9" : "vp8") + ",opus", ext: "webm" };
+  return null;
+}
+// 母帶限幅器在主執行緒跑(同一份 AudioWorkletProcessor 程式碼,補上 port/sampleRate/registerProcessor 的殼),直接改寫 L/R
+function runLimiterOffline(L, R, sampleRate, opts, onProgress){
+  let Cls = null;
+  const shim = new Function("sampleRate", "src",
+    "class AudioWorkletProcessor { constructor(){ this.port = { postMessage(){}, set onmessage(f){} }; } }\n" +
+    "let found = {}; function registerProcessor(name, c){ found[name] = c; }\n" + "eval(src);\nreturn found;");
+  Cls = shim(sampleRate, MASTER_LIMITER_SRC)["ss-master-limiter"];
+  const lim = new Cls({ processorOptions: opts });
+  const N = L.length, B = 128, out = [new Float32Array(B), new Float32Array(B)];
+  return new Promise(resolve => {
+    let i = 0;
+    const step = () => {
+      const stop = Math.min(N, i + sampleRate * 4);   // 每次處理 4 秒,中間讓畫面更新
+      for (; i < stop; i += B) {
+        const n = Math.min(B, N - i);
+        const inp = [[L.subarray(i, i + n), R.subarray(i, i + n)]];
+        const o = n === B ? out : [new Float32Array(n), new Float32Array(n)];
+        lim.process(inp, [o]);
+        L.set(o[0], i); R.set(o[1], i);
+      }
+      if (onProgress) onProgress(i / N);
+      if (i < N) setTimeout(step, 0); else resolve();
+    };
+    step();
+  });
+}
+// 整段聲音:離線合成(母帶限幅器之前)+ 響度分析 → 增益 → 限幅器;回傳 [L, R](已經是最後要放進影片的聲音)
+async function renderExportAudioFast(rangeStart, rangeEnd, onProgress){
+  const sr = fastExportSampleRate(), lead = FAST_EXPORT.lead, tail = FAST_EXPORT.tail;
+  const len = Math.ceil((rangeEnd - rangeStart + lead + tail) * sr);
+  const saved = {};
+  for (const k of EXPORT_AUDIO_KEEP) saved[k] = eval(k);
+  const restore = () => { for (const k of EXPORT_AUDIO_KEEP) eval(k + " = saved['" + k + "']"); };
+  let buf, data;
+  try {
+    audioCtx = new OfflineAudioContext(2, len, sr);
+    initAudioGraph();
+    if (!await masterReady) throw new Error("limiter");
+    const tap = new AudioWorkletNode(audioCtx, "ss-loudness-tap", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1], channelCount: 2, channelCountMode: "explicit" });
+    const mute = audioCtx.createGain(); mute.gain.value = 0;
+    masterOut.disconnect();
+    masterBus.connect(tap); tap.connect(mute); mute.connect(audioCtx.destination);
+    masterBus.connect(audioCtx.destination);   // 限幅器之前的立體聲,後面在主執行緒乘增益、過限幅器
+    scheduled = []; ringingOpenHat = null; ringingCymbals = {}; pianoResetVoices();
+    startCtxTime = lead;
+    computeDrumPerformance();
+    scheduleExportRange(rangeStart, rangeEnd, useCalib());
+    const ctx = audioCtx, total = len / sr;
+    for (let k = 1; k < 20; k++) {
+      const at = Math.floor(total * k / 20 * sr / 128) * 128 / sr;
+      ctx.suspend(at).then(() => { if (onProgress) onProgress(k / 20 * 0.85); ctx.resume(); }).catch(() => {});
+    }
+    buf = await ctx.startRendering();
+    data = await new Promise(res => { tap.port.onmessage = e => res(e.data); tap.port.postMessage("dump"); });
+  } finally { restore(); }
+  const drums = exportHasDrums();
+  const g = solveExportGain(data.E, data.P, data.block, drums ? EXPORT_DRUM_RELEASE : 0.15);
+  const L = buf.getChannelData(0), R = buf.getChannelData(1);
+  if (g !== 1) for (let i = 0; i < L.length; i++) { L[i] *= g; R[i] *= g; }
+  await runLimiterOffline(L, R, sr, { ceilingDb: MASTER.ceilingDb, lookahead: MASTER.lookahead,
+    release: drums ? EXPORT_DRUM_RELEASE : MASTER.release, releaseSlow: drums ? EXPORT_DRUM_RELEASE : MASTER.releaseSlow },
+    f => onProgress && onProgress(0.85 + 0.15 * f));
+  return [L, R];
+}
+// 匯出中的說明文字:快速匯出不用等樂曲播完,切出去會中斷(不是「卡住」)
+function setExportOverlayMode(fast){
+  setPhrasedText($("exportWarnBodyEl"), T(fast ? "exportWarnBodyFast" : "exportWarnBody"));
+  setPhrasedText($("exportInfoEl"), T(fast ? "exportInfoPFast" : "exportInfoP"));
+}
+/* 快速匯出。回傳 true = 已經處理完(成功、取消或在產生影片後失敗);false = 這台機器不支援或還沒開始就失敗,改用即時錄影 */
+async function fastExportVideo(cfg){
+  const fmtSel = await pickFastExportFormat(cfg.W, cfg.H, cfg.fps || 30, cfg.bitrate);
+  if (!fmtSel) return false;
+  let Muxer;
+  try { Muxer = await loadMuxer(fmtSel.container); } catch (e) { return false; }
+  setExportOverlayMode(true);
+  const fps = cfg.fps || 30, sr = fastExportSampleRate();
+  const rangeStart = cfg.startSec != null ? Math.max(0, cfg.startSec) : 0;
+  const rangeEnd = cfg.endSec != null ? Math.min(totalSec(), cfg.endSec) : totalSec();
+  const total = rangeEnd - rangeStart, lead = FAST_EXPORT.lead, dur = lead + total + FAST_EXPORT.tail;
+  const setPct = (key, p) => { const pct = Math.min(100, Math.round(p * 100)); $("exportOverlayTitle").textContent = T(key, { pct }); $("exportFill").style.width = pct + "%"; };
+  // 1) 畫面準備(跟即時匯出同一套版面)
+  const layout = computeExportLayout(cfg);
+  let tiles = null, scale = 1, pg = null;
+  try {
+    if (cfg.page) pg = await buildPageScore(cfg, layout);
+    else ({ tiles, scale } = await rasterizeScore(layout.SCORE_H));
+  } catch (e) { console.warn(e); setExportOverlayMode(false); return false; }
+  const cv = document.createElement("canvas");
+  cv.width = cfg.W; cv.height = cfg.H;
+  const ctx = cv.getContext("2d", { alpha: false });
+  const drawAt = async songSec => {
+    if (pg) {
+      const pos = pagePosAt(pg, songSec);
+      if (pos && !pg.canvases.has(pos.sys.page)) await ensurePageCanvas(pg, pos.sys.page);
+      drawExportPageFrame(ctx, layout, cfg, pg, songSec, useCalib());
+    } else drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, useCalib());
+  };
+  // 2) 試編半秒:沒有硬體編碼器的機器(軟體編 1080p)可能比樂曲還慢,那就改用即時錄影(至少跟樂曲一樣長)
+  try {
+    const n = Math.round(fps / 2), t0 = performance.now();
+    let got = 0, err = null;
+    const probe = new VideoEncoder({ output: () => got++, error: e => { err = e; } });
+    probe.configure({ codec: fmtSel.vCodec, width: cfg.W, height: cfg.H, bitrate: cfg.bitrate, framerate: fps, ...(fmtSel.container === "mp4" ? { avc: { format: "avc" } } : {}) });
+    for (let f = 0; f < n; f++) {
+      await drawAt(rangeStart + f / fps);
+      const fr = new VideoFrame(cv, { timestamp: Math.round(f * 1e6 / fps) });
+      probe.encode(fr, { keyFrame: f === 0 }); fr.close();
+    }
+    await probe.flush(); probe.close();
+    const speed = (n / fps) / ((performance.now() - t0) / 1000);   // 幾倍速
+    if (err || got < n || (speed < FAST_EXPORT.minSpeed && !window.FAST_EXPORT_FORCE)) { console.info("快速匯出編碼速度 " + speed.toFixed(2) + " 倍,改用即時錄影"); setExportOverlayMode(false); return false; }
+  } catch (e) { console.warn(e); setExportOverlayMode(false); return false; }
+  computeDrumPerformance();   // 試編畫了鼓組面板,重算一次讓正式匯出從頭開始
+  // 3) 聲音
+  setPct("exportAnalyzingPct", 0);
+  $("exportOverlaySub").textContent = T("exportAnalyzingSub");
+  $("exportTime").textContent = "";
+  let L, R;
+  try { [L, R] = await renderExportAudioFast(rangeStart, rangeEnd, p => setPct("exportAnalyzingPct", p)); }
+  catch (e) { console.warn("快速匯出的聲音處理失敗,改用即時錄影:", e); setExportOverlayMode(false); return false; }
+  if (exportCancelled) { setStatus(T("exportCancelledStatus")); return true; }
+  setPct("exportRenderingPct", 0);
+  $("exportOverlaySub").textContent = "";
+  kbScanCursor = 0; kbScanLastSec = -1;
+  // 3) 編碼器與封裝
+  const target = new Muxer.ArrayBufferTarget();
+  const muxer = new Muxer.Muxer(fmtSel.container === "mp4"
+    ? { target, video: { codec: fmtSel.muxV, width: cfg.W, height: cfg.H, frameRate: fps }, audio: { codec: fmtSel.muxA, numberOfChannels: 2, sampleRate: sr }, fastStart: "in-memory", firstTimestampBehavior: "offset" }
+    : { target, video: { codec: fmtSel.muxV, width: cfg.W, height: cfg.H, frameRate: fps }, audio: { codec: fmtSel.muxA, numberOfChannels: 2, sampleRate: sr }, firstTimestampBehavior: "offset" });
+  let encErr = null;
+  const venc = new VideoEncoder({ output: (c, m) => muxer.addVideoChunk(c, m), error: e => { encErr = e; } });
+  venc.configure({ codec: fmtSel.vCodec, width: cfg.W, height: cfg.H, bitrate: cfg.bitrate, framerate: fps, ...(fmtSel.container === "mp4" ? { avc: { format: "avc" } } : {}) });
+  const aenc = new AudioEncoder({ output: (c, m) => muxer.addAudioChunk(c, m), error: e => { encErr = e; } });
+  aenc.configure({ codec: fmtSel.aCodec, sampleRate: sr, numberOfChannels: 2, bitrate: FAST_EXPORT.audioBitrate });
+  const closeAll = () => { try { venc.close(); } catch (e) {} try { aenc.close(); } catch (e) {} };
+  try {
+    // 聲音一次送完(編碼很快);每段 0.1 秒
+    const CH = sr / 10, nAud = L.length;
+    for (let i = 0; i < nAud; i += CH) {
+      const n = Math.min(CH, nAud - i), planar = new Float32Array(n * 2);
+      planar.set(L.subarray(i, i + n), 0); planar.set(R.subarray(i, i + n), n);
+      const ad = new AudioData({ format: "f32-planar", sampleRate: sr, numberOfFrames: n, numberOfChannels: 2, timestamp: Math.round(i / sr * 1e6), data: planar });
+      aenc.encode(ad); ad.close();
+    }
+    L = R = null;
+    const nFrames = Math.ceil(dur * fps), keyEvery = Math.round(fps * FAST_EXPORT.keyEverySec);
+    let lastUi = 0;
+    for (let f = 0; f < nFrames; f++) {
+      if (exportCancelled) break;
+      if (encErr) throw encErr;
+      const t = f / fps, songSec = Math.min(Math.max(t - lead, 0), total) + rangeStart;
+      await drawAt(songSec);
+      const frame = new VideoFrame(cv, { timestamp: Math.round(t * 1e6), duration: Math.round(1e6 / fps) });
+      venc.encode(frame, { keyFrame: f % keyEvery === 0 });
+      frame.close();
+      // 編碼器跟不上時等一下(不然記憶體會一直堆);每 0.1 秒更新一次進度並讓畫面喘口氣(取消按鈕才按得到)
+      while (venc.encodeQueueSize > 6) await new Promise(r => setTimeout(r, 2));
+      const now = performance.now();
+      if (now - lastUi > 100) {
+        lastUi = now;
+        setPct("exportRenderingPct", (f + 1) / nFrames);
+        $("exportTime").textContent = fmt(Math.max(0, t - lead)) + " / " + fmt(total);
+        await new Promise(r => setTimeout(r, 0));
+      }
+    }
+    if (exportCancelled) { closeAll(); setStatus(T("exportCancelledStatus")); return true; }
+    await venc.flush(); await aenc.flush();
+    if (encErr) throw encErr;
+    closeAll();
+    muxer.finalize();
+  } catch (e) {
+    closeAll();
+    console.warn("快速匯出失敗,改用即時錄影:", e);
+    setExportOverlayMode(false);
+    return false;
+  }
+  const blob = new Blob([target.buffer], { type: fmtSel.container === "mp4" ? "video/mp4" : "video/webm" });
+  const rangeTag = cfg.startSec != null ? "-" + fmt(rangeStart).replace(":","m") + "s-" + fmt(rangeEnd).replace(":","m") + "s" : "";
+  const fileName = "scrollscore-" + cfg.W + "x" + cfg.H + rangeTag + "." + fmtSel.ext;
+  setStatus(T("exportComplete", { mb: (blob.size/1048576).toFixed(1), fmt: mimeLabel(fmtSel.mime) }));
+  deliverExportedVideo(blob, fileName, fmtSel.mime);
+  return true;
+}
 async function exportVideo(cfg){
   if (!events.length || exporting) return;
   exporting = true; exportCancelled = false;
@@ -10172,122 +10358,126 @@ async function exportVideo(cfg){
   $("exportOverlay").classList.add("show");
   let aDest = null;
   try {
-    // 響度標準化:先在背景算一遍要匯出的區間,求出讓成品 −14 LUFS 的增益(只影響匯出的影片)
-    {
-      const rs = cfg.startSec != null ? Math.max(0, cfg.startSec) : 0, re = cfg.endSec != null ? Math.min(totalSec(), cfg.endSec) : totalSec();
-      $("exportOverlayTitle").textContent = T("exportAnalyzingPct", { pct: 0 });
-      $("exportOverlaySub").textContent = T("exportAnalyzingSub");
+    // 先試快速匯出(WebCodecs,不用照時間跑);不支援或還沒產生影片前就失敗,才往下走原本的即時錄影
+    if (!(await fastExportVideo(cfg))) {
+      setExportOverlayMode(false);
+      // 響度標準化:先在背景算一遍要匯出的區間,求出讓成品 −14 LUFS 的增益(只影響匯出的影片)
+      {
+        const rs = cfg.startSec != null ? Math.max(0, cfg.startSec) : 0, re = cfg.endSec != null ? Math.min(totalSec(), cfg.endSec) : totalSec();
+        $("exportOverlayTitle").textContent = T("exportAnalyzingPct", { pct: 0 });
+        $("exportOverlaySub").textContent = T("exportAnalyzingSub");
+        $("exportFill").style.width = "0%";
+        const g = await measureExportGain(rs, re, pct => {
+          $("exportOverlayTitle").textContent = T("exportAnalyzingPct", { pct });
+          $("exportFill").style.width = pct + "%";
+        });
+        masterBus.gain.value = g || 1;
+        if (g && exportHasDrums() && masterLimiterNode) masterLimiterNode.port.postMessage({ release: EXPORT_DRUM_RELEASE });
+      }
+      if (exportCancelled) throw new Error("cancelled");
+      $("exportOverlayTitle").textContent = T("exportRenderingPct", { pct: 0 });
+      $("exportOverlaySub").textContent = "";
       $("exportFill").style.width = "0%";
-      const g = await measureExportGain(rs, re, pct => {
-        $("exportOverlayTitle").textContent = T("exportAnalyzingPct", { pct });
-        $("exportFill").style.width = pct + "%";
+      const layout = computeExportLayout(cfg);
+      const { W, H, SCORE_H, kbH, topY, plX } = layout;
+      let tiles = null, scale = 1, pg = null;
+      if (cfg.page) {   // 翻頁式:先把開頭那一頁與下一頁準備好
+        pg = await buildPageScore(cfg, layout);
+        const pos = pagePosAt(pg, cfg.startSec != null ? Math.max(0, cfg.startSec) : 0), p0 = pos ? pos.sys.page : 0;
+        await ensurePageCanvas(pg, p0);
+        if (p0 + 1 < pg.pages.length) await ensurePageCanvas(pg, p0 + 1);
+      } else ({ tiles, scale } = await rasterizeScore(SCORE_H));
+
+      const cv = document.createElement("canvas");
+      cv.width = W; cv.height = H;
+      // alpha:false —— 匯出畫面每一格都會先用不透明底色填滿,根本用不到透明通道。
+      // 關掉之後瀏覽器可以省去整張 1920×1080 的 alpha 合成,擷取與編碼路徑都比較輕
+      const ctx = cv.getContext("2d", { alpha: false });
+      // captureStream(0):不讓瀏覽器自己用計時器去「取樣」畫布,改成我們畫完一格就送一格。
+      // 用固定 fps 的話,瀏覽器的擷取計時器跟我們的繪製迴圈各跑各的,會重複擷取同一張畫面,
+      // 白白多做一份 1080p 的畫面複製與編碼工作。
+      // 但 requestFrame() 不是每個瀏覽器都有,而且 captureStream(0) 少了它就一格都不會產生
+      // (會匯出一個沒有畫面的檔案),所以先確認拿得到這個方法,拿不到就退回原本的固定 fps 擷取
+      let vStream = cv.captureStream(0);
+      let vTrack = vStream.getVideoTracks()[0];
+      let pushFrame;
+      if (vTrack && typeof vTrack.requestFrame === "function") {
+        pushFrame = () => vTrack.requestFrame();
+      } else {
+        vStream = cv.captureStream(cfg.fps || 30);
+        pushFrame = () => {};
+      }
+      aDest = audioCtx.createMediaStreamDestination();
+      masterOut.connect(aDest); // 從輸出上限之後取音,匯出的影片才跟現場聽到的一樣不會破音
+      // 匯出時喇叭靜音(使用者反映,2026-10):即時編碼影片很吃 CPU,音訊來不及送到喇叭時喇叭會爆音、有雜聲,
+      // 但錄進影片的每一段聲音都是完整算好的(影片沒有雜聲)。靜音只關喇叭,影片的聲音完全一樣
+      if (monitorOut) monitorOut.gain.setValueAtTime(0, audioCtx.currentTime);
+      const stream = new MediaStream([
+        ...vStream.getVideoTracks(),
+        ...aDest.stream.getAudioTracks()
+      ]);
+      const mime = pickMime();
+      const rec = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: cfg.bitrate } : undefined);
+      const chunks = [];
+      rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+      const stopped = new Promise(res => rec.onstop = res);
+      rec.start(3000); // 每3秒分段一次:避免資料完全不釋放而累積過多記憶體,又不會像每秒切一次那麼頻繁
+
+      const calib = useCalib();
+      computeDrumPerformance();
+      pianoResetVoices();
+      // 匯出區間(手動輸入的開始/結束時間);沒指定就是整首曲子,跟以前行為一樣
+      const rangeStart = cfg.startSec != null ? Math.max(0, cfg.startSec) : 0;
+      const rangeEnd = cfg.endSec != null ? Math.min(totalSec(), cfg.endSec) : totalSec();
+
+      const LEAD = 0.4, TAIL = 0.6;
+      const t0 = audioCtx.currentTime + 0.1;
+      startCtxTime = t0 + LEAD;
+      scheduled = [];
+      scheduleExportRange(rangeStart, rangeEnd, calib);
+      const total = rangeEnd - rangeStart;
+
+      // 進度文字與進度條每秒只會真的變化一兩次,但繪製迴圈是每秒 60 次。原本每一格都寫這三個
+      // DOM,等於每秒觸發 180 次樣式重算與重繪。匯出時 CPU 已經被即時編碼吃滿,這些多餘的重繪
+      // 會跟音訊執行緒搶資源,是造成合成過程「聲音斷斷續續」的其中一個來源。
+      // 改成只有顯示出來的值真的改變(整數百分比、整秒)時才寫入
+      let lastPct = -1, lastTimeText = "";
+      await new Promise(resolve => {
+        const draw = () => {
+          if (exportCancelled) { resolve(); return; }
+          const el = audioCtx.currentTime - t0;
+          const sec = Math.min(Math.max(el - LEAD, 0), total);
+          const songSec = sec + rangeStart; // 匯出片段內的相對時間 → 換算回整首曲子的實際位置,拿來對應樂譜捲動/鍵盤高亮
+          if (pg) drawExportPageFrame(ctx, layout, cfg, pg, songSec, calib);
+          else drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib);
+          pushFrame();
+          const timeText = fmt(sec) + " / " + fmt(total);
+          if (timeText !== lastTimeText) { lastTimeText = timeText; $("exportTime").textContent = timeText; }
+          const exportPct = Math.min(100, Math.round(sec / total * 100));
+          if (exportPct !== lastPct) {
+            lastPct = exportPct;
+            $("exportFill").style.width = exportPct + "%";
+            $("exportOverlayTitle").textContent = T("exportRenderingPct", { pct: exportPct });
+          }
+          if (el >= LEAD + total + TAIL) { resolve(); return; }
+          scheduleFrame(draw, cfg.fps || 30);
+        };
+        draw();
       });
-      masterBus.gain.value = g || 1;
-      if (g && exportHasDrums() && masterLimiterNode) masterLimiterNode.port.postMessage({ release: EXPORT_DRUM_RELEASE });
-    }
-    if (exportCancelled) throw new Error("cancelled");
-    $("exportOverlayTitle").textContent = T("exportRenderingPct", { pct: 0 });
-    $("exportOverlaySub").textContent = "";
-    $("exportFill").style.width = "0%";
-    const layout = computeExportLayout(cfg);
-    const { W, H, SCORE_H, kbH, topY, plX } = layout;
-    let tiles = null, scale = 1, pg = null;
-    if (cfg.page) {   // 翻頁式:先把開頭那一頁與下一頁準備好
-      pg = await buildPageScore(cfg, layout);
-      const pos = pagePosAt(pg, cfg.startSec != null ? Math.max(0, cfg.startSec) : 0), p0 = pos ? pos.sys.page : 0;
-      await ensurePageCanvas(pg, p0);
-      if (p0 + 1 < pg.pages.length) await ensurePageCanvas(pg, p0 + 1);
-    } else ({ tiles, scale } = await rasterizeScore(SCORE_H));
 
-    const cv = document.createElement("canvas");
-    cv.width = W; cv.height = H;
-    // alpha:false —— 匯出畫面每一格都會先用不透明底色填滿,根本用不到透明通道。
-    // 關掉之後瀏覽器可以省去整張 1920×1080 的 alpha 合成,擷取與編碼路徑都比較輕
-    const ctx = cv.getContext("2d", { alpha: false });
-    // captureStream(0):不讓瀏覽器自己用計時器去「取樣」畫布,改成我們畫完一格就送一格。
-    // 用固定 fps 的話,瀏覽器的擷取計時器跟我們的繪製迴圈各跑各的,會重複擷取同一張畫面,
-    // 白白多做一份 1080p 的畫面複製與編碼工作。
-    // 但 requestFrame() 不是每個瀏覽器都有,而且 captureStream(0) 少了它就一格都不會產生
-    // (會匯出一個沒有畫面的檔案),所以先確認拿得到這個方法,拿不到就退回原本的固定 fps 擷取
-    let vStream = cv.captureStream(0);
-    let vTrack = vStream.getVideoTracks()[0];
-    let pushFrame;
-    if (vTrack && typeof vTrack.requestFrame === "function") {
-      pushFrame = () => vTrack.requestFrame();
-    } else {
-      vStream = cv.captureStream(cfg.fps || 30);
-      pushFrame = () => {};
-    }
-    aDest = audioCtx.createMediaStreamDestination();
-    masterOut.connect(aDest); // 從輸出上限之後取音,匯出的影片才跟現場聽到的一樣不會破音
-    // 匯出時喇叭靜音(使用者反映,2026-10):即時編碼影片很吃 CPU,音訊來不及送到喇叭時喇叭會爆音、有雜聲,
-    // 但錄進影片的每一段聲音都是完整算好的(影片沒有雜聲)。靜音只關喇叭,影片的聲音完全一樣
-    if (monitorOut) monitorOut.gain.setValueAtTime(0, audioCtx.currentTime);
-    const stream = new MediaStream([
-      ...vStream.getVideoTracks(),
-      ...aDest.stream.getAudioTracks()
-    ]);
-    const mime = pickMime();
-    const rec = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: cfg.bitrate } : undefined);
-    const chunks = [];
-    rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
-    const stopped = new Promise(res => rec.onstop = res);
-    rec.start(3000); // 每3秒分段一次:避免資料完全不釋放而累積過多記憶體,又不會像每秒切一次那麼頻繁
-
-    const calib = useCalib();
-    computeDrumPerformance();
-    pianoResetVoices();
-    // 匯出區間(手動輸入的開始/結束時間);沒指定就是整首曲子,跟以前行為一樣
-    const rangeStart = cfg.startSec != null ? Math.max(0, cfg.startSec) : 0;
-    const rangeEnd = cfg.endSec != null ? Math.min(totalSec(), cfg.endSec) : totalSec();
-
-    const LEAD = 0.4, TAIL = 0.6;
-    const t0 = audioCtx.currentTime + 0.1;
-    startCtxTime = t0 + LEAD;
-    scheduled = [];
-    scheduleExportRange(rangeStart, rangeEnd, calib);
-    const total = rangeEnd - rangeStart;
-
-    // 進度文字與進度條每秒只會真的變化一兩次,但繪製迴圈是每秒 60 次。原本每一格都寫這三個
-    // DOM,等於每秒觸發 180 次樣式重算與重繪。匯出時 CPU 已經被即時編碼吃滿,這些多餘的重繪
-    // 會跟音訊執行緒搶資源,是造成合成過程「聲音斷斷續續」的其中一個來源。
-    // 改成只有顯示出來的值真的改變(整數百分比、整秒)時才寫入
-    let lastPct = -1, lastTimeText = "";
-    await new Promise(resolve => {
-      const draw = () => {
-        if (exportCancelled) { resolve(); return; }
-        const el = audioCtx.currentTime - t0;
-        const sec = Math.min(Math.max(el - LEAD, 0), total);
-        const songSec = sec + rangeStart; // 匯出片段內的相對時間 → 換算回整首曲子的實際位置,拿來對應樂譜捲動/鍵盤高亮
-        if (pg) drawExportPageFrame(ctx, layout, cfg, pg, songSec, calib);
-        else drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib);
-        pushFrame();
-        const timeText = fmt(sec) + " / " + fmt(total);
-        if (timeText !== lastTimeText) { lastTimeText = timeText; $("exportTime").textContent = timeText; }
-        const exportPct = Math.min(100, Math.round(sec / total * 100));
-        if (exportPct !== lastPct) {
-          lastPct = exportPct;
-          $("exportFill").style.width = exportPct + "%";
-          $("exportOverlayTitle").textContent = T("exportRenderingPct", { pct: exportPct });
-        }
-        if (el >= LEAD + total + TAIL) { resolve(); return; }
-        scheduleFrame(draw, cfg.fps || 30);
-      };
-      draw();
-    });
-
-    stopAudioOnly();
-    rec.stop();
-    await stopped;
-    if (!exportCancelled) {
-      const blob = new Blob(chunks, { type: mime || "video/webm" });
-      const ext = mimeExt(mime);
-      const rangeTag = cfg.startSec != null ? "-" + fmt(rangeStart).replace(":","m") + "s-" + fmt(rangeEnd).replace(":","m") + "s" : "";
-      const fileName = "scrollscore-" + W + "x" + H + rangeTag + "." + ext;
-      setStatus(T("exportComplete", { mb: (blob.size/1048576).toFixed(1), fmt: mimeLabel(mime) }));
-      deliverExportedVideo(blob, fileName, mime);
-    } else {
-      setStatus(T("exportCancelledStatus"));
+      stopAudioOnly();
+      rec.stop();
+      await stopped;
+      if (!exportCancelled) {
+        const blob = new Blob(chunks, { type: mime || "video/webm" });
+        const ext = mimeExt(mime);
+        const rangeTag = cfg.startSec != null ? "-" + fmt(rangeStart).replace(":","m") + "s-" + fmt(rangeEnd).replace(":","m") + "s" : "";
+        const fileName = "scrollscore-" + W + "x" + H + rangeTag + "." + ext;
+        setStatus(T("exportComplete", { mb: (blob.size/1048576).toFixed(1), fmt: mimeLabel(mime) }));
+        deliverExportedVideo(blob, fileName, mime);
+      } else {
+        setStatus(T("exportCancelledStatus"));
+      }
     }
   } catch (err) {
     setStatus(exportCancelled ? T("exportCancelledStatus") : T("exportFailed", { msg: err.message || err }));
