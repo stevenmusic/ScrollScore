@@ -69,3 +69,5 @@ App 沒有帳號、分析、廣告或追蹤功能。匯入的樂譜和匯出的�
 - [ ] 隱私權政策、支援網址都打得開（push 到 main 後確認 GitHub Pages 已更新）
 - [ ] App 圖示不是 Capacitor 預設圖示（已換成 `assets/icon-1024.png`）
 - [ ] 版本號：第一次送審用 1.0 (1)
+- [ ] 上傳後如果收到 ITMS-91053（缺少必要理由 API 宣告）的信，照信上列的 API 補進 `ios/App/App/PrivacyInfo.xcprivacy`
+- [ ] 有勾選 iPad（目前 TARGETED_DEVICE_FAMILY = iPhone + iPad），要準備 iPad 13 吋截圖；不想做 iPad 版就在 Xcode 把 Supported Destinations 的 iPad 拿掉

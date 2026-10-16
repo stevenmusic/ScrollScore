@@ -99,6 +99,7 @@
 
 ## 上架 App Store(2026-10)
 - 包裝:app/(Capacitor 8.5.3,說明見 app/README.md,App Store Connect 填寫內容見 app/APP_STORE.md)。npm run build(build-www.mjs)把 index.html、privacy.html、support.html、vendor/、samples/、piano/、drums/ 複製到 app/www(不放 guitar/、tools/、build/ 腳本,約 226MB);ios/ 是 cap add ios 產生的專案,Info.plist 加了 NSPhotoLibraryAddUsageDescription(存影片到相簿,沒有會當掉)、ITSAppUsesNonExemptEncryption false、arm64;AppDelegate 設 AVAudioSession .playback(靜音開關)。編譯送審要在 Mac 上用 Xcode
+- 隱私權清單(2026-10):ios/App/App/PrivacyInfo.xcprivacy(已加進 Xcode 專案的 Resources)= 不追蹤、不收集資料、FileTimestamp C617.1。Capacitor 本身有附,但 @capacitor/filesystem 8.1.5(stat 會讀檔案建立/修改時間)和 @capacitor-community/media 9.1.0 都沒附,Apple 掃到必要理由 API 沒宣告會退件(ITMS-91053)。新增原生外掛要檢查它有沒有附、用到哪些必要理由 API
 - App 圖示:使用者畫的 logo(app/assets/logo-original.png),make_icon.py 把四個角的白色補成背景漸層、裁成 1024 RGB(iOS 自己裁圓角,圖不能先畫圓角/白邊);啟動畫面 splash.svg
 - window.IN_NATIVE_APP(Capacitor 原生環境):不載入 Google Fonts(用系統字型,隱私權政策寫 App 版不連外部字型)、匯出標題不抓字型
 - 程式庫先讀本機 vendor/(OSMD 2.0.0、JSZip 3.10.1、alphaTab 1.8.4,跟 npm 同一份,附授權檔),讀不到才退回 jsDelivr;App 離線可用、不從網路下載程式碼(審核規則 2.5.2)。升級程式庫要同時換 vendor/ 檔案與 CDN 網址
