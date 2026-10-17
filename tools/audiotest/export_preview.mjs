@@ -1,5 +1,5 @@
 // 匯出影片版面預覽:用跟實際匯出同一套 computeExportLayout/drawExportFrame 畫出橫式/直式/方形 × 有無樂器面板的畫面。
-// node export_preview.mjs <樂譜> <輸出目錄> [秒數=8] [piano|drum]
+// node export_preview.mjs <樂譜> <輸出目錄> [秒數=8] [piano|drum]   (環境變數 CHANNEL=頻道名稱 TITLE=標題 SUB=副標題 可填浮水印)
 import { chromium } from "playwright";
 import http from "node:http"; import fs from "node:fs"; import path from "node:path";
 import { createRequire } from "node:module";
@@ -20,18 +20,19 @@ await page.setInputFiles("#fileInput", path.resolve(score));
 await page.waitForFunction(() => typeof events !== "undefined" && events.length > 0, null, { timeout: 120000 });
 await page.waitForTimeout(1500);
 for (const [name, W, H, sh] of [["landscape", 1920, 1080, 440], ["portrait", 1080, 1920, await page.evaluate(() => isDrumScore ? 380 : EXPORT_PORTRAIT_SCORE_H)], ["square", 1080, 1080, await page.evaluate(() => isDrumScore ? 400 : EXPORT_SQUARE_SCORE_H)]]) for (const kb of [true, false]) {
-  const data = await page.evaluate(async ({ W, H, sh, kb, sec }) => {
+  const data = await page.evaluate(async ({ W, H, sh, kb, sec, wm }) => {
     // 匯出畫面(一頁式):設定格式與樂器面板、跳到指定秒數,等預覽畫好
     seekTo(sec);
     exportPrefs.format = W === H ? "square" : H > W ? "portrait" : "landscape"; exportPrefs.panel = kb;
     openExportSheet();
+    if (wm.CHANNEL != null) { $("exportTitleInput").value = wm.TITLE || ""; $("exportSubtitleInput").value = wm.SUB || ""; $("exportWatermarkInput").value = wm.CHANNEL; refreshExportPreview(true); }
     await new Promise(r => setTimeout(r, 300));
     while ($("previewImg").parentElement.classList.contains("busy")) await new Promise(r => setTimeout(r, 100));
     const cfg = buildExportCfg();
     $("formatOverlay").classList.remove("show");
     const L = computeExportLayout(cfg);
     return { src: $("previewImg").src, L };
-  }, { W, H, sh, kb, sec: +(secArg || 8) });
+  }, { W, H, sh, kb, sec: +(secArg || 8), wm: { CHANNEL: process.env.CHANNEL, TITLE: process.env.TITLE, SUB: process.env.SUB } });
   fs.writeFileSync(`${out}/exp_${name}_${kb ? "kb" : "score"}.png`, Buffer.from(data.src.split(",")[1], "base64"));
   console.log(name, kb ? "kb" : "score", JSON.stringify(Object.fromEntries(Object.entries(data.L).map(([k, v]) => [k, Math.round(v)]))));
 }

@@ -9521,8 +9521,16 @@ function exportAutoScoreH(cfg, kind){
   sc = Math.max(sc, 7 / unit);
   const panel = !cfg.includeKeyboard ? 0 : currentInstrument() === "drum" ? Math.min(cfg.W * EXPORT_KIT_MAX_W, cfg.H * 0.42, drumKitNaturalH(cfg.W))
     : computeKeyboardHeight(cfg.W, cfg.H * 0.03, cfg.H * 0.25);
-  const maxH = cfg.H - panel - cfg.H * 0.16;   // 標題區 + 上下留白
-  return Math.round(Math.max(120, Math.min(srcH * sc, maxH)));
+  const maxH = cfg.H - panel - cfg.H * 0.16 - exportChannelBand(cfg).h;   // 標題區 + 上下留白 + 頻道名稱那一條
+  let h = Math.round(Math.max(120, Math.min(srcH * sc, maxH)));
+  // 用實際版面驗算:標題區(minTopY)與面板高度(跟樂譜高度互相影響)算完,樂譜底部不能伸進頻道名稱那一條/面板
+  for (let k = 0; k < 4; k++) {
+    const L = computeExportLayout({ ...cfg, scoreH: h });
+    const over = Math.round(L.topY + h - ((cfg.includeKeyboard ? L.kbY : cfg.H) - L.channelBand));
+    if (over <= 0 || h <= 120) break;
+    h = Math.max(120, h - over);
+  }
+  return h;
 }
 // 鼓組面板高度上限(相對畫面寬):直式時以前面板會吃掉半個畫面(957px),樂譜被擠到最上面
 const EXPORT_KIT_MAX_W = 0.72;
@@ -10000,6 +10008,13 @@ document.addEventListener("visibilitychange", async () => {
 });
 
 /* 匯出畫面版面計算,匯出跟預覽共用同一套邏輯,確保預覽看到的就是實際匯出的樣子 */
+/* 頻道名稱(浮水印)的位置:鍵盤/鼓組面板上方(沒有面板就是畫面底部)固定留一條,樂譜不會擠進來。
+   2026-10 使用者截圖:樂譜照音符大小放大後,樂譜下緣幾乎貼到鍵盤,以前「不壓到音符」的規則把文字往下推,反而疊到鍵盤上 */
+function exportChannelBand(cfg){
+  if (!cfg.watermarkEnabled || !cfg.channel) return { h: 0, font: 0 };
+  const font = Math.round(Math.min(cfg.W, cfg.H) * 0.032);
+  return { h: font + 2 * Math.round(font * 0.45), font };
+}
 function computeExportLayout(cfg){
   const W = cfg.W, H = cfg.H, SCORE_H = cfg.scoreH;
   const margin = H * 0.05;
@@ -10016,9 +10031,10 @@ function computeExportLayout(cfg){
   // 樂器面板永遠貼齊畫面最底部,不會因為靠上/置中/靠下而移動;
   // 靠上/置中/靠下只影響樂譜本身在「扣掉面板後剩餘的空間」裡怎麼擺放
   const scoreAreaH = H - kbH;
+  const band = exportChannelBand(cfg).h, freeH = scoreAreaH - band;   // 頻道名稱那一條不放樂譜
   const rawTopY = cfg.align === "top" ? margin
-    : cfg.align === "bottom" ? (scoreAreaH - SCORE_H - margin)
-    : (scoreAreaH - SCORE_H) / 2;
+    : cfg.align === "bottom" ? (freeH - SCORE_H - (band ? 0 : margin))
+    : (freeH - SCORE_H) / 2;
   // 標題/副標題是畫在畫面最上方的,跟樂譜的topY是各自獨立算的,原本完全沒有互相避讓——
   // 「靠上」對齊時margin只有5%畫面高,標題(尤其加上副標題)實際佔的高度常常比這個margin還高,
   // 導致標題文字底部蓋到樂譜開頭(高音域、加線多的譜尤其明顯)。這裡用跟drawExportFrame畫標題
@@ -10035,11 +10051,11 @@ function computeExportLayout(cfg){
       : wmPadY + subtitleFontSize;
   }
   const minTopY = titleBlockBottom > 0 ? titleBlockBottom + Math.round(H * 0.02) : 0;
-  let topY = Math.max(rawTopY, minTopY), kbY = H - kbH;
+  let topY = Math.max(Math.min(rawTopY, freeH - SCORE_H), minTopY), kbY = H - kbH;
   const plX = W * PLAYLINE_RATIO;
   // 翻頁式:一頁樂譜可以用的上下範圍(標題下面 ~ 樂器面板上面)
-  const pageTop = Math.max(minTopY, margin * 0.8), pageBottom = (cfg.includeKeyboard ? kbY : H) - margin * 0.6;
-  return { W, H, SCORE_H, margin, kbH, kbY, scoreAreaH, topY, plX, minTopY, pageTop, pageBottom };
+  const pageTop = Math.max(minTopY, margin * 0.8), pageBottom = (cfg.includeKeyboard ? kbY : H) - Math.max(margin * 0.6, band);
+  return { W, H, SCORE_H, margin, kbH, kbY, scoreAreaH, topY, plX, minTopY, pageTop, pageBottom, channelBand: band };
 }
 /* 匯出畫面的樂譜底色是亮米色(#FFFDF6),使用者挑的游標顏色如果偏亮(預設的淡金色就是),
    直接畫上去會幾乎看不見。這裡在亮度過高時等比壓暗到安全範圍,色相維持不變 */
@@ -10220,9 +10236,9 @@ function drawExportOverlays(ctx, layout, cfg, songSec, calib, scoreBottomY){
       // 直接貼鍵盤上緣定位會讓文字疊到樂譜最後幾行音符,所以要以樂譜下緣為準,
       // 並且不能低於鍵盤上緣(沒有鍵盤面板時就以畫面底部為準)
       const floorY = cfg.includeKeyboard ? layout.kbY : H;
-      // 正常情況(樂譜下緣離鍵盤還有空間)用貼近鍵盤上緣的位置;萬一樂譜靠太近鍵盤、
-      // 空間不夠,改成貼樂譜下緣往下推,寧可靠近鍵盤一點,也不要疊到樂譜本身
-      const channelY = Math.max(floorY - wmPadY, scoreBottomY + wmPadY + channelFontSize);
+      // 放在面板上方預留的那一條裡(exportChannelBand,版面已經讓開),垂直置中;不會再被推到鍵盤上
+      const cb = exportChannelBand(cfg);
+      const channelY = floorY - Math.round((cb.h - cb.font) / 2);
       ctx.fillText(cfg.channel, W - wmPadX, channelY);
     }
     ctx.restore();
