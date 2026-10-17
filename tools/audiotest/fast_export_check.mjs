@@ -27,6 +27,8 @@ const errs = [];
 page.on("pageerror", e => errs.push(e.message));
 page.on("console", m => { if (m.type() === "error" || m.type() === "warning" || m.type() === "info") errs.push(m.type() + ": " + m.text()); });
 // --noworklet:模擬 Safari(不用 AudioWorklet:播放用備援限幅器、匯出讀離線成品、響度/限幅在主執行緒),見 workletAudioOk
+if (flags.has("--noearly")) await page.addInitScript(() => { window.FAST_EARLY_AUDIO_OFF = true; });
+if (flags.has("--rectest")) await page.addInitScript(() => { window.__rectest = true; });
 if (flags.has("--noworklet")) await page.addInitScript(() => { window.FORCE_NO_WORKLET = true; });
 await page.goto(`http://127.0.0.1:${server.address().port}/index.html`);
 if (opt("inst")) await page.selectOption("#instrument", opt("inst"));
@@ -52,7 +54,7 @@ const res = await page.evaluate(async ({ format, s0, s1, realtime, mp4test, webm
   }, 300);
   if (hide) {
     let hidden = false; Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
-    const wait = setInterval(() => { if (!/合成中|Rendering/.test($("exportOverlayTitle").textContent)) return; clearInterval(wait);
+    const wait = setInterval(() => { if (!/合成中|Rendering|匯出中|Exporting/.test($("exportOverlayTitle").textContent)) return; clearInterval(wait);
       setTimeout(() => { hidden = true; document.dispatchEvent(new Event("visibilitychange")); setTimeout(() => { hidden = false; document.dispatchEvent(new Event("visibilitychange")); }, hide[1] * 1000); }, hide[0] * 1000); }, 50);
   }
   if (cancelAt != null) setTimeout(() => $("exportCancel") ? $("exportCancel").click() : (exportCancelled = true), cancelAt * 1000);
@@ -63,6 +65,8 @@ const res = await page.evaluate(async ({ format, s0, s1, realtime, mp4test, webm
   if (noisefmt) { // 模擬 Safari:f32-planar 被讀成別的東西(輸入換成雜訊),其他格式正常
     const orig = makeAudioData; makeAudioData = (fmt, L, R, pos, n, sr) => { if (fmt !== "f32-planar") return orig(fmt, L, R, pos, n, sr);
       const z = new Float32Array(n), z2 = new Float32Array(n); for (let i = 0; i < n; i++) { z[i] = Math.random() - 0.5; z2[i] = Math.random() - 0.5; } return orig(fmt, z, z2, 0, n, sr); }; }
+  // --rectest:模擬 iOS 26 以前(沒有 AudioEncoder):畫面照樣編碼、聲音用錄音器錄(雲端錄出來是 MP4 + Opus)
+  if (window.__rectest) window.FAST_EXPORT_FORCE = { container: "mp4", vCodec: "vp09.00.40.08", aCodec: null, audioVia: "recorder", muxV: "vp9", muxA: "opus", mime: "video/mp4;codecs=vp9,opus", ext: "mp4" };
   if (mp4test) window.FAST_EXPORT_FORCE = { container: "mp4", vCodec: "vp09.00.40.08", aCodec: "opus", muxV: "vp9", muxA: "opus", mime: "video/mp4;codecs=vp9,opus", ext: "mp4" };
   if (webmtest) window.FAST_EXPORT_FORCE = { container: "webm", vCodec: "vp09.00.40.08", aCodec: "opus", muxV: "V_VP9", muxA: "A_OPUS", mime: "video/webm;codecs=vp9,opus", ext: "webm" };
   let delivered = null, done;
