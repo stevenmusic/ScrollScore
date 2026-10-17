@@ -10904,8 +10904,47 @@ async function pianoSelfTest(){
     const sum = new Float32Array(n); for (let i = 0; i < n; i++) sum[i] = 0.5 * (l[i] + r[i]);
     const monoCT = audioCtx.createBuffer(1, n, dec.sampleRate); monoCT.copyToChannel(sum, 0); bufs.monoCT = monoCT;
   } catch (e) { bufs.err = e && e.message || String(e); }
+  // 2026-10-17 第二次自檢:dec(解碼原樣)也是 −42,而且每一段都剛好 −42(加亮高頻的濾波器也沒讓它變)→ 雜訊可能是量測/輸出那端加的。
+  // 上面每一段都經過 AudioWorklet(tap);10/01 沒問題的影片是在 AudioWorklet 限幅器上線之前錄的。
+  // 這裡加幾段不經過 tap 的:file = 解碼結果直接在 JS 算(完全不合成)/ noWk = 不載 AudioWorklet 的離線合成,讀成品 /
+  // wkIdle = 載了 AudioWorklet、節點掛在旁邊但聲音不經過它 / wkLim = 聲音經過限幅器 AudioWorklet(上限 0dB,幾乎不壓)
+  const pre = [];
+  const hfOf = (L, R, sr0) => {
+    const a = Math.round(0.35 * sr0), l = L.subarray(a), r = R.subarray(a);
+    const hf = bandFractions(l, sr0, 0, 0).hf;
+    let sxy = 0, sxx = 0, syy = 0, bad = 0; for (let i = 0; i < l.length; i++) { if (!Number.isFinite(l[i])) { bad++; continue; } sxy += l[i] * r[i]; sxx += l[i] * l[i]; syy += r[i] * r[i]; }
+    return (bad ? "NaN×" + bad + " " : "") + (hf > 0 ? (10 * Math.log10(hf)).toFixed(0) : "-inf") + "dB lr " + (sxx && syy ? (sxy / Math.sqrt(sxx * syy)).toFixed(2) : "-");
+  };
+  if (bufs.dec) {
+    const d = bufs.dec;
+    pre.push("file " + hfOf(d.getChannelData(0), d.getChannelData(Math.min(1, d.numberOfChannels - 1)), d.sampleRate));
+    for (const mode of ["noWk", "wkIdle", "wkLim"]) {
+      try {
+        const ctx = new OfflineAudioContext(2, len, sr);
+        const src = ctx.createBufferSource(); src.buffer = d;
+        if (mode === "noWk") src.connect(ctx.destination);
+        else {
+          const url = URL.createObjectURL(new Blob([MASTER_LIMITER_SRC], { type: "text/javascript" }));
+          await offlineStep("addModule", ctx.audioWorklet.addModule(url), 15000);
+          URL.revokeObjectURL(url);
+          if (mode === "wkIdle") {
+            const t = new AudioWorkletNode(ctx, "ss-loudness-tap", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1], channelCount: 2, channelCountMode: "explicit" });
+            const m = ctx.createGain(); m.gain.value = 0; src.connect(t); t.connect(m); m.connect(ctx.destination);
+            src.connect(ctx.destination);
+          } else {
+            const lim = new AudioWorkletNode(ctx, "ss-master-limiter", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2], channelCount: 2, channelCountMode: "explicit",
+              processorOptions: { ceilingDb: 0, lookahead: MASTER.lookahead, release: MASTER.release, releaseSlow: MASTER.releaseSlow } });
+            src.connect(lim); lim.connect(ctx.destination);
+          }
+        }
+        src.start(at);
+        const b = await awaitOfflineRender(ctx, len / sr, { real(){}, stop(){} });
+        pre.push(mode + " " + hfOf(b.getChannelData(0), b.getChannelData(1), sr));
+      } catch (e) { if (e && e.cancelled) throw e; pre.push(mode + " err " + (e && e.message || e)); }
+    }
+  }
   const saved = {}; for (const k of EXPORT_AUDIO_KEEP) saved[k] = eval(k);
-  const out = [];
+  const out = pre;
   try {
     for (const st of ["raw", ...["dec", "copy", "mono", "mono0", "monoCT"].filter(k => bufs[k]), "presAuto", "presFix", "bus", "comp", "note"]) {
       audioCtx = new OfflineAudioContext(2, len, sr);
