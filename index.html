@@ -1507,6 +1507,8 @@ const I18N = {
     combineDone: "完成,已下載",
     combineFailed: "合成失敗:{msg}",
     exportComplete: "影片輸出完成({mb} MB,{fmt})",
+    exportTimeFast: "用時 {t} 秒(準備 {p} · 聲音 {a} · 畫面 {v} 秒)",
+    exportTimeTotal: "用時 {t} 秒",
     exportCancelledStatus: "已取消輸出",
     exportFailed: "輸出失敗:{msg}",
     mimeDefault: "瀏覽器預設格式",
@@ -1760,6 +1762,8 @@ const I18N = {
     combineDone: "Done — downloaded",
     combineFailed: "Combine failed: {msg}",
     exportComplete: "Video export complete ({mb} MB, {fmt})",
+    exportTimeFast: "took {t}s (prep {p} · audio {a} · video {v}s)",
+    exportTimeTotal: "took {t}s",
     exportCancelledStatus: "Export cancelled",
     exportFailed: "Export failed: {msg}",
     mimeDefault: "Browser default format",
@@ -10729,6 +10733,15 @@ function setExportOverlayMode(fast){
 }
 /* 改用即時錄影時,在匯出畫面與完成訊息寫出原因(使用者回報時看得到是哪一種:沒有編碼器、太慢、出錯) */
 let fastExportNote = "";
+/* 各階段花的時間(秒),寫在完成訊息:使用者回報「變慢了」時看得出是哪一段(2026-10) */
+let fastTimes = {};
+function exportTimeNote(){
+  if (!fastTimes.t0) return "";
+  const r = x => Math.round(x), t = (performance.now() - fastTimes.t0) / 1000;
+  return " · " + (fastTimes.video != null
+    ? T("exportTimeFast", { t: r(t), p: r(fastTimes.prep || 0), a: r(fastTimes.audio || 0), v: r(fastTimes.video) })
+    : T("exportTimeTotal", { t: r(t) }));
+}
 function fastFallback(reason, detail){
   stopFastPrepTick();
   const txt = reason === "test" ? "" : T({ codecs: isIOSDevice() ? "fastNoteNoCodecs" : "fastNoteNoCodecsOther", audio: "fastNoteNoAudio", slow: "fastNoteSlow", error: "fastNoteError" }[reason], { x: detail || "", msg: detail || "" });
@@ -11021,33 +11034,32 @@ async function fastExportVideo(cfg){
   if (cancelledNow()) return true;
   stopFastPrepTick();
   computeDrumPerformance();   // 試編畫了鼓組面板,重算一次讓正式匯出從頭開始
-  /* 3) 聲音跟畫面同時做(2026-10,使用者要求加快):OfflineAudioContext 在音訊執行緒合成,主執行緒同時畫畫面、編影片,
-     總時間約等於兩者較久的那個(以前是相加:先「調整音量中」再「合成中」)。進度條取兩者較慢的那個(不會倒退)。
-     聲音還在算的時候,全域的 audioCtx 等是換成離線的那一組(renderExportAudioFast 結束才換回來),
-     所以不管成功、取消或出錯,離開前一定要等它結束(waitAudio)。
-     畫畫面不會用到這些音訊狀態(computeDrumPerformance 用固定種子,兩邊算出來一樣)。
-     聲音最後才送進封裝:mp4-muxer 每 0.5 秒一塊直接寫出去,聲音塊接在後面(位置照樣記在索引裡);
-     webm-muxer 會把畫面留在記憶體等聲音(只在沒有 AAC 編碼器的電腦瀏覽器用,iPhone/App 一律 MP4) */
-  kbScanCursor = 0; kbScanLastSec = -1;
-  let L = null, R = null, audioFrac = 0, audioErr = null, audioDone = false;
-  const audioJob = renderExportAudioFast(rangeStart, rangeEnd, p => { audioFrac = p; })
-    .then(([l, r]) => { L = l; R = r; audioFrac = 1; }, e => { audioErr = e; })
-    .then(() => { audioDone = true; });
-  const waitAudio = () => audioJob;
-  let shown = 0;
-  const showProgress = videoFrac => {
-    shown = Math.max(shown, Math.min(videoFrac, audioFrac));
-    setPct("exportFastPct", shown);
-    $("exportOverlaySub").textContent = audioDone ? "" : T("exportAnalyzingSub");
-  };
-  showProgress(0);
+  /* 3) 聲音(先算完再編畫面)。2026-10 試過聲音跟畫面同時做(雲端 96 → 45 秒),但使用者 iPhone 實測反而變慢、
+     比影片還長,退回先後做;各階段花的時間寫在完成訊息(fastTimes),下次回報看得出卡在哪 */
+  const tAudio0 = performance.now();
+  fastTimes.prep = (tAudio0 - fastTimes.t0) / 1000;
+  setPct("exportAnalyzingPct", 0);
+  $("exportOverlaySub").textContent = T("exportAnalyzingSub");
   $("exportTime").textContent = "";
-  // 輸出邊做邊收(StreamTarget 分塊,收尾時回頭改的地方直接蓋上),
-  // 不要整個影片留在一塊不斷加倍的記憶體裡再複製兩次(審查估算:5 分鐘 1080p 原本尖峰約 650MB,iPhone 可能被系統關掉)
-  let encErr = null, venc = null, aenc = null, muxer = null, feeder = null;
+  let L, R;
+  try { [L, R] = await renderExportAudioFast(rangeStart, rangeEnd, p => setPct("exportAnalyzingPct", p)); }
+  catch (e) {
+    if (e.cancelled) { setStatus(T("exportCancelledStatus")); return true; }
+    // 離線合成卡住:即時錄影就不要再算一次響度(一樣會卡),照原本音量錄
+    if (/逾時/.test(e.message)) fastExportGainCache = { rangeStart, rangeEnd, g: null };
+    console.warn("快速匯出的聲音處理失敗,改用即時錄影:", e); return fastFallback("error", e.message);
+  }
+  if (exportCancelled) { setStatus(T("exportCancelledStatus")); return true; }
+  const tVideo0 = performance.now();
+  fastTimes.audio = (tVideo0 - tAudio0) / 1000;
+  setPct("exportRenderingPct", 0);
+  $("exportOverlaySub").textContent = "";
+  kbScanCursor = 0; kbScanLastSec = -1;
+  // 3) 編碼器與封裝。輸出邊做邊收(StreamTarget 分塊,收尾時回頭改的地方直接蓋上),
+  //    不要整個影片留在一塊不斷加倍的記憶體裡再複製兩次(審查估算:5 分鐘 1080p 原本尖峰約 650MB,iPhone 可能被系統關掉)
+  let encErr = null, venc = null, aenc = null, muxer = null;
   const out = makeChunkCollector();
   const closeAll = () => { try { venc && venc.close(); } catch (e) {} try { aenc && aenc.close(); } catch (e) {} };
-  const cancelExport = async () => { if (feeder) feeder.discard(); closeAll(); await waitAudio(); setStatus(T("exportCancelledStatus")); return true; };
   try {
     const target = new Muxer.StreamTarget({ onData: (data, position) => out.write(data, position), chunked: true, chunkSize: 4 * 1048576 });
     muxer = new Muxer.Muxer(fmtSel.container === "mp4"
@@ -11058,61 +11070,50 @@ async function fastExportVideo(cfg){
     venc.configure(encCfg(fps));
     aenc = new AudioEncoder({ output: (c, m) => { try { onAudio(c, m); } catch (e) { encErr = encErr || e; } }, error: e => { encErr = e; } });
     aenc.configure({ codec: fmtSel.aCodec, sampleRate: sr, numberOfChannels: 2, bitrate: FAST_EXPORT.audioBitrate });
+    // 聲音跟著畫面送(每段 0.1 秒、比畫面超前 1 秒),編碼器佇列裡不會同時堆一整首
+    const CH = sr / 10, nAud = L.length;
+    let aPos = 0;
+    const feedAudio = untilSec => {
+      const stop = Math.min(nAud, Math.ceil(untilSec * sr));
+      for (; aPos < stop; aPos += CH) {
+        const n = Math.min(CH, nAud - aPos), planar = new Float32Array(n * 2);
+        planar.set(L.subarray(aPos, aPos + n), 0); planar.set(R.subarray(aPos, aPos + n), n);
+        const ad = new AudioData({ format: "f32-planar", sampleRate: sr, numberOfFrames: n, numberOfChannels: 2, timestamp: Math.round(aPos / sr * 1e6), data: planar });
+        aenc.encode(ad); ad.close();
+      }
+    };
     const nFrames = Math.ceil(dur * fps), keyEvery = Math.round(fps * FAST_EXPORT.keyEverySec);
-    feeder = makeFeeder(frameSrc, venc);
+    const feeder = makeFeeder(frameSrc, venc);
     let lastUi = 0;
     for (let f = 0; f < nFrames; f++) {
-      if (exportCancelled || audioErr) break;   // 聲音失敗就不用再畫了(下面改走即時錄影)
+      if (exportCancelled) break;
       if (encErr) throw encErr;
       const t = f / fps, songSec = Math.min(Math.max(t - lead, 0), total) + rangeStart;
+      feedAudio(t + 1);
       await drawAt(songSec);
       await feeder.push(Math.round(t * 1e6), f % keyEvery === 0);
-      // 編碼器跟不上時等一下(不然記憶體會一直堆);每 0.1 秒更新一次進度並讓畫面喘口氣(取消按鈕才按得到、聲音的排音也輪得到)
+      // 編碼器跟不上時等一下(不然記憶體會一直堆);每 0.1 秒更新一次進度並讓畫面喘口氣(取消按鈕才按得到)
       while (venc.encodeQueueSize > 6) await new Promise(r => setTimeout(r, 2));
       const now = performance.now();
       if (now - lastUi > 100) {
         lastUi = now;
-        showProgress((f + 1) / nFrames);
+        setPct("exportRenderingPct", (f + 1) / nFrames);
         $("exportTime").textContent = fmt(Math.min(total, Math.max(0, t - lead))) + " / " + fmt(total);
         await new Promise(r => setTimeout(r, 0));
       }
     }
-    if (exportCancelled) return await cancelExport();
+    if (exportCancelled) { feeder.discard(); closeAll(); setStatus(T("exportCancelledStatus")); return true; }
     await feeder.drain();
-    // 畫面做完、聲音還沒好:等聲音(進度照樣更新,取消照樣停)
-    while (!audioDone) {
-      showProgress(1);
-      await Promise.race([audioJob, new Promise(r => setTimeout(r, 200))]);
-    }
-    if (exportCancelled || (audioErr && audioErr.cancelled)) return await cancelExport();
-    if (audioErr) {
-      // 離線合成卡住:即時錄影就不要再算一次響度(一樣會卡),照原本音量錄
-      if (/逾時/.test(audioErr.message)) fastExportGainCache = { rangeStart, rangeEnd, g: null };
-      closeAll();
-      console.warn("快速匯出的聲音處理失敗,改用即時錄影:", audioErr);
-      return fastFallback("error", audioErr.message);
-    }
-    $("exportOverlaySub").textContent = "";
-    // 聲音一次送完(編碼很快);每段 0.1 秒,佇列太長就等一下
-    const CH = sr / 10, nAud = L.length;
-    for (let i = 0; i < nAud; i += CH) {
-      const n = Math.min(CH, nAud - i), planar = new Float32Array(n * 2);
-      planar.set(L.subarray(i, i + n), 0); planar.set(R.subarray(i, i + n), n);
-      const ad = new AudioData({ format: "f32-planar", sampleRate: sr, numberOfFrames: n, numberOfChannels: 2, timestamp: Math.round(i / sr * 1e6), data: planar });
-      aenc.encode(ad); ad.close();
-      if (aenc.encodeQueueSize > 40) await new Promise(r => setTimeout(r, 2));
-      if (encErr) throw encErr;
-    }
+    feedAudio(Infinity);
     L = R = null;
     await venc.flush(); await aenc.flush();
     if (encErr) throw encErr;
     closeAll();
     muxer.finalize();
+    fastTimes.video = (performance.now() - tVideo0) / 1000;
+    fastTimes.speed = dur / fastTimes.video;
   } catch (e) {
     closeAll();
-    if (feeder) feeder.discard();
-    await waitAudio();   // 全域的音訊狀態換回來之後才能改走即時錄影
-    if (exportCancelled) { setStatus(T("exportCancelledStatus")); return true; }
     fastProbeCacheSet(probeKey, null);   // 下次重新試編
     console.warn("快速匯出失敗,改用即時錄影:", e);
     return fastFallback("error", e && e.message);
@@ -11120,7 +11121,7 @@ async function fastExportVideo(cfg){
   const blob = out.toBlob(fmtSel.container === "mp4" ? "video/mp4" : "video/webm");
   const rangeTag = cfg.startSec != null ? "-" + fmt(rangeStart).replace(":","m") + "s-" + fmt(rangeEnd).replace(":","m") + "s" : "";
   const fileName = "scrollscore-" + cfg.W + "x" + cfg.H + rangeTag + "." + fmtSel.ext;
-  setStatus(T("exportComplete", { mb: (blob.size/1048576).toFixed(1), fmt: mimeLabel(fmtSel.mime) }));
+  setStatus(T("exportComplete", { mb: (blob.size/1048576).toFixed(1), fmt: mimeLabel(fmtSel.mime) }) + exportTimeNote());
   deliverExportedVideo(blob, fileName, fmtSel.mime);
   return true;
 }
@@ -11130,6 +11131,7 @@ async function exportVideo(cfg){
   document.body.classList.add("exporting-active");
   // 匯出畫面先打開:音色還在下載時按「開始匯出」,以前要等下載完才有畫面、也不能取消(審查發現)
   fastExportNote = ""; $("exportFastNote").textContent = "";
+  fastTimes = { t0: performance.now() };
   $("exportOverlayTitle").textContent = T("exportPreparingPct", { pct: 0 });
   $("exportOverlaySub").textContent = ""; $("exportTime").textContent = ""; $("exportFill").style.width = "0%";
   setExportOverlayMode(true);
@@ -11269,7 +11271,7 @@ async function exportVideo(cfg){
         const ext = mimeExt(mime);
         const rangeTag = cfg.startSec != null ? "-" + fmt(rangeStart).replace(":","m") + "s-" + fmt(rangeEnd).replace(":","m") + "s" : "";
         const fileName = "scrollscore-" + W + "x" + H + rangeTag + "." + ext;
-        setStatus(T("exportComplete", { mb: (blob.size/1048576).toFixed(1), fmt: mimeLabel(mime) }) + (fastExportNote ? " · " + fastExportNote : ""));
+        setStatus(T("exportComplete", { mb: (blob.size/1048576).toFixed(1), fmt: mimeLabel(mime) }) + (fastExportNote ? " · " + fastExportNote : "") + exportTimeNote());
         deliverExportedVideo(blob, fileName, mime);
       } else {
         setStatus(T("exportCancelledStatus"));
