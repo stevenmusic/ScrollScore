@@ -200,7 +200,7 @@ body.header-brand-hidden header .brand{display:none}
 @media (max-width:599px){
   #tempoRow{flex-wrap:wrap;row-gap:10px}
   #tempoRow .tempo-num{margin-left:auto}
-  #tempoRow #tempoSlider{order:3;flex:1 1 100%;min-width:0}
+  #tempoRow #tempoSlider{order:3;flex:1 1 100%;min-width:0;margin:2px 0 12px}   /* 跟下面的游標色票拉開(使用者反映太靠近) */
 }
 #bgOpacityRow[hidden]{display:none}
 #tempoRow input[type=range]{flex:1 1 auto;width:auto;min-width:60px}
@@ -443,7 +443,7 @@ body.kb-hidden #keyboardCanvas{display:none}
    在 1920px 以上的螢幕上,控制項會全部擠在最左邊、右邊留下一大片空白(2560px 時空了將近兩千px),
    跟一般產品把內容收在可讀寬度內置中的做法不符。抽屜本體維持滿版(毛玻璃背景才連貫),
    只把裡面的內容收進 640px 並置中(2026-10:960px 時樂器跟移調、兩欄開關、速度滑桿都拉得太開,眼睛要左右跑很遠) */
-@media (min-width:900px){
+@media (min-width:700px){   /* iPad 直式(768~899)也收,以前只有 900 以上 */
   #settingsPanel{align-items:center}
   #settingsPanel > *{width:min(640px, 100%)}
 }
