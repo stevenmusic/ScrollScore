@@ -322,8 +322,9 @@ input[type=range]::-webkit-slider-thumb{
    用等寬的 flex 基準排成兩欄,既維持左緣對齊又省掉一半高度,窄螢幕放不下時自動退回一欄。
    min-width 取 108px:軌道 38 + 間距 10 + 四個中文字約 52 = 100,留一點餘裕,
    這樣連 320px 的螢幕(每欄可用 122px)都還能維持兩欄,不會退回一欄多吃 60px 高度 */
-.switch-grid{display:flex;flex-wrap:wrap;gap:8px 12px;width:100%}
-.switch-grid .switch-row{flex:1 1 calc(50% - 12px);min-width:max-content}
+.switch-grid{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:repeat(3, auto);grid-auto-flow:column;gap:8px 12px;width:100%}
+.switch-grid .switch-row{min-width:0}
+@media (max-width:300px){ .switch-grid{grid-template-columns:1fr;grid-template-rows:none;grid-auto-flow:row} }
 .switch-row > span:last-child{white-space:nowrap}   /* 開關名稱不拆行(280px 時「小節高/亮」);放不下整個開關換到下一排 */
 .credits-list a[href*="creativecommons"]{white-space:nowrap}   /* 「CC BY / 4.0」不拆開 */
 .export-row{display:flex;gap:10px;flex-wrap:wrap;width:100%}
@@ -969,16 +970,12 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
          淺色主題與匯出影片照 exportInkColor 換成同色相的深色(色票也顯示換算後的顏色)。以前是任意調色盤 + 濃度滑桿,重開就回到金色 -->
     <div class="tempo-box" id="cursorColorRow"><span class="row-label" data-i18n="cursorColorLabel">游標顏色</span><span class="swatches" role="radiogroup" data-i18n-attr="aria-label:cursorColorLabel"><button type="button" class="swatch" role="radio" aria-checked="false" data-color="#E9CB7A" data-i18n-attr="aria-label:colorGold,title:colorGold"></button><button type="button" class="swatch" role="radio" aria-checked="false" data-color="#F2877A" data-i18n-attr="aria-label:colorRed,title:colorRed"></button><button type="button" class="swatch" role="radio" aria-checked="false" data-color="#7DB9F2" data-i18n-attr="aria-label:colorBlue,title:colorBlue"></button><button type="button" class="swatch" role="radio" aria-checked="false" data-color="#86D19A" data-i18n-attr="aria-label:colorGreen,title:colorGreen"></button><button type="button" class="swatch" role="radio" aria-checked="false" data-color="#B9A1F2" data-i18n-attr="aria-label:colorPurple,title:colorPurple"></button><button type="button" class="swatch" role="radio" aria-checked="false" data-color="#C6C6C6" data-i18n-attr="aria-label:colorGray,title:colorGray"></button></span><input type="hidden" id="cursorColor" value="#E9CB7A"></div>
     <div class="switch-grid">
-      <!-- 排列順序是照「這個開關做什麼事」分的,每一列兩個是同一類:
-           1. 預備拍 / 小節高亮   —— 切換是即時的,不動樂譜內容
-           2. 速度記號 / 合併休止 —— 這兩個是唯一會呼叫 renderScore() 重新排版整份樂譜的,
-                                     而且會先 stopPlayback() 再從原位置接回去。行為一樣就該放在同一列
-           「圓滑/踏板」開關已移除:圓滑線、踏板與和聲延音的「播放」一律開啟(16 層鋼琴沒有延音非常難聽)。
-           2026-10 使用者要求:「踏板記號」開關只管顯示(預設關閉,踏板記號很佔空間),播放照樣依譜上踏板;
-           「彈性速度」加回開關(預設開啟);小節高亮預設開啟。
-           淺色模式已經搬到頁首常駐圖示按鈕(#themeToggle),不再放在這個面板裡 -->
-      <label class="switch-row" data-i18n-attr="title:countInTitle">
-        <span class="switch"><input type="checkbox" id="countIn"><span class="switch-track"></span></span><span data-i18n="countInLabel">預備拍</span>
+      <!-- 排列(2026-10,使用者提議「預設開的一排、預設關的一排,依重要性排」):依重要性/常用程度排成兩直排
+         (先由上往下再換排,grid-auto-flow:column),左排 彈性速度 → 小節高亮 → 速度記號,右排 預備拍 → 踏板記號 → 合併休止。
+         左排剛好都是預設開啟的,但排列的依據是重要性(使用者切換之後仍然合理);窄到一排時也照這個順序。
+         「圓滑/踏板」播放開關已移除(一律開啟);「踏板記號」只管顯示;淺色模式在頁首 #themeToggle -->
+      <label class="switch-row" data-i18n-attr="title:rubatoTitle">
+        <span class="switch"><input type="checkbox" id="rubatoOn" checked><span class="switch-track"></span></span><span data-i18n="rubatoLabel">彈性速度</span>
       </label>
       <label class="switch-row" data-i18n-attr="title:measureHlTitle">
         <span class="switch"><input type="checkbox" id="measureHl" checked><span class="switch-track"></span></span><span data-i18n="measureHlLabel">小節高亮</span>
@@ -986,14 +983,14 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
       <label class="switch-row" data-i18n-attr="title:showTempoMarksTitle">
         <span class="switch"><input type="checkbox" id="showTempoMarks" checked><span class="switch-track"></span></span><span data-i18n="showTempoMarksLabel">速度記號</span>
       </label>
-      <label class="switch-row" data-i18n-attr="title:mergeRestMeasuresTitle">
-        <span class="switch"><input type="checkbox" id="mergeRestMeasures"><span class="switch-track"></span></span><span data-i18n="mergeRestMeasuresLabel">合併休止</span>
+      <label class="switch-row" data-i18n-attr="title:countInTitle">
+        <span class="switch"><input type="checkbox" id="countIn"><span class="switch-track"></span></span><span data-i18n="countInLabel">預備拍</span>
       </label>
       <label class="switch-row" data-i18n-attr="title:showPedalMarksTitle">
         <span class="switch"><input type="checkbox" id="showPedalMarks"><span class="switch-track"></span></span><span data-i18n="showPedalMarksLabel">踏板記號</span>
       </label>
-      <label class="switch-row" data-i18n-attr="title:rubatoTitle">
-        <span class="switch"><input type="checkbox" id="rubatoOn" checked><span class="switch-track"></span></span><span data-i18n="rubatoLabel">彈性速度</span>
+      <label class="switch-row" data-i18n-attr="title:mergeRestMeasuresTitle">
+        <span class="switch"><input type="checkbox" id="mergeRestMeasures"><span class="switch-track"></span></span><span data-i18n="mergeRestMeasuresLabel">合併休止</span>
       </label>
     </div>
   </div>
