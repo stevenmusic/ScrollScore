@@ -109,6 +109,8 @@
   - 審查員第三輪:沒有新問題(確認 Capacitor 8 不用打包工具 window.Capacitor.Plugins.StatusBar/Filesystem/Media 都會在網頁載入前註冊;隱私權清單足夠)。CapApp-SPM/Package.swift 已用 npx cap update ios 加進三個外掛(路徑指向 app/node_modules,Mac 上一樣要先 npm install)
   - 上傳樂譜的檔案選擇器(使用者要求,2026-10):accept 一律保留(副檔名 + MusicXML/XML 的 MIME,不含圖片/影片),iPhone 才會直接打開「檔案」;沒有 accept 會先跳「照片圖庫/拍照或錄影/選擇檔案」選單(曾為了怕 .mxl/.gp5 變灰色在 iOS 拿掉,使用者反映後改回)。.mxl/.gp5 等在「檔案」裡選不選得到要實機確認;選到其他副檔名時 loadScoreFile 顯示「不支援這種檔案」
 - 旋轉螢幕字變大(使用者反映,2026-10:設定頁直式 → 橫式 → 直式字變大):iPhone Safari 橫式會自動放大文字(text autosizing),轉回直式不一定縮回。html 一律 -webkit-text-size-adjust:100%(index/privacy/support 都有;新頁面也要加)。檢查:tools/audiotest/rotate_check.mjs(手機尺寸 × 載入前後 × 設定/匯出/主畫面 × 各種轉法,轉回來要跟直接打開一樣;Chromium 沒有 iOS 的放大行為,抓的是程式本身的問題)
+- 設定面板排版(2026-10,使用者問「每個欄位是不是要改窄一點」):桌機內容寬 960 → 640px(樂器/移調、兩欄開關、速度滑桿以前拉太開);觸控裝置設定裡的按鈕 44 → 36px、卡片內距 14/16 → 12/14(「匯出影片」主按鈕不變)
+- 速度控制(使用者反映「滑一下速度最少變 3」,2026-10):手機滑桿約 160px 要涵蓋 40~400。現在 ① −/＋(#tempoDown/#tempoUp,bindTempoStep:按一下 1、按住 0.4 秒後每 0.08 秒 1)② 看得到的滑桿 #tempoSlider 用比例刻度(0~1000 = 40×10^(p/1000),tempoToSlider/sliderToTempo),真正的速度仍在隱藏的 #tempo(40~400、每格 1),其他程式與測試照舊讀/寫 #tempo;syncTempoDisplay 同步滑桿位置(拖的時候不吸附,放開才對齊)③ 寬 < 600 時滑桿自己一整列。實測 390 寬滑桿 336px,100 附近每 px 變 0~1
 - 頂欄(使用者指定,2026-10):左邊品牌名 ScrollScore(一定保留);載入前右邊只有 深淺模式、語言、設定;載入後依序 上傳樂譜、播放、從頭(品牌名後面)、深淺模式、語言、匯出影片、設定。**速度不在頂欄**(以前的「100 BPM ▾」按鈕 + 彈出滑桿已拿掉),搬到設定面板「播放與顯示」第一列(#tempoRow:滑桿 + 數字 + BPM + 附點音符單位提示);跟樂譜上的「♩=100」速度記號(#showTempoMarks)是兩件事。放不下單排時 fitHeaderRow 依序:按鈕只留圖示 → 深淺/語言搬進設定面板最上面的「外觀與語言」(#headerPrefSlot)→ 匯出影片捷徑收起(設定面板裡還有)→ 最後才藏品牌名(折疊機外螢幕這種極窄畫面)。實測:桌機全部帶文字;iPad 直式、平板只留圖示;手機直式 390/320 是 品牌名 + 上傳/播放/從頭 + 匯出/設定(深淺、語言在設定裡)。按鈕保留的是整顆按鈕的寬度(圖示與文字置中貼齊),不是文字的寬度。版面檢查 tools/audiotest/layout_check.mjs(19 種尺寸 × 中英文)、模擬操作 human_check.mjs(隨機種子)
 
 ## 上架 App Store(2026-10)

@@ -194,8 +194,17 @@ body.header-brand-hidden header .brand{display:none}
 .swatch[aria-checked="true"]{box-shadow:0 0 0 2px var(--panel),0 0 0 4px var(--sw)}
 .swatch:focus-visible{outline:2px solid var(--gold);outline-offset:4px}
 #tempoRow{flex-wrap:nowrap}
+#tempoRow .tempo-num{display:inline-flex;align-items:center;gap:6px;flex:none}
+#tempoRow .tempo-step{width:32px;height:32px;min-width:32px;padding:0;justify-content:center;font-size:var(--fs-lg);touch-action:none;user-select:none;-webkit-user-select:none}
+/* 窄螢幕:滑桿自己一整列(長度多一倍,每 px 變化變小),數字與 −/＋ 跟「速度」同一列 */
+@media (max-width:599px){
+  #tempoRow{flex-wrap:wrap;row-gap:10px}
+  #tempoRow .tempo-num{margin-left:auto}
+  #tempoRow #tempoSlider{order:3;flex:1 1 100%;min-width:0}
+}
 #bgOpacityRow[hidden]{display:none}
 #tempoRow input[type=range]{flex:1 1 auto;width:auto;min-width:60px}
+#tempoRow #tempo[hidden]{display:none}
 .tempo-box b{color:var(--gold-bright);font-size:var(--fs-lg);min-width:34px;text-align:right;font-variant-numeric:tabular-nums}
 .tempo-box input[type=number]{
   color:var(--gold-bright);font-size:var(--fs-lg);width:56px;height:32px;line-height:32px;
@@ -433,10 +442,10 @@ body.kb-hidden #keyboardCanvas{display:none}
 /* 平板/桌機:設定面板不要橫跨整個螢幕寬度。它是 position:fixed 且 left/right:0,
    在 1920px 以上的螢幕上,控制項會全部擠在最左邊、右邊留下一大片空白(2560px 時空了將近兩千px),
    跟一般產品把內容收在可讀寬度內置中的做法不符。抽屜本體維持滿版(毛玻璃背景才連貫),
-   只把裡面的內容收進 960px 並置中 */
+   只把裡面的內容收進 640px 並置中(2026-10:960px 時樂器跟移調、兩欄開關、速度滑桿都拉得太開,眼睛要左右跑很遠) */
 @media (min-width:900px){
   #settingsPanel{align-items:center}
-  #settingsPanel > *{width:min(960px, 100%)}
+  #settingsPanel > *{width:min(640px, 100%)}
 }
 /* 觸控裝置:放大可點擊區域,滑桿把手更好抓。
    高度已經有 42px,但手機寬度下按鈕的文字標籤會收起來只剩一個 14px 的圖示,
@@ -454,6 +463,15 @@ body.kb-hidden #keyboardCanvas{display:none}
    必須放在 pointer:coarse 之後,否則會被上面的 44px 蓋掉 */
 @media (pointer:coarse) and (max-height:420px){
   .btn{height:36px}
+}
+/* 設定面板裡的按鈕(主題/語言/移調)在手機上用 36px,卡片內距也收一點(2026-10,使用者覺得每個欄位太寬鬆):
+   44px 是頂欄常用按鈕的大小,設定裡的按鈕不常按,36px 仍比 WCAG 的 24px 大很多;
+   「匯出影片」主要按鈕維持原本高度 */
+@media (pointer:coarse){
+  #settingsPanel .btn:not(.primary){height:36px;min-width:36px}
+  #settingsPanel select{min-height:36px}
+  #settingsPanel .settings-group{padding:12px 14px;gap:8px}
+  #settingsPanel{gap:10px}
 }
 /* 320px 的機型載入樂譜後,頂欄要同時容納 6 個按鈕:實測需要 314px,可用寬度只有 308px,
    差 6px 就會換行,而換行會把頂欄從 61px 撐到 108px、直接吃掉 47px 的樂譜高度。
@@ -943,7 +961,10 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
   <div class="settings-group">
     <div class="settings-group-title" data-i18n="settingsGroupPlayback">播放與顯示</div>
     <!-- 速度(2026-10 使用者要求頂欄精簡):以前是頂欄的「100 BPM ▾」按鈕 + 彈出滑桿,現在放在設定面板第一列 -->
-    <div class="tempo-box" id="tempoRow"><span class="row-label" data-i18n="tempoAriaLabel">速度</span> <input type="range" id="tempo" min="40" max="400" value="100" step="1" data-i18n-attr="aria-label:tempoAriaLabel"><input type="number" id="tempoVal" min="40" max="400" value="100" data-i18n-attr="aria-label:tempoAriaLabel"><span class="tempo-unit">BPM<span id="tempoUnitSuffix"></span></span></div>
+    <!-- 2026-10 使用者反映「滑一下速度最少變 3」:手機上滑桿約 160px 要涵蓋 40~400(每 px 約 2.3)。
+         改成 ① −/＋ 每按一下 1、按住連續 ② 滑桿用比例刻度(#tempoSlider,40→400 是 0→1000 的 log),常用的 60~160 比較細
+         ③ 手機上滑桿自己一整列。真正的速度值仍在隱藏的 #tempo(40~400、每格 1),其他程式照舊讀它 -->
+    <div class="tempo-box" id="tempoRow"><span class="row-label" data-i18n="tempoAriaLabel">速度</span> <input type="range" id="tempoSlider" min="0" max="1000" value="398" step="1" data-i18n-attr="aria-label:tempoAriaLabel"><span class="tempo-num"><button class="btn tempo-step" id="tempoDown" type="button" data-i18n-attr="aria-label:tempoDownAria">−</button><input type="number" id="tempoVal" min="40" max="400" value="100" data-i18n-attr="aria-label:tempoAriaLabel"><button class="btn tempo-step" id="tempoUp" type="button" data-i18n-attr="aria-label:tempoUpAria">＋</button><span class="tempo-unit">BPM<span id="tempoUnitSuffix"></span></span></span><input type="range" id="tempo" min="40" max="400" value="100" step="1" hidden></div>
     <!-- 游標顏色(2026-10 使用者請 Claude 設計):6 個色票,點一下就換、會記住。播放軸、小節色塊、匯出影片的標題共用;
          淺色主題與匯出影片照 exportInkColor 換成同色相的深色(色票也顯示換算後的顏色)。以前是任意調色盤 + 濃度滑桿,重開就回到金色 -->
     <div class="tempo-box" id="cursorColorRow"><span class="row-label" data-i18n="cursorColorLabel">游標顏色</span><span class="swatches" role="radiogroup" data-i18n-attr="aria-label:cursorColorLabel"><button type="button" class="swatch" role="radio" aria-checked="false" data-color="#E9CB7A" data-i18n-attr="aria-label:colorGold,title:colorGold"></button><button type="button" class="swatch" role="radio" aria-checked="false" data-color="#F2877A" data-i18n-attr="aria-label:colorRed,title:colorRed"></button><button type="button" class="swatch" role="radio" aria-checked="false" data-color="#7DB9F2" data-i18n-attr="aria-label:colorBlue,title:colorBlue"></button><button type="button" class="swatch" role="radio" aria-checked="false" data-color="#86D19A" data-i18n-attr="aria-label:colorGreen,title:colorGreen"></button><button type="button" class="swatch" role="radio" aria-checked="false" data-color="#B9A1F2" data-i18n-attr="aria-label:colorPurple,title:colorPurple"></button><button type="button" class="swatch" role="radio" aria-checked="false" data-color="#C6C6C6" data-i18n-attr="aria-label:colorGray,title:colorGray"></button></span><input type="hidden" id="cursorColor" value="#E9CB7A"></div>
@@ -1257,6 +1278,8 @@ const I18N = {
     instDrum: "鼓組",
     transposeAria: "移調",
     transDownAria: "降半音",
+    tempoDownAria: "慢一點(按住連續)",
+    tempoUpAria: "快一點(按住連續)",
     transUpAria: "升半音",
     transposeOriginal: "原調",
     transposeSemitone: "{sign}{n} 半音",
@@ -1494,6 +1517,8 @@ const I18N = {
     instDrum: "Drum Kit",
     transposeAria: "Transpose",
     transDownAria: "Semitone down",
+    tempoDownAria: "Slower (hold to repeat)",
+    tempoUpAria: "Faster (hold to repeat)",
     transUpAria: "Semitone up",
     transposeOriginal: "Original",
     transposeSemitone: "{sign}{n} st",
@@ -2208,11 +2233,16 @@ function syncTempoDisplay(){
   // 語言切換時才會跟著換,見 metronomeUnitLabel() 的說明
   if (tempoDisplayBeatUnit) tempoDisplayUnitLabel = metronomeUnitLabel(tempoDisplayBeatUnit, tempoDisplayDotCount);
   $("tempoUnitSuffix").textContent = tempoDisplayUnitLabel ? " " + tempoDisplayUnitLabel : "";
+  if (!tempoFromSlider) $("tempoSlider").value = tempoToSlider(rawTempo());   // 拖滑桿時不要把把手吸到整數位置
   tempoForPos = rawTempo();   // 每次速度改完都會呼叫這裡:記下來,下次改速度時才換算得回樂譜位置
 }
 /* 暫停時改速度:暫停位置存的是秒數,換了速度同一個秒數就不是同一個音了(審查發現:畫面停在原處、
    時間/進度條卻跳到別處,轉個方向樂譜就跳走)。用舊速度換回樂譜位置,再用新速度換回秒數 */
 let tempoForPos = null;
+/* 速度滑桿的比例刻度:40 → 0、400 → 1000(log),每一格是同樣的「快幾 %」,慢的時候變化小、快的時候變化大 */
+const tempoToSlider = t => Math.round(1000 * Math.log10(t / 40));
+const sliderToTempo = p => Math.round(40 * Math.pow(10, p / 1000));
+let tempoFromSlider = false;
 function keepPausedPositionOnTempo(){
   if (playing || !events.length || tempoForPos == null || tempoForPos === rawTempo() || !(pausedAtSec > 0)) return;
   const now = $("tempo").value;
@@ -5469,6 +5499,30 @@ function applyTempo(t){
   }
   updateTimeLabel(playing ? currentSec() : pausedAtSec);
 }
+
+$("tempoSlider").addEventListener("input", () => {
+  const t = Math.min(400, Math.max(40, sliderToTempo(+$("tempoSlider").value)));
+  if (t === rawTempo()) return;
+  tempoFromSlider = true;
+  try { $("tempo").value = t; $("tempo").dispatchEvent(new Event("input")); } finally { tempoFromSlider = false; }
+});
+$("tempoSlider").addEventListener("change", () => syncTempoDisplay());   // 放開時把手對齊到實際的整數速度
+/* −/＋:按一下 1,按住 0.4 秒後連續(每 0.08 秒 1)。鍵盤(Enter/空白鍵)照一般按鈕 */
+function bindTempoStep(btn, d){
+  let timer = null, held = false;
+  const stop = () => { clearTimeout(timer); timer = null; };
+  btn.addEventListener("pointerdown", e => {
+    if (e.button !== 0) return;
+    e.preventDefault(); held = true; stop();
+    applyTempo(rawTempo() + d);
+    const rep = (delay) => { timer = setTimeout(() => { applyTempo(rawTempo() + d); rep(80); }, delay); };
+    rep(400);
+  });
+  for (const ev of ["pointerup", "pointerleave", "pointercancel", "blur"]) btn.addEventListener(ev, stop);
+  btn.addEventListener("click", e => { if (held) { held = false; return; } applyTempo(rawTempo() + d); });   // 鍵盤觸發的 click
+}
+bindTempoStep($("tempoDown"), -1);
+bindTempoStep($("tempoUp"), +1);
 
 // 速度數字改成可以直接點擊輸入,不用只靠拖曳滑桿(滑桿範圍 40~400 橫跨很大,拖曳很難精準停在某個特定數字上)
 $("tempoVal").addEventListener("change", () => {
