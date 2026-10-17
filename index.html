@@ -7007,6 +7007,8 @@ function loadPianoSamples(){
     const auxList = [...aux].filter(a => pianoMan.aux[a]);
     const auxBytes = auxList.reduce((t, a) => t + pianoMan.aux[a].frames / 48000 * audioCtx.sampleRate * 4 * (auxMono ? 1 : 2), 0);
     const plan = pianoPlan(need, auxBytes);
+    { const mb = plan.reduce((t, p) => t + p.len * audioCtx.sampleRate * 4 * p.ch, 0) / 1e6;
+      pianoPlanInfo = "鋼琴 " + plan.length + "/" + need.size + " 層 單聲道 " + plan.filter(p => p.ch === 1).length + " · " + mb.toFixed(0) + "+" + (auxBytes / 1e6).toFixed(0) + "/" + (pianoMemoryBudgetBytes() / 1e6).toFixed(0) + "MB"; }
     const want = new Set(plan.map(p => p.key));
     for (const k of Object.keys(pianoBuf)) if (!want.has(k)) delete pianoBuf[k];   // 換曲/移調後用不到的釋放掉
     // 先每個音各載一層(用最多次的那層),馬上可以播;再補其餘的層
@@ -10870,6 +10872,62 @@ function pcmHealth(L, R, sr){
   const ok = bad === 0 && rms > 1e-4 && hf < 0.35;
   return { ok, rms, hf, corr, bad, txt: (bad ? "NaN×" + bad + " " : "") + "rms " + rms.toFixed(3) + " hf " + hf.toFixed(2) + " lr " + corr.toFixed(2) };
 }
+/* 鋼琴聲音自我檢查(2026-10):iPhone 匯出的鋼琴有沙沙聲(8kHz 以上比音樂小 47dB,10/01 的同一首是 75dB)、幾乎單聲道,
+   雲端 Chrome 重現不出來 → 在使用者的裝置上用同一套音訊引擎把一個音分段測:原始取樣 / 起音自動變化的音色濾波器 /
+   固定的音色濾波器 / 鋼琴匯流排(EQ + 立體聲加寬)/ 再過響度壓縮器 / 完整的一個音(playPianoNote),
+   各段量 8kHz 以上(起音之後 0.3~1.5 秒,自然泛音最少的地方)與左右相關,寫在完成訊息,看沙沙聲從哪一段開始。
+   每段用新的 OfflineAudioContext,聲音從 ss-loudness-tap 取(Safari 離線合成的成品是壞的) */
+let pianoPlanInfo = "";
+async function pianoSelfTest(){
+  const s = typeof pianoSampleFor === "function" && pianoMan ? pianoSampleFor(60, pianoLayerFor(80)) : null;
+  if (!s || typeof OfflineAudioContext === "undefined" || typeof AudioWorkletNode === "undefined") return "";
+  const sr = fastExportSampleRate(), len = Math.round(sr * 1.6), at = 0.05, tone = pianoToneFor(80);
+  const saved = {}; for (const k of EXPORT_AUDIO_KEEP) saved[k] = eval(k);
+  const out = [];
+  try {
+    for (const st of ["raw", "presAuto", "presFix", "bus", "comp", "note"]) {
+      audioCtx = new OfflineAudioContext(2, len, sr);
+      initAudioGraph();
+      if (!await offlineStep("addModule", masterReady, 15000)) throw new Error("limiter");
+      const tap = new AudioWorkletNode(audioCtx, "ss-loudness-tap", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1], channelCount: 2, channelCountMode: "explicit", processorOptions: { pcm: true } });
+      const L = new Float32Array(len), R = new Float32Array(len);
+      let fin; const done = new Promise(r => fin = r);
+      tap.port.onmessage = e => { const d = e.data;
+        if (d && d.s != null) { const n = Math.min(d.L.length, len - d.s); if (n > 0 && d.s >= 0) { L.set(d.L.subarray(0, n), d.s); R.set(d.R.subarray(0, n), d.s); } }
+        else fin(d); };
+      const mute = audioCtx.createGain(); mute.gain.value = 0; tap.connect(mute); mute.connect(audioCtx.destination);
+      masterOut.disconnect();
+      scheduled = []; pianoResetVoices();
+      if (st === "note") {
+        masterGain.connect(tap);
+        playPianoNote(261.63, at, 1.4, false, false, null, null, 80);
+      } else {
+        const src = audioCtx.createBufferSource(); src.buffer = s.buf;
+        let node = src;
+        if (st !== "raw") {
+          const pres = audioCtx.createBiquadFilter(); pres.type = "highshelf"; pres.frequency.value = PIANO_TONE.presFreq;
+          if (st === "presAuto") { pres.gain.setValueAtTime(tone.pres + tone.attack, at); pres.gain.setTargetAtTime(tone.pres, at, PIANO_TONE.attackTau); }
+          else pres.gain.value = tone.pres;
+          const air = audioCtx.createBiquadFilter(); air.type = "highshelf"; air.frequency.value = PIANO_TONE.airFreq; air.gain.value = tone.air;
+          src.connect(pres); pres.connect(air); node = air;
+        }
+        if (st === "bus" || st === "comp") { node.connect(getPianoBus()); (st === "bus" ? masterGain : masterBus).connect(tap); }
+        else node.connect(tap);
+        src.start(at);
+      }
+      await awaitOfflineRender(audioCtx, len / sr, { real(){}, stop(){} });
+      tap.port.postMessage("dump"); await offlineStep("dump", done, 10000);
+      const a = Math.round(0.35 * sr), segL = L.subarray(a), segR = R.subarray(a);
+      const hf = bandFractions(segL, sr, 0, 0).hf;
+      let sxy = 0, sxx = 0, syy = 0; for (let i = 0; i < segL.length; i++) { sxy += segL[i] * segR[i]; sxx += segL[i] * segL[i]; syy += segR[i] * segR[i]; }
+      out.push(st + " " + (hf > 0 ? (10 * Math.log10(hf)).toFixed(0) : "-inf") + "dB lr " + (sxx && syy ? (sxy / Math.sqrt(sxx * syy)).toFixed(2) : "-"));
+    }
+  } catch (e) { if (e && e.cancelled) throw e; out.push("err " + (e && e.message || e)); }
+  finally { for (const k of EXPORT_AUDIO_KEEP) eval(k + " = saved['" + k + "']"); }
+  const txt = "自檢 ch" + s.buf.numberOfChannels + " " + out.join(" / ") + (pianoPlanInfo ? " · " + pianoPlanInfo : "");
+  console.info(txt);
+  return txt;
+}
 // 匯出中的說明文字:快速匯出不用等樂曲播完,切出去會中斷(不是「卡住」)
 function setExportOverlayMode(fast){
   setPhrasedText($("exportWarnBodyEl"), T(fast ? "exportWarnBodyFast" : "exportWarnBody"));
@@ -11375,6 +11433,11 @@ async function fastExportVideo(cfg){
   setPct("exportAnalyzingPct", 0);
   $("exportOverlaySub").textContent = T("exportAnalyzingSub");
   $("exportTime").textContent = "";
+  // 鋼琴聲音自我檢查(iPhone/App 才跑,約 1 秒;結果寫在完成訊息,見 pianoSelfTest)
+  let selfTest = "";
+  if ((isIOSDevice() || window.IN_NATIVE_APP || window.PIANO_SELFTEST) && events.some(e => e.notes.some(n => !n.drum && n.freq))) {
+    try { selfTest = await pianoSelfTest(); } catch (e) { if (e.cancelled) { setStatus(T("exportCancelledStatus")); return true; } selfTest = "自檢 err " + e.message; }
+  }
   let L, R;
   try { [L, R] = await renderExportAudioFast(rangeStart, rangeEnd, p => setPct("exportAnalyzingPct", p)); }
   catch (e) {
@@ -11466,7 +11529,7 @@ async function fastExportVideo(cfg){
   const blob = out.toBlob(fmtSel.container === "mp4" ? "video/mp4" : "video/webm");
   const rangeTag = cfg.startSec != null ? "-" + fmt(rangeStart).replace(":","m") + "s-" + fmt(rangeEnd).replace(":","m") + "s" : "";
   const fileName = "scrollscore-" + cfg.W + "x" + cfg.H + rangeTag + "." + fmtSel.ext;
-  setStatus(T("exportComplete", { mb: (blob.size/1048576).toFixed(1), fmt: mimeLabel(fmtSel.mime) }) + exportTimeNote() + (fastAudioHealth ? " · " + fastAudioHealth + " · " + fastVerifyNote : ""));
+  setStatus(T("exportComplete", { mb: (blob.size/1048576).toFixed(1), fmt: mimeLabel(fmtSel.mime) }) + exportTimeNote() + (fastAudioHealth ? " · " + fastAudioHealth + " · " + fastVerifyNote : "") + (selfTest ? " · " + selfTest : ""));
   deliverExportedVideo(blob, fileName, fmtSel.mime);
   return true;
 }

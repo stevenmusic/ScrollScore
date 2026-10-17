@@ -57,6 +57,7 @@ const res = await page.evaluate(async ({ format, s0, s1, realtime, mp4test, webm
   if (noisefmt) { // 模擬 Safari:f32-planar 被讀成別的東西(輸入換成雜訊),其他格式正常
     const orig = makeAudioData; makeAudioData = (fmt, L, R, pos, n, sr) => { if (fmt !== "f32-planar") return orig(fmt, L, R, pos, n, sr);
       const z = new Float32Array(n), z2 = new Float32Array(n); for (let i = 0; i < n; i++) { z[i] = Math.random() - 0.5; z2[i] = Math.random() - 0.5; } return orig(fmt, z, z2, 0, n, sr); }; }
+  if (ioslike) window.PIANO_SELFTEST = true;   // iPhone 才跑的鋼琴自我檢查(pianoSelfTest)也一起跑
   if (mp4test) window.FAST_EXPORT_FORCE = { container: "mp4", vCodec: "vp09.00.40.08", aCodec: "opus", muxV: "vp9", muxA: "opus", mime: "video/mp4;codecs=vp9,opus", ext: "mp4" };
   if (webmtest) window.FAST_EXPORT_FORCE = { container: "webm", vCodec: "vp09.00.40.08", aCodec: "opus", muxV: "V_VP9", muxA: "A_OPUS", mime: "video/webm;codecs=vp9,opus", ext: "webm" };
   let delivered = null, done;
