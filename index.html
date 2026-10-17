@@ -893,7 +893,7 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
       <span class="btn-label" data-i18n="settingsToggleLabel">設定</span>
     </button>
   </div>
-  <input type="file" id="fileInput" accept=".xml,.musicxml,.mxl,.gp,.gpx,.gp5,.gp4,.gp3">
+  <input type="file" id="fileInput" accept=".xml,.musicxml,.mxl,.gp,.gpx,.gp5,.gp4,.gp3,application/vnd.recordare.musicxml+xml,application/vnd.recordare.musicxml,application/xml,text/xml">
 </header>
 <!-- 第二排:載入/播放/回到開頭。樂譜載入前不出現(跟原本 loadBtn 的行為一致,
      載入前的載入動作交給舞台中央的大卡片),載入後才靠右浮現在第一排下方,
@@ -2322,11 +2322,10 @@ $("fileInput").addEventListener("change", async e => {
 /* ── 拖放檔案到樂譜區直接載入(桌面版方便) ─────────────────── */
 const SCORE_FILE_RE = /\.(xml|musicxml|mxl|gp|gpx|gp5|gp4|gp3)$/i;
 const GP_FILE_RE = /\.(gp|gpx|gp5|gp4|gp3)$/i;
-/* iPhone/iPad 的檔案選擇器把 accept 的副檔名換成系統檔案類型,.mxl、.gp5 這類系統不認得的會變灰色選不到,
-   所以 iOS 不限制,選了再檢查(loadScoreFile)。App 裡「支援與聯絡」「隱私權政策」改連網址(用 Safari 打開;
-   App 內的相對路徑是 capacitor:// 開不了,審查發現) */
+/* 檔案選擇器一律保留 accept(只列樂譜格式、沒有圖片/影片類型):iPhone 沒有 accept 時會先跳「照片圖庫/拍照或錄影/選擇檔案」選單,
+   有 accept 才直接打開「檔案」(使用者要求,2026-10;曾為了怕 .mxl/.gp5 變灰色拿掉過)。選錯檔案時 loadScoreFile 會說明。
+   App 裡「支援與聯絡」「隱私權政策」改連網址(用 Safari 打開;App 內的相對路徑是 capacitor:// 開不了,審查發現) */
 (function(){
-  if (isIOSDevice() || window.IN_NATIVE_APP) document.getElementById("fileInput").removeAttribute("accept");
   if (window.IN_NATIVE_APP) for (const a of document.querySelectorAll('a[href="support.html"], a[href="privacy.html"]'))
     a.href = "https://stevenmusic.github.io/ScrollScore/" + a.getAttribute("href");
 })();
