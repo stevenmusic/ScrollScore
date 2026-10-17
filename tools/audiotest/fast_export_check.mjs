@@ -5,6 +5,7 @@
 //   模擬 iPhone Safari 的狀況:--dropmeta 編碼器不給 decoderConfig/時長;--nosuspend OfflineAudioContext 不回報進度;
 //   --failmux 封裝收尾時出錯(要退回即時錄影);--cancel N 匯出開始 N 秒後按取消
 //   --hide A B:即時錄影開始後第 A 秒模擬離開畫面(document.hidden)B 秒再回來,影片長度不能變、畫面要連續
+//   --ioslike:照 iPhone 的規則(試編再慢也走快速匯出);--breakaudio:模擬匯出的聲音解不出來(要退回即時錄影)
 //   --twice:同一頁匯出兩次,印第二次(第二次用記住的試編結果,不再試編)
 //   每 0.3 秒記一次匯出畫面的標題/時間,印出「標題最久沒變」幾秒(看起來卡住)與時間有沒有超過樂曲長度
 import { chromium } from "playwright";
@@ -29,7 +30,7 @@ await page.setInputFiles("#fileInput", path.resolve(score));
 await page.waitForFunction(() => typeof events !== "undefined" && events.length > 0, null, { timeout: 120000 });
 await page.evaluate(async () => { const inst = currentInstrument(); if (inst === "drum") await loadDrumKit(); else await loadInstrumentSamples(inst); });
 await page.waitForTimeout(500);
-const res = await page.evaluate(async ({ format, s0, s1, realtime, mp4test, webmtest, dropmeta, nosuspend, failmux, cancelAt, twice, hide }) => {
+const res = await page.evaluate(async ({ format, s0, s1, realtime, mp4test, webmtest, dropmeta, nosuspend, failmux, cancelAt, twice, hide, ioslike, breakaudio }) => {
   if (dropmeta) window.FAST_EXPORT_DROP_META = true;
   if (nosuspend) OfflineAudioContext.prototype.suspend = function(){ return Promise.reject(new Error("no suspend")); };
   if (failmux) { const orig = loadMuxer; loadMuxer = async k => { const M = await orig(k); return { ...M, Muxer: class extends M.Muxer { finalize(){ throw new Error("simulated finalize failure"); } } }; }; }
@@ -48,6 +49,8 @@ const res = await page.evaluate(async ({ format, s0, s1, realtime, mp4test, webm
   }
   if (cancelAt != null) setTimeout(() => $("exportCancel") ? $("exportCancel").click() : (exportCancelled = true), cancelAt * 1000);
   if (realtime) window.FAST_EXPORT_DISABLE = true;
+  if (ioslike) fastMinSpeed = () => 0.05;
+  if (breakaudio) window.FAST_EXPORT_BREAK_AUDIO = true;
   if (mp4test) window.FAST_EXPORT_FORCE = { container: "mp4", vCodec: "vp09.00.40.08", aCodec: "opus", muxV: "vp9", muxA: "opus", mime: "video/mp4;codecs=vp9,opus", ext: "mp4" };
   if (webmtest) window.FAST_EXPORT_FORCE = { container: "webm", vCodec: "vp09.00.40.08", aCodec: "opus", muxV: "V_VP9", muxA: "A_OPUS", mime: "video/webm;codecs=vp9,opus", ext: "webm" };
   let delivered = null, done;
@@ -63,7 +66,7 @@ const res = await page.evaluate(async ({ format, s0, s1, realtime, mp4test, webm
   const ms = performance.now() - t0;
   await Promise.race([got, new Promise(r => setTimeout(r, 20000))]);
   return { ms: Math.round(ms), maxStall: Math.round(maxStall), stallTitle, overTime, log: log.length > 60 ? log.slice(0, 30).concat(["…"], log.slice(-30)) : log, note: fastExportNote, delivered, status: $("status") ? $("status").textContent : "", liveCtx: !(audioCtx instanceof OfflineAudioContext), len: (cfg.endSec != null ? cfg.endSec - cfg.startSec : totalSec()) };
-}, { format, s0, s1, realtime: flags.has("--realtime"), mp4test: flags.has("--mp4test"), webmtest: flags.has("--webmtest"), dropmeta: flags.has("--dropmeta"), nosuspend: flags.has("--nosuspend"), failmux: flags.has("--failmux"), cancelAt: opt("cancel") != null ? +opt("cancel") : null, twice: flags.has("--twice"), hide: opt("hide") != null ? [+opt("hide"), +args[args.indexOf("--hide") + 2]] : null });
+}, { format, s0, s1, realtime: flags.has("--realtime"), mp4test: flags.has("--mp4test"), webmtest: flags.has("--webmtest"), dropmeta: flags.has("--dropmeta"), nosuspend: flags.has("--nosuspend"), failmux: flags.has("--failmux"), cancelAt: opt("cancel") != null ? +opt("cancel") : null, twice: flags.has("--twice"), ioslike: flags.has("--ioslike"), breakaudio: flags.has("--breakaudio"), hide: opt("hide") != null ? [+opt("hide"), +args[args.indexOf("--hide") + 2]] : null });
 if (res.delivered) {
   const tag = flags.has("--realtime") ? "rt-" : flags.has("--mp4test") ? "mp4test-" : flags.has("--webmtest") ? "webmtest-" : "";
   const f = path.join(out, tag + res.delivered.name);

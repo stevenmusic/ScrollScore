@@ -1425,6 +1425,7 @@ const I18N = {
     fastNoteNoAudio: "這台裝置沒有聲音編碼器|(需要 iOS 26 以上),|改用即時錄影",
     fastNoteSlow: "編碼速度不夠快,|改用即時錄影|({x})",
     fastNoteError: "快速匯出失敗|({msg}),|改用即時錄影",
+    fastNoteNoSound: "影片聲音檢查沒過 {msg}",
     exportInfoPFast: "不用等樂曲播完,|通常比樂曲長度快很多。",
 
     previewImgAlt: "匯出預覽",
@@ -1684,6 +1685,7 @@ const I18N = {
     fastNoteNoAudio: "This device has no audio encoder (needs iOS 26+); using real-time recording",
     fastNoteSlow: "Encoding isn't fast enough; using real-time recording ({x})",
     fastNoteError: "Fast export failed ({msg}); using real-time recording",
+    fastNoteNoSound: "audio check failed {msg}",
     exportInfoPFast: "No need to wait for the piece to play through — usually much faster than its length.",
 
     previewImgAlt: "Export preview",
@@ -10993,8 +10995,8 @@ function aacAdtsHeaderLen(u8){
   const len = ((u8[3] & 3) << 11) | (u8[4] << 3) | (u8[5] >> 5);
   return len === u8.length ? ((u8[1] & 1) ? 7 : 9) : 0;
 }
-let aacMuxInfo = "";   // 給測試/除錯看:description 從哪來、有沒有 ADTS
-function muxAudioChunkFn(muxer, fmtSel, sr){
+let aacMuxInfo = "", aacMuxAsc = null;   // 給測試/除錯看:description 從哪來、有沒有 ADTS;寫進 MP4 的 AudioSpecificConfig
+function muxAudioChunkFn(muxer, fmtSel, sr, tap){
   const mp4 = fmtSel.container === "mp4", aac = mp4 && fmtSel.muxA === "aac";
   let first = true, adts = null;
   aacMuxInfo = "";
@@ -11004,19 +11006,22 @@ function muxAudioChunkFn(muxer, fmtSel, sr){
     if (chunk.timestamp < 0) return;
     let raw = new Uint8Array(chunk.byteLength); chunk.copyTo(raw);
     const ts = chunk.timestamp;
+    if (tap) tap(raw, ts, Number.isFinite(chunk.duration) ? chunk.duration : 0);
     if (!mp4) return muxer.addAudioChunkRaw(raw, chunk.type, ts, meta && meta.decoderConfig && meta.decoderConfig.description ? meta : undefined);
     let m;
     if (aac) {
       if (adts === null) adts = aacAdtsHeaderLen(raw) > 0;
       if (adts) { const h = aacAdtsHeaderLen(raw); if (h) raw = raw.subarray(h); }
+      if (tap) tap(raw, ts, Number.isFinite(chunk.duration) ? chunk.duration : Math.round(1024 / sr * 1e6));
       if (first) {
         const ch = (meta && meta.decoderConfig && meta.decoderConfig.numberOfChannels) || 2;
         const fx = aacFixDescription(meta && meta.decoderConfig && meta.decoderConfig.description, sr, ch);
         aacMuxInfo = fx.from + (adts ? " adts" : "");
+        aacMuxAsc = fx.asc;
         if (fx.from !== "encoder") console.info("AAC 設定資料:" + aacMuxInfo);
         m = { decoderConfig: { codec: "mp4a.40.2", sampleRate: sr, numberOfChannels: ch, description: fx.asc } };
       }
-    } else m = meta && meta.decoderConfig && meta.decoderConfig.description ? meta : undefined;
+    } else { if (tap) tap(raw, ts, Number.isFinite(chunk.duration) ? chunk.duration : 0); m = meta && meta.decoderConfig && meta.decoderConfig.description ? meta : undefined; }
     first = false;
     const dur = Number.isFinite(chunk.duration) ? chunk.duration : Math.round(1024 / sr * 1e6);
     muxer.addAudioChunkRaw(raw, chunk.type, ts, dur, m);
@@ -11025,10 +11030,45 @@ function muxAudioChunkFn(muxer, fmtSel, sr){
 /* 快速匯出。回傳 true = 已經處理完(成功、取消或在產生影片後失敗);false = 這台機器不支援或還沒開始就失敗,改用即時錄影 */
 let fastPrepTick = null;
 function stopFastPrepTick(){ if (fastPrepTick) { fastPrepTick.stop(); fastPrepTick = null; } }
+/* 匯出完先確認影片裡的聲音解得出來(2026-10,使用者回報 iPhone 快速匯出的影片沒有聲音):
+   把最大聲那 2 秒的已編碼聲音,用 AudioDecoder + 寫進檔案的同一份設定資料(AudioSpecificConfig)解回來,
+   音量要有原本的四分之一以上(−12dB)。解不開或幾乎沒聲音 → 不交出這個檔案、改用即時錄影。
+   瀏覽器沒有 AudioDecoder 或 10 秒沒結果就略過(不擋) */
+async function verifyEncodedAudio(chunks, codec, sr, asc, srcRms){
+  if (typeof AudioDecoder === "undefined" || !chunks.length || !(srcRms > 1e-4)) return { ok: true, why: "skip" };
+  let sum = 0, n = 0, err = null;
+  const dec = new AudioDecoder({
+    output: ad => {
+      try {
+        const f = ad.format || "f32", planar = /-planar$/.test(f), planes = planar ? ad.numberOfChannels : 1;
+        for (let p = 0; p < planes; p++) {
+          const bytes = ad.allocationSize({ planeIndex: p });
+          const buf = /^f32/.test(f) ? new Float32Array(bytes / 4) : /^s16/.test(f) ? new Int16Array(bytes / 2) : /^s32/.test(f) ? new Int32Array(bytes / 4) : new Uint8Array(bytes);
+          ad.copyTo(buf, { planeIndex: p });
+          const k = /^f32/.test(f) ? 1 : /^s16/.test(f) ? 1 / 32768 : /^s32/.test(f) ? 1 / 2147483648 : 1 / 128, off = /^u8/.test(f) ? 128 : 0;
+          for (let i = 0; i < buf.length; i++) { const v = (buf[i] - off) * k; sum += v * v; }
+          n += buf.length;
+        }
+      } catch (e) { err = err || e; }
+      ad.close();
+    },
+    error: e => { err = err || e; }
+  });
+  try {
+    dec.configure({ codec, sampleRate: sr, numberOfChannels: 2, ...(asc ? { description: asc } : {}) });
+    for (const c of chunks) dec.decode(new EncodedAudioChunk({ type: "key", timestamp: c.ts, duration: c.dur || undefined, data: c.raw }));
+    const done = await Promise.race([dec.flush().then(() => true), new Promise(r => setTimeout(() => r(false), 10000))]);
+    if (!done) return { ok: true, why: "timeout" };
+  } catch (e) { err = err || e; }
+  try { dec.close(); } catch (e) {}
+  if (err) return { ok: false, why: String(err.message || err) };
+  const rms = Math.sqrt(sum / Math.max(1, n));
+  return { ok: rms > srcRms * 0.25, why: "rms " + rms.toFixed(4) + " / " + srcRms.toFixed(4) };
+}
 /* 試編結果記在這台裝置上(2026-10,使用者要求加快匯出):同樣的尺寸/格式下次直接用,省掉 2~3 秒的試編。
    夠快的記 30 天、太慢的記 3 天(瀏覽器/系統更新後可能變快);快速匯出出錯就刪掉,下次重新試編。
    匯出程式改了(畫法、取影格方式)要把 v 加一 */
-const FAST_PROBE_KEY = "scrollscore_fastprobe_v1";
+const FAST_PROBE_KEY = "scrollscore_fastprobe_v2";   // v2:iPhone 太慢也不退回即時錄影
 function fastProbeCacheGet(key){
   try {
     const e = (JSON.parse(localStorage.getItem(FAST_PROBE_KEY) || "{}") || {})[key];
@@ -11044,6 +11084,9 @@ function fastProbeCacheSet(key, e){
     localStorage.setItem(FAST_PROBE_KEY, JSON.stringify(all));
   } catch (err) {}
 }
+/* 試編多快才用快速匯出:一般 FAST_EXPORT.minSpeed(不比即時錄影慢);iPhone/iPad(含 App)的即時錄影只錄得到每秒約 6.5 格
+   (2026-10 使用者影片:Safari 的 canvas 錄影器瓶頸,網頁本身每秒畫 45 格以上),所以只要不是慢到離譜都用快速匯出 */
+function fastMinSpeed(){ return (isIOSDevice() || window.IN_NATIVE_APP) ? 0.05 : FAST_EXPORT.minSpeed; }
 async function fastExportVideo(cfg){
   // 準備(格式檢查、樂譜點陣化、試編)要幾秒,標題不能停在 0%(使用者會以為壞了):照時間往前推
   stopFastPrepTick();
@@ -11153,7 +11196,7 @@ async function fastExportVideo(cfg){
       fps = cachedProbe.fps || fps; frameSrc = cachedProbe.frameSrc || "canvas";
       probeInfo = cachedProbe.info + " · cached";
       console.info("快速匯出試編(記住的結果):" + fps + "fps " + probeInfo);
-      if (!window.FAST_EXPORT_FORCE && cachedProbe.speed < FAST_EXPORT.minSpeed) return fastFallback("slow", probeInfo);
+      if (!window.FAST_EXPORT_FORCE && cachedProbe.speed < fastMinSpeed()) return fastFallback("slow", probeInfo);
     } else {
     let r = await runProbe("canvas");
     if (exportCancelled) throw exportCancelError();
@@ -11165,9 +11208,10 @@ async function fastExportVideo(cfg){
     if (exportCancelled) throw exportCancelError();
     probeInfo = r.speed.toFixed(2) + "x · draw " + r.draw.toFixed(0) + "ms · grab " + r.grab.toFixed(0) + "ms (" + frameSrc + ") · total " + r.per.toFixed(0) + "ms · warm-up " + r.warm.toFixed(0) + "ms";
     console.info("快速匯出試編:" + fps + "fps " + probeInfo);
-    if (r.speed < FAST_EXPORT.minSpeed && fps > 30 && r.speed * fps / 30 >= FAST_EXPORT.minSpeed) { r.speed *= fps / 30; fps = 30; }
+    // 60fps 不夠快就改 30fps(30fps 夠快,或 iPhone 這種即時錄影不能用的裝置一律改)
+    if (r.speed < FAST_EXPORT.minSpeed && fps > 30 && (r.speed * fps / 30 >= FAST_EXPORT.minSpeed || fastMinSpeed() < FAST_EXPORT.minSpeed)) { r.speed *= fps / 30; fps = 30; }
     fastProbeCacheSet(probeKey, { speed: r.speed, frameSrc, fps, info: probeInfo });
-    if (!window.FAST_EXPORT_FORCE && r.speed < FAST_EXPORT.minSpeed) return fastFallback("slow", probeInfo);
+    if (!window.FAST_EXPORT_FORCE && r.speed < fastMinSpeed()) return fastFallback("slow", probeInfo);
     }
   } catch (e) { if (e.cancelled) return cancelledNow(); console.warn(e); return fastFallback("error", e.message); }
   if (cancelledNow()) return true;
@@ -11204,7 +11248,15 @@ async function fastExportVideo(cfg){
     muxer = new Muxer.Muxer(fmtSel.container === "mp4"
       ? { target, video: { codec: fmtSel.muxV, width: cfg.W, height: cfg.H, frameRate: fps }, audio: { codec: fmtSel.muxA, numberOfChannels: 2, sampleRate: sr }, fastStart: false, firstTimestampBehavior: "offset" }
       : { target, video: { codec: fmtSel.muxV, width: cfg.W, height: cfg.H, frameRate: fps }, audio: { codec: fmtSel.muxA, numberOfChannels: 2, sampleRate: sr }, firstTimestampBehavior: "offset" });
-    const onVideo = muxVideoChunkFn(muxer, fmtSel, cfg.W, cfg.H, fps), onAudio = muxAudioChunkFn(muxer, fmtSel, sr);
+    // 聲音檢查用:找最大聲的 2 秒(0.5 秒一步),記下那段的已編碼聲音與原本的音量
+    let vw0 = 0, vwBest = -1;
+    { const W2 = 2 * sr, step = Math.floor(sr / 2);
+      for (let i = 0; i + W2 <= L.length; i += step) { let e = 0; for (let j = i; j < i + W2; j += 8) e += L[j] * L[j] + R[j] * R[j]; if (e > vwBest) { vwBest = e; vw0 = i; } } }
+    const vwT0 = vw0 / sr, vwT1 = vwT0 + 2;
+    let srcRms = 0; { let e = 0, n = 0; for (let j = vw0; j < Math.min(L.length, vw0 + 2 * sr); j++) { e += L[j] * L[j] + R[j] * R[j]; n += 2; } srcRms = Math.sqrt(e / Math.max(1, n)); }
+    const vChunks = [];
+    const audioTap = (raw, ts, d) => { const t = ts / 1e6; if (t >= vwT0 - 0.05 && t <= vwT1) { const c = raw.slice(); if (window.FAST_EXPORT_BREAK_AUDIO) c.fill(0); vChunks.push({ raw: c, ts, dur: d }); } };   // BREAK_AUDIO:測試用,模擬解不出聲音
+    const onVideo = muxVideoChunkFn(muxer, fmtSel, cfg.W, cfg.H, fps), onAudio = muxAudioChunkFn(muxer, fmtSel, sr, audioTap);
     venc = new VideoEncoder({ output: (c, m) => { try { onVideo(c, m); } catch (e) { encErr = encErr || e; } }, error: e => { encErr = e; } });
     venc.configure(encCfg(fps));
     aenc = new AudioEncoder({ output: (c, m) => { try { onAudio(c, m); } catch (e) { encErr = encErr || e; } }, error: e => { encErr = e; } });
@@ -11248,6 +11300,9 @@ async function fastExportVideo(cfg){
     await venc.flush(); await aenc.flush();
     if (encErr) throw encErr;
     closeAll();
+    const va = await verifyEncodedAudio(vChunks, fmtSel.aCodec, sr, fmtSel.muxA === "aac" ? aacMuxAsc : null, srcRms);
+    console.info("快速匯出聲音檢查:" + (va.ok ? "OK" : "失敗") + " " + va.why + " · " + aacMuxInfo);
+    if (!va.ok) throw Object.assign(new Error(T("fastNoteNoSound", { msg: va.why })), { noSound: true });
     muxer.finalize();
     fastTimes.video = (performance.now() - tVideo0) / 1000;
     fastTimes.speed = dur / fastTimes.video;
@@ -11265,12 +11320,13 @@ async function fastExportVideo(cfg){
   return true;
 }
 /* 匯出方式(2026-10,使用者決定:「匯出時長可以更快,但不能比影片長」):
-   - fast:WebCodecs 快速匯出。要先把整首聲音在背景合成一遍(雲端實測要樂曲長度的 0.36~1.4 倍,
-     時間平均分散在每個音的處理上,沒有單一瓶頸可拿掉),再編畫面,iPhone 上總時間比影片還長 → 停用,程式保留
+   - fast:WebCodecs 快速匯出(一格一格編碼)。曾停用(要先把整首聲音合成一遍,iPhone 總時間比影片長);
+     之後發現 iPhone Safari 的即時錄影(canvas 錄影器)每秒只錄得到約 6.5 格,使用者選擇再開:
+     iPhone/iPad 一律走快速匯出(30fps,fastMinSpeed),其他瀏覽器照試編速度決定;匯出完先用 AudioDecoder 檢查聲音(verifyEncodedAudio)
    - loudnessPrepass:即時錄影前先在背景算一遍、把成品調到 −14 LUFS(「調整音量中」)。要多花一段合成時間,
      停用一版後使用者比較過「固定加大」,決定保留(停用時影片照 App 播放音量:鋼琴約 −12.4 LUFS,鼓約 −22.7、在 YouTube 偏小聲)
    匯出時間 = 調整音量 + 影片長度 */
-const EXPORT_MODE = { fast: false, loudnessPrepass: true };
+const EXPORT_MODE = { fast: true, loudnessPrepass: true };   // fast 2026-10 再開(使用者選):iPhone 即時錄影只有每秒 6.5 格
 async function exportVideo(cfg){
   if (!events.length || exporting) return;
   exporting = true; exportCancelled = false; $("exportCancel").disabled = false;
