@@ -1134,6 +1134,13 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
             </div>
           </div>
           <div class="exp-field" id="bgOpacityRow" hidden><span data-i18n="scoreBgOpacityLabel">背景濃度</span><input type="range" id="scoreBgOpacity" min="0" max="100" value="0"><b id="scoreBgOpacityVal">0</b></div>
+            <div class="exp-row">
+              <span class="exp-label" data-i18n="coverStyleLabel">封面樣式</span>
+              <div class="seg seg-sm" id="expCoverSeg" role="radiogroup">
+                <button type="button" data-v="card" role="radio"><b data-i18n="coverStyleCard">置中卡片</b></button>
+                <button type="button" data-v="editorial" role="radio"><b data-i18n="coverStyleEditorial">雜誌排版</b></button>
+              </div>
+            </div>
             <label class="switch-row exp-switch">
               <span data-i18n="exportRangeToggleLabel">只匯出片段區間</span>
               <span class="switch"><input type="checkbox" id="exportRangeToggle"><span class="switch-track"></span></span>
@@ -1310,6 +1317,9 @@ const I18N = {
 
     advancedSummary: "背景圖片",
     coverBtn: "存封面圖",
+    coverStyleLabel: "封面樣式",
+    coverStyleCard: "置中卡片",
+    coverStyleEditorial: "雜誌排版",
     coverBtnTitle: "用目前的預覽畫面做影片封面/縮圖(橫式 1280×720,YouTube 縮圖尺寸)",
     coverBusy: "產生中…",
     coverDone: "封面圖完成({w}×{h})",
@@ -1558,6 +1568,9 @@ const I18N = {
 
     advancedSummary: "Background Image",
     coverBtn: "Save Cover",
+    coverStyleLabel: "Cover style",
+    coverStyleCard: "Centered card",
+    coverStyleEditorial: "Magazine",
     coverBtnTitle: "Make a cover / thumbnail from the current preview (landscape 1280×720, the YouTube thumbnail size)",
     coverBusy: "Working…",
     coverDone: "Cover image ready ({w}×{h})",
@@ -9243,7 +9256,7 @@ function scheduleFrame(fn, fps){
    現在一個畫面:即時預覽 + 格式/鍵盤鼓組/標題/浮水印,不常用的副標題、對齊、片段收在「進階」。
    格式、鍵盤鼓組、對齊記在 localStorage(EXPORT_PREFS_KEY),第二次起打開直接按「開始匯出」 */
 const EXPORT_PREFS_KEY = "scrollscore_export_prefs";
-const exportPrefs = { format: "landscape", panel: true, align: "center" };
+const exportPrefs = { format: "landscape", panel: true, align: "center", cover: "editorial" };
 try { Object.assign(exportPrefs, JSON.parse(localStorage.getItem(EXPORT_PREFS_KEY) || "{}") || {}); } catch (e) {}
 function saveExportPrefs(){ try { localStorage.setItem(EXPORT_PREFS_KEY, JSON.stringify(exportPrefs)); } catch (e) {} }
 function syncSeg(segId, value){
@@ -9302,6 +9315,7 @@ function openExportSheet(){
   resetExportRange();
   syncSeg("expFormatSeg", exportPrefs.format);
   syncSeg("expAlignSeg", exportPrefs.align);
+  syncSeg("expCoverSeg", COVER_STYLES[exportPrefs.cover] ? exportPrefs.cover : "editorial");
   $("expPanelToggle").checked = !!exportPrefs.panel;
   syncExportPanelRow();
   $("formatOverlay").classList.add("show");
@@ -9320,6 +9334,10 @@ $("expFormatSeg").addEventListener("click", e => {
 $("expAlignSeg").addEventListener("click", e => {
   const b = e.target.closest("button[data-v]"); if (!b) return;
   exportPrefs.align = b.dataset.v; saveExportPrefs(); syncSeg("expAlignSeg", exportPrefs.align); refreshExportPreview();
+});
+$("expCoverSeg").addEventListener("click", e => {
+  const b = e.target.closest("button[data-v]"); if (!b) return;
+  exportPrefs.cover = b.dataset.v; saveExportPrefs(); syncSeg("expCoverSeg", exportPrefs.cover);
 });
 $("expPanelToggle").addEventListener("change", () => { exportPrefs.panel = $("expPanelToggle").checked; saveExportPrefs(); refreshExportPreview(); });
 for (const id of ["exportTitleInput", "exportSubtitleInput", "exportWatermarkInput"]) $(id).addEventListener("input", () => refreshExportPreview());
@@ -9506,8 +9524,8 @@ async function renderExportStill(cfg, stale){
    影片裡的標題(畫面寬的 5.5%)縮小後幾乎看不清楚。不放頻道名稱(列表旁邊本來就有)。
    橫式輸出 1280×720(YouTube 縮圖建議尺寸,上限 2MB),直式/方形照影片尺寸;JPEG 0.92 */
 const COVER = { titleMax: 0.15, titleMin: 0.07, widthFrac: 0.86, veil: 0.74, landscapeW: 1280 };
-async function renderCoverImage(cfg){
-  const base = { ...cfg, title: "", subtitle: "", channel: "" };   // 縮圖不放頻道名稱:YouTube 列表旁邊本來就有頻道名與頭像(使用者確認)
+async function coverCard(cfg){
+  const base = { ...cfg, title: "", subtitle: "", channel: "", noCursor: true };   // 縮圖不放頻道名稱:YouTube 列表旁邊本來就有頻道名與頭像(使用者確認)
   const cv = await renderExportStill(base);
   const W = cv.width, H = cv.height, ctx = cv.getContext("2d");
   if (cfg.watermarkEnabled && (cfg.title || cfg.subtitle)) {
@@ -9518,18 +9536,9 @@ async function renderCoverImage(cfg){
     ctx.globalAlpha = 1;
     const ref = Math.min(W, H), maxW = W * COVER.widthFrac;
     const fontOf = px => "700 " + px + "px '" + EXPORT_FONT_FAMILY + "', 'Noto Serif TC', serif";
-    // 一行放得下就一行;放不下先縮字(最小 7%),還是放不下就從中間附近的空格(沒有就照字數)切成兩行
-    const fit = (lines) => { ctx.font = fontOf(100); const w = Math.max(...lines.map(l => ctx.measureText(l).width)); return Math.min(ref * COVER.titleMax, 100 * maxW / Math.max(1, w)); };
-    let lines = cfg.title ? [cfg.title] : [];
-    let size = lines.length ? fit(lines) : ref * COVER.titleMax;
-    if (lines.length && size < ref * COVER.titleMin) {
-      const t = cfg.title, mid = Math.floor(t.length / 2);
-      let cut = -1;
-      for (let d = 0; d < mid && cut < 0; d++) { if (t[mid - d] === " ") cut = mid - d; else if (t[mid + d] === " ") cut = mid + d; }
-      lines = cut > 0 ? [t.slice(0, cut).trim(), t.slice(cut + 1).trim()] : [t.slice(0, mid), t.slice(mid)];
-      size = Math.max(ref * COVER.titleMin * 0.8, fit(lines));
-    }
-    size = Math.round(size);
+    // 換行規則跟雜誌排版共用(fitCoverText):中英混合中文、英文各一行;單一語言一行放得下就一行,放不下照詞換行(英文不拆字)
+    const fitted = cfg.title ? fitCoverText(ctx, cfg.title, maxW, 2, Math.round(ref * COVER.titleMax), Math.round(ref * COVER.titleMin), 700) : { size: Math.round(ref * COVER.titleMax), lines: [] };
+    const lines = fitted.lines, size = fitted.size;
     const subSize = Math.round(Math.max(ref * 0.035, size * 0.4));
     const lineH = Math.round(size * 1.18), gap = Math.round(size * 0.35);
     // 實際有字的高度:最後一行標題下面的行距(0.18 字高)、副標題往上提的 0.18 都不算,卡片上下內距才會一樣
@@ -9558,6 +9567,108 @@ async function renderCoverImage(cfg){
     }
     ctx.restore();
   }
+  return cv;
+}
+/* ── 封面圖的第二種版型(2026-10,使用者問「還有更充滿設計感的排版嗎?」,選了雜誌排版)──
+   共用:樂譜畫面(不畫標題、不畫鍵盤/鼓組面板)、標題自動換行縮字(fitCoverText) */
+const coverFont = (w, px) => w + " " + px + "px '" + EXPORT_FONT_FAMILY + "', 'Noto Serif TC', serif";
+// 中日韓字一個字一段、英文一個字一段,貪婪換行;從 start 往下縮到 maxLines 行放得下(最小 min)
+function fitCoverText(ctx, text, maxW, maxLines, start, min, weight){
+  // 中文連在一起的字當一段(不要把「搖滾鼓練/習」拆開),一段比一行還長時才逐字拆
+  const runs = String(text).match(/[\u2E80-\u9FFF\uF900-\uFAFF\uFF00-\uFFEF]+|[^\s\u2E80-\u9FFF\uF900-\uFAFF\uFF00-\uFFEF]+|\s+/g) || [];
+  const wrap = () => {
+    const toks = [];
+    for (const r of runs) { if (/[\u2E80-\u9FFF]/.test(r) && ctx.measureText(r).width > maxW) toks.push(...r); else toks.push(r); }
+    const lines = []; let cur = "";
+    for (const t of toks) {
+      const next = cur + t;
+      if (cur.trim() && ctx.measureText(next.trimEnd()).width > maxW) { lines.push(cur.trim()); cur = /^\s+$/.test(t) ? "" : t; }
+      else cur = next;
+    }
+    if (cur.trim()) lines.push(cur.trim());
+    return lines;
+  };
+  const widthAt100 = lines => { ctx.font = coverFont(weight, 100); return Math.max(...lines.map(l => ctx.measureText(l).width)); };
+  // 中英混合的標題(「歡樂頌 Ode to Joy」,使用者要求):一行放得下、字又不會太小就一行;
+  // 一行的字會比分兩行小超過四分之一時,改成中文一行、英文自己一行(不在中英文中間以外的地方換行,英文不拆開;放不下就縮字,最小到 min 的七成)
+  if (maxLines >= 2) {
+    const m = String(text).match(/^([^\sA-Za-z]*[\u2E80-\u9FFF][^A-Za-z]*?)\s+([A-Za-z].*)$/) || String(text).match(/^([A-Za-z][^\u2E80-\u9FFF]*?)\s+([\u2E80-\u9FFF].*)$/);
+    if (m) {
+      const lines = [m[1].trim(), m[2].trim()];
+      const two = Math.max(Math.round(min * 0.7), Math.min(start, Math.floor(100 * maxW / widthAt100(lines))));
+      const one = Math.min(start, Math.floor(100 * maxW / widthAt100([String(text)])));
+      if (one >= min && one >= two * 0.75) return { size: one, lines: [String(text)], ok: true };
+      return { size: two, lines, ok: true };
+    }
+  }
+  // 一行放得下(字不小於 min)就一行:英文標題盡量不換行
+  {
+    const size = Math.min(start, Math.floor(100 * maxW / widthAt100([String(text)])));
+    if (size >= min) return { size, lines: [String(text)], ok: true };
+  }
+  for (let size = start; ; size = Math.max(min, Math.floor(size * 0.94))) {
+    ctx.font = coverFont(weight, size);
+    const lines = wrap();
+    const ok = lines.length <= maxLines && lines.every(l => ctx.measureText(l).width <= maxW);
+    if (ok || size <= min) return { size, lines, ok };
+  }
+}
+// 樂譜畫面:不畫標題/副標題/頻道名稱、不畫面板;回傳畫面與樂譜所在的上下範圍
+async function coverScoreFrame(cfg){
+  const base = { ...cfg, title: "", subtitle: "", channel: "", includeKeyboard: false, noCursor: true };
+  const cv = await renderExportStill(base);
+  const lay = computeExportLayout(base);
+  const top = cfg.page ? lay.pageTop : lay.topY, bot = cfg.page ? lay.pageBottom : lay.topY + lay.SCORE_H;
+  return { cv, top: Math.max(0, top), bot: Math.min(cv.height, bot) };
+}
+// 雜誌分割:一邊是大標題(靠左、金色短線),另一邊是樂譜特寫;直式是上面樂譜、下面標題
+async function coverEditorial(cfg){
+  const { cv: frame, top, bot } = await coverScoreFrame(cfg);
+  const W = frame.width, H = frame.height, ref = Math.min(W, H), land = W >= H;
+  const cv = document.createElement("canvas"); cv.width = W; cv.height = H;
+  const ctx = cv.getContext("2d");
+  const paper = currentInstrument() === "drum" ? "#FFFFFF" : "#FFFDF6";
+  ctx.fillStyle = paper; ctx.fillRect(0, 0, W, H);
+  const ink = exportInkColor(hlCursorColor());
+  // 樂譜區:從畫面裡切樂譜那一段(播放軸附近開始),放大填滿
+  const area = land ? { x: W * 0.46, y: 0, w: W * 0.54, h: H } : { x: 0, y: 0, w: W, h: H * 0.56 };
+  const sh = Math.max(1, bot - top), sw = Math.min(W, sh * area.w / area.h);
+  const sx = Math.max(0, Math.min(W - sw, W * 0.2 - sw * 0.05));
+  ctx.save(); ctx.beginPath(); ctx.rect(area.x, area.y, area.w, area.h); ctx.clip();
+  ctx.fillStyle = paper; ctx.fillRect(area.x, area.y, area.w, area.h);
+  const scale = Math.max(area.w / sw, area.h / sh);
+  const dw = sw * scale, dh = sh * scale;
+  // 橫式上下置中;直式從樂譜第一行開始(不要從中間切掉一行)
+  ctx.drawImage(frame, sx, top, sw, sh, area.x + (area.w - dw) / 2, land ? area.y + (area.h - dh) / 2 : area.y + H * 0.03, dw, dh);
+  ctx.restore();
+  // 樂譜跟文字區的交界淡出
+  const fade = land ? ctx.createLinearGradient(area.x, 0, area.x + W * 0.12, 0) : ctx.createLinearGradient(0, area.h, 0, area.h - H * 0.08);
+  fade.addColorStop(0, paper); fade.addColorStop(1, "rgba(255,253,246,0)");
+  ctx.fillStyle = fade;
+  if (land) ctx.fillRect(area.x, 0, W * 0.12, H); else ctx.fillRect(0, area.h - H * 0.08, W, H * 0.08);
+  // 文字區
+  const tx = land ? W * 0.07 : W * 0.08, tw = land ? W * 0.35 : W * 0.84;   // 橫式文字不要伸進樂譜的淡出區
+  // 盡量兩行(字可以縮到起始的六成),真的放不下才三行
+  const start = Math.round(ref * (land ? 0.15 : 0.13));
+  let t = cfg.title ? fitCoverText(ctx, cfg.title, tw, 2, start, Math.round(start * 0.6), 700) : { size: Math.round(ref * 0.1), lines: [] };
+  if (cfg.title && !t.ok) t = fitCoverText(ctx, cfg.title, tw, 3, start, Math.round(ref * 0.055), 700);
+  const sub = Math.round(Math.max(ref * 0.034, t.size * 0.34)), lineH = Math.round(t.size * 1.14);
+  const barH = Math.max(4, Math.round(ref * 0.008)), barW = Math.round(ref * 0.09);
+  const blockH = barH + t.size * 0.55 + t.lines.length * lineH + (cfg.subtitle ? t.size * 0.3 + sub : 0);
+  let y = land ? Math.round((H - blockH) / 2) : Math.round(area.h + (H - area.h - blockH) / 2);
+  ctx.fillStyle = ink; ctx.fillRect(tx, y, barW, barH); y += barH + Math.round(t.size * 0.55);
+  ctx.textAlign = "left"; ctx.textBaseline = "top";
+  ctx.font = coverFont(700, t.size); ctx.fillStyle = "#1E1A14";
+  for (const l of t.lines) { ctx.fillText(l, tx, y, tw); y += lineH; }
+  if (cfg.subtitle) { y += Math.round(t.size * 0.3) - Math.round(t.size * 0.14); ctx.font = coverFont(600, sub); ctx.fillStyle = ink; ctx.fillText(cfg.subtitle, tx, y, tw); }
+  return cv;
+}
+// 試過四種,使用者留下「置中卡片」與「雜誌排版」(深色金字、樂譜特寫沒留)
+const COVER_STYLES = { card: coverCard, editorial: coverEditorial };
+async function renderCoverImage(cfg, style){
+  await ensureTitleFontsLoaded(cfg);
+  const cv = await (COVER_STYLES[style] || coverCard)(cfg);
+  const W = cv.width, H = cv.height;
   if (W > H && W !== COVER.landscapeW) {   // 橫式縮成 YouTube 縮圖尺寸
     const out = document.createElement("canvas");
     out.width = COVER.landscapeW; out.height = Math.round(COVER.landscapeW * H / W);
@@ -9573,7 +9684,7 @@ $("coverBtn").addEventListener("click", async () => {
   const btn = $("coverBtn"), label = btn.querySelector("span");
   btn.disabled = true; label.textContent = T("coverBusy");
   try {
-    const cv = await renderCoverImage(cfg);
+    const cv = await renderCoverImage(cfg, exportPrefs.cover);
     const blob = await new Promise(res => cv.toBlob(res, "image/jpeg", 0.92));
     const name = "scrollscore-cover-" + cv.width + "x" + cv.height + ".jpg";
     setStatus(T("coverDone", { w: cv.width, h: cv.height }));
@@ -9933,7 +10044,7 @@ function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
   drawExportBackground(ctx, layout);
   const off = plX - xAtSec(songSec) * scale;
   // 小節高亮畫在樂譜「之前」,才會在音符底下當底色而不是蓋住音符(跟現場畫面的 z-index 一致)
-  if (measureHlOn()) {
+  if (!cfg.noCursor && measureHlOn()) {   // noCursor:封面圖不畫小節色塊與播放軸
     const mb = measureBoundsAt(songSec);
     if (mb) {
       ctx.save();
@@ -9959,15 +10070,17 @@ function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
     plBottom = Math.min(cfg.includeKeyboard ? layout.kbY - H * 0.01 : H, topY + SCORE_H * (e.bottom + pad));
   }
   const curCol = exportInkColor(hlCursorColor()); // 米色譜面上要換成深色版本,見函式上方說明
-  ctx.save();
-  ctx.globalAlpha = hlCursorOpacity() * EXPORT_PLAYLINE_ALPHA;
-  ctx.strokeStyle = curCol; ctx.lineWidth = 4;
-  ctx.beginPath(); ctx.moveTo(plX, plTop); ctx.lineTo(plX, plBottom); ctx.stroke();
-  ctx.fillStyle = curCol;
-  ctx.beginPath();
-  ctx.moveTo(plX-9, plTop-2); ctx.lineTo(plX+9, plTop-2); ctx.lineTo(plX, plTop+13);
-  ctx.closePath(); ctx.fill();
-  ctx.restore();
+  if (!cfg.noCursor) {
+    ctx.save();
+    ctx.globalAlpha = hlCursorOpacity() * EXPORT_PLAYLINE_ALPHA;
+    ctx.strokeStyle = curCol; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(plX, plTop); ctx.lineTo(plX, plBottom); ctx.stroke();
+    ctx.fillStyle = curCol;
+    ctx.beginPath();
+    ctx.moveTo(plX-9, plTop-2); ctx.lineTo(plX+9, plTop-2); ctx.lineTo(plX, plTop+13);
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
   drawExportOverlays(ctx, layout, cfg, songSec, calib, topY + SCORE_H);
 }
 // 樂器面板 + 標題/副標題/頻道名稱(捲動式與翻頁式共用);scoreBottomY = 樂譜下緣(頻道名稱不要疊到樂譜)
@@ -10230,7 +10343,7 @@ function drawExportPageFrame(ctx, layout, cfg, pg, songSec, calib){
   const oy = Math.round(layout.pageTop + (cfg.align === "top" ? 0 : cfg.align === "bottom" ? avail - ph : (avail - ph) / 2)) - page.y0;
   const onPage = p === pos.sys.page;
   const ink = exportInkColor(hlCursorColor());
-  if (onPage && measureHlOn()) {
+  if (onPage && !cfg.noCursor && measureHlOn()) {
     ctx.save();
     ctx.globalAlpha = hlMeasureOpacity();
     ctx.fillStyle = exportInkColor(hlMeasureColor());
@@ -10239,7 +10352,7 @@ function drawExportPageFrame(ctx, layout, cfg, pg, songSec, calib){
     ctx.restore();
   }
   if (cv) ctx.drawImage(cv, ox, oy + page.y0);
-  if (onPage) {
+  if (onPage && !cfg.noCursor) {
     const pad = pg.sp * (cfg.includeKeyboard ? PLAYLINE_PAD_SPACES_WITH_PANEL : PLAYLINE_PAD_SPACES_SCORE_ONLY);
     const x = ox + pos.x, top = oy + pos.sys.staffTop - pad, bot = oy + pos.sys.staffBot + pad;
     ctx.save();
