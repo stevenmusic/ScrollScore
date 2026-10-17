@@ -6538,6 +6538,7 @@ function startNoteScheduler(fromSec, toSec, base, calib, opts){
     if (st.k >= order.length && !pianoPedalQueue.length && st.timer) { clearInterval(st.timer); st.timer = null; }
     if (st.errCount) { setStatus(T("statusScheduleWarn", { n: st.errCount, msg: (st.lastErr && st.lastErr.message) || "" })); st.errCount = 0; }
   };
+  st.complete = () => st.k >= order.length && !pianoPedalQueue.length;
   noteSched = st;
   if (live || st.limit > 0) st.pump();
   if (live && (st.k < order.length || pianoPedalQueue.length)) st.timer = setInterval(st.pump, SCHED_TICK_MS);
@@ -6759,7 +6760,9 @@ function workletAudioOk(){
 }
 function pianoMemoryBudgetBytes(){
   const dm = navigator.deviceMemory;
-  if (isIOSDevice()) return 220e6;
+  // iOS 220 → 450MB(2026-10-17,使用者決定;iPhone 15 Pro Max 8GB):220MB 時較長的曲子(92 層)全部被改成單聲道,
+  // 影片左右相關 0.997;舊 iPhone 記憶體較少,如果網頁被系統重新載入再考慮依機型分級(Safari 讀不到記憶體大小)
+  if (isIOSDevice()) return 450e6;
   if (dm && dm <= 2) return 120e6;
   if (dm && dm <= 4) return 280e6;
   return 1200e6;
@@ -10618,7 +10621,16 @@ function offlineStep(stage, p, ms){
 async function awaitOfflineRender(ctx, total, tick, opts){
   const sr = ctx.sampleRate, t0 = activeNow(), est = Math.max(3, total * 0.3) * 1000;
   let gotReal = false, lastReal = t0;
-  for (let k = 1; k < 20 && !(opts && opts.noSuspend); k++) {   // 進度:每 5% 暫停一下更新畫面
+  if (opts && opts.incremental) {
+    // 邊合成邊排音(見 OFFLINE_SCHED):每 step 秒暫停一下,把接下來 ahead 秒的音排進去,順便回報進度
+    const st = noteSched, end = ctx.length / sr + 1, S = OFFLINE_SCHED.step;
+    for (let t = S; t < total - 0.01; t += S) {
+      const at = Math.floor(t * sr / 128) * 128 / sr;
+      ctx.suspend(at).then(() => { gotReal = true; lastReal = activeNow(); tick.real(at / total);
+        if (st) { st.limit = Math.min(end, at + OFFLINE_SCHED.ahead); st.pump(); } ctx.resume(); }).catch(() => {});
+    }
+  }
+  for (let k = 1; k < 20 && !(opts && (opts.noSuspend || opts.incremental)); k++) {   // 進度:每 5% 暫停一下更新畫面
     const at = Math.floor(total * k / 20 * sr / 128) * 128 / sr;
     ctx.suspend(at).then(() => { gotReal = true; lastReal = activeNow(); tick.real(k / 20); ctx.resume(); }).catch(() => {});
   }
@@ -10705,6 +10717,11 @@ function scheduleExportRange(rangeStart, rangeEnd, calib, opts){
 }
 /* 離線合成前把整首的音排進去。以前一次排完:iPhone 上要好幾秒,這段時間畫面完全不能更新,
    「調整音量中」停在 0%、排完才一下跳到八成(使用者截圖)。現在每次排 1 秒的音、中間讓畫面喘口氣,進度照實際排了多少 */
+/* 離線合成邊合成邊排音(2026-10-17,使用者:匯出不能比影片長):以前合成前就把整首的音全部排好,iPhone 88 秒的曲子
+   聲音要 136 秒(比即時播放還慢——還沒輪到的音的節點也全接在圖上,每一小段都要走過一遍);即時播放只排接下來 3 秒。
+   現在跟即時播放一樣:先排 ahead 秒,合成到每 step 秒暫停一下再補(OfflineAudioContext.suspend)。Safari 如果沒照
+   suspend 停,音會排不完 → noteSched.complete() 是 false,改用舊的「先全部排好」再合成一次 */
+const OFFLINE_SCHED = { on: true, step: 1, ahead: 2 };   // 雲端蕭邦敘事曲 60 秒:先全部排好 55 秒 → 2/5:14 秒、1/1.5:11 秒
 async function scheduleOfflineInSlices(onFrac){
   const st = noteSched, end = audioCtx.length / audioCtx.sampleRate + 1;
   let lastYield = performance.now();
@@ -10835,12 +10852,16 @@ function attachPcmCapture(node, len){
   const ctx = audioCtx;
   if (!ctx.createScriptProcessor) return null;
   // 第 3 聲道放一個記號(CAP_MARK 秒的單一脈衝),合成完找它的位置換算抄本的延遲(ScriptProcessor 的延遲各瀏覽器不一樣)
-  const cap = { L: new Float32Array(len), R: new Float32Array(len), M: new Float32Array(len), n: 0, mark: Math.round(0.05 * ctx.sampleRate) };
+  const cap = { L: new Float32Array(len), R: new Float32Array(len), M: new Float32Array(len), n: 0, gaps: 0, next: -1, mark: Math.round(0.05 * ctx.sampleRate) };
   const sp = ctx.createScriptProcessor(16384, 3, 1);   // 最大的區塊:回主執行緒的次數最少(iPhone 整首合成 136 秒,4096 時)
   sp.channelCount = 3; sp.channelCountMode = "explicit"; sp.channelInterpretation = "discrete";
   sp.onaudioprocess = e => {
     const ib = e.inputBuffer, s0 = Math.round(e.playbackTime * ctx.sampleRate), n = Math.min(ib.length, len - s0);
-    if (n > 0 && s0 >= 0) { cap.L.set(ib.getChannelData(0).subarray(0, n), s0); cap.R.set(ib.getChannelData(1).subarray(0, n), s0); cap.M.set(ib.getChannelData(2).subarray(0, n), s0); cap.n += n; }
+    if (n > 0 && s0 >= 0) {
+      if (cap.next >= 0 && s0 !== cap.next) cap.gaps++;   // 漏抄(主執行緒太忙,Safari 沒等它)
+      cap.next = s0 + ib.length;
+      cap.L.set(ib.getChannelData(0).subarray(0, n), s0); cap.R.set(ib.getChannelData(1).subarray(0, n), s0); cap.M.set(ib.getChannelData(2).subarray(0, n), s0); cap.n += n;
+    }
   };
   const split = ctx.createChannelSplitter(2), merge = ctx.createChannelMerger(3);
   const up = ctx.createGain(); up.channelCount = 2; up.channelCountMode = "explicit"; up.channelInterpretation = "speakers";
@@ -10871,6 +10892,7 @@ function pickHealthyPcm(buf, cap, sr){
   alignPcmCapture(cap);
   const bL = buf.getChannelData(0), bR = buf.getChannelData(1), stBuf = pcmHealth(bL, bR, sr);
   const stCap = cap && cap.n > 0 ? pcmHealth(cap.L, cap.R, sr) : null;
+  if (stCap && (cap.gaps || cap.n < cap.L.length - 2 * 16384)) { stCap.ok = false; stCap.txt += " 漏抄 " + cap.gaps + " · " + (cap.n / sr).toFixed(1) + "/" + (cap.L.length / sr).toFixed(1) + "s"; }
   if (cap && stCap && stBuf.ok) {   // 兩份都在時記一下差多少(Chrome 應該幾乎相同)
     let md = 0; for (let i = 0; i < bL.length; i += 7) md = Math.max(md, Math.abs(bL[i] - cap.L[i])); console.info("抄本與成品最大差 " + md.toExponential(2));
     if (window.CAP_DEBUG) { let best = 0, bd = 1e9; for (let o = -1024; o <= 1024; o++) { let d = 0; for (let i = 30000; i < 90000; i += 3) { const j = i + o; d += Math.abs(bL[i] - cap.L[j]); } if (d < bd) { bd = d; best = o; } } console.info("抄本最佳位移 " + best + " 差 " + bd); }
@@ -10895,6 +10917,9 @@ async function renderExportAudioFast(rangeStart, rangeEnd, onProgress){
   // 進度:排音 0~30%、合成 30~85%、限幅器 85~100%
   const SCH = 0.3;
   let tick = { stop(){}, real(){} };
+  let schedNote = "";
+  for (const inc of OFFLINE_SCHED.on ? [true, false] : [false]) {
+  tapL = tapR = tapDump = cap = data = null;
   try {
     audioCtx = new OfflineAudioContext(2, rlen, sr);
     initAudioGraph();
@@ -10921,14 +10946,20 @@ async function renderExportAudioFast(rangeStart, rangeEnd, onProgress){
     const lap = k => { const now = performance.now(); fastTimes[k] = (now - tp) / 1000; tp = now; };
     lap("aInit");
     scheduleExportRange(rangeStart, rangeEnd, useCalib(), { defer: true });
-    await scheduleOfflineInSlices(f => onProgress && onProgress(f * SCH));
+    if (inc) { noteSched.limit = OFFLINE_SCHED.ahead; noteSched.pump(); }
+    else await scheduleOfflineInSlices(f => onProgress && onProgress(f * SCH));
     lap("aSched");
-    tick = renderProgressTicker((len / sr) * 0.3, f => onProgress && onProgress(SCH + (0.85 - SCH) * f));
-    buf = await awaitOfflineRender(audioCtx, rlen / sr, tick, { noSuspend: !useWk });
+    tick = renderProgressTicker((len / sr) * 0.3, f => onProgress && onProgress((inc ? 0 : SCH) + (0.85 - (inc ? 0 : SCH)) * f));
+    buf = await awaitOfflineRender(audioCtx, rlen / sr, tick, { noSuspend: !useWk, incremental: inc });
     lap("aRender");
+    const done = !noteSched || noteSched.complete();
     if (tapDump) data = await tapDump();
     lap("aDump");
+    if (inc && !done) { schedNote = " · 分段排程沒跑完,改成先排好"; console.warn("離線分段排程沒跑完(suspend 沒照時間停?),改成先全部排好再合成"); continue; }
+    if (inc) schedNote = " · 分段排程";
+    break;
   } finally { tick.stop(); restore(); }
+  }
   const tLim = performance.now();
   const drums = exportHasDrums();
   // 用哪一份聲音:tap 送回來的(iPhone 上唯一正確的)正常就用它;不然用 OfflineAudioContext 的成品(兩份在 Chrome 逐樣本相同)
@@ -10947,7 +10978,7 @@ async function renderExportAudioFast(rangeStart, rangeEnd, onProgress){
   if (!data) data = await analyzeLoudnessOffline(L, R, sr);
   let g = solveExportGain(data.E, data.P, data.block, drums ? EXPORT_DRUM_RELEASE : 0.15);
   const gOk = Number.isFinite(g) && g > 0 && g < 100;
-  fastAudioHealth = "合成" + (useTap ? "(tap)" : useWk ? "" : "(無 Worklet,用" + (pick && pick.src || "成品") + ")") + " " + st0.txt + (useTap && !stBuf.ok ? " · 原成品 " + stBuf.txt : "") + (pick ? " [" + pick.info + "]" : "") + " · 增益 " + (gOk ? g.toFixed(2) : String(g));
+  fastAudioHealth = "合成" + schedNote.replace(" · ", "[") + (schedNote ? "]" : "") + (useTap ? "(tap)" : useWk ? "" : "(無 Worklet,用" + (pick && pick.src || "成品") + ")") + " " + st0.txt + (useTap && !stBuf.ok ? " · 原成品 " + stBuf.txt : "") + (pick ? " [" + pick.info + "]" : "") + " · 增益 " + (gOk ? g.toFixed(2) : String(g));
   if (!st0.ok) throw new Error(T("fastNoteNoSound", { msg: fastAudioHealth }));
   if (!gOk) g = 1;   // 增益算不出來就照原本音量(不要把整段乘成 NaN)
   fastExportGainCache = { rangeStart, rangeEnd, g };
@@ -10964,7 +10995,7 @@ async function renderExportAudioFast(rangeStart, rangeEnd, onProgress){
 }
 /* 一段聲音正不正常:有沒有 NaN/無限大、音量、8kHz 以上的比例、左右相關(音樂左右高度相關,雜訊左右無關)。
    取中間最大聲的 2 秒算頻譜(整首做 FFT 太慢) */
-let fastAudioHealth = "", fastVerifyNote = "";
+let fastAudioHealth = "", fastVerifyNote = "", fastAudioRetry = "";
 function pcmHealth(L, R, sr){
   let bad = 0, e = 0;
   for (let i = 0; i < L.length; i++) { const a = L[i], b = R[i]; if (!Number.isFinite(a) || !Number.isFinite(b)) { bad++; continue; } e += a * a + b * b; }
@@ -11591,11 +11622,15 @@ async function fastExportVideo(cfg){
   if (cancelledNow()) return true;
   stopFastPrepTick();
   computeDrumPerformance();   // 試編畫了鼓組面板,重算一次讓正式匯出從頭開始
-  /* 3) 聲音(先算完再編畫面)。2026-10 試過聲音跟畫面同時做(雲端 96 → 45 秒),但使用者 iPhone 實測反而變慢、
-     比影片還長,退回先後做;各階段花的時間寫在完成訊息(fastTimes),下次回報看得出卡在哪 */
+  /* 3) 聲音跟畫面同時做(2026-10-17,使用者:匯出不能比影片長)。OfflineAudioContext 在音訊執行緒合成,主執行緒同時畫畫面、
+     編影片,總時間約等於兩者較久的那個。以前(7f9cbd5)試過一次,iPhone 反而變慢——當時聲音本身就要 108 秒(整首先排好,
+     見 OFFLINE_SCHED),現在邊合成邊排,聲音快很多才再開。
+     聲音還在算的時候,全域的 audioCtx 等是換成離線的那一組(renderExportAudioFast 結束才換回來),不管成功、取消或出錯,
+     離開前一定要等它結束(waitAudio)。畫畫面不會用到音訊狀態。聲音最後才送進封裝(mp4-muxer 非 fastStart 沒問題;
+     webm-muxer 會把畫面留在記憶體等聲音,只在沒有 AAC 編碼器的電腦瀏覽器用)。
+     同時做時 Safari 的抄本(ScriptProcessor)如果漏抄(主執行緒忙)或聲音出錯,畫面做完後再單獨算一次聲音 */
   const tAudio0 = performance.now();
   fastTimes.prep = (tAudio0 - fastTimes.t0) / 1000;
-  setPct("exportAnalyzingPct", 0);
   $("exportOverlaySub").textContent = T("exportAnalyzingSub");
   $("exportTime").textContent = "";
   // 鋼琴聲音自我檢查(見 pianoSelfTest;2026-10-17 找到 Safari AudioWorklet 的問題後不再自動跑,測試時設 window.PIANO_SELFTEST)
@@ -11603,36 +11638,37 @@ async function fastExportVideo(cfg){
   if (window.PIANO_SELFTEST && events.some(e => e.notes.some(n => !n.drum && n.freq))) {
     try { selfTest = await pianoSelfTest(); } catch (e) { if (e.cancelled) { setStatus(T("exportCancelledStatus")); return true; } selfTest = "自檢 err " + e.message; }
   }
-  let L, R;
-  try { [L, R] = await renderExportAudioFast(rangeStart, rangeEnd, p => setPct("exportAnalyzingPct", p)); }
-  catch (e) {
-    if (e.cancelled) { setStatus(T("exportCancelledStatus")); return true; }
-    // 離線合成卡住:即時錄影就不要再算一次響度(一樣會卡),照原本音量錄
-    if (/逾時/.test(e.message)) fastExportGainCache = { rangeStart, rangeEnd, g: null };
-    console.warn("快速匯出的聲音處理失敗,改用即時錄影:", e); return fastFallback("error", e.message);
-  }
-  if (exportCancelled) { setStatus(T("exportCancelledStatus")); return true; }
+  let L = null, R = null, audioFrac = 0, audioErr = null, audioDone = false;
+  const startAudio = () => {
+    audioDone = false; audioErr = null; audioFrac = 0;
+    return renderExportAudioFast(rangeStart, rangeEnd, p => { audioFrac = p; })
+      .then(([l, r]) => { L = l; R = r; audioFrac = 1; fastTimes.audio = (performance.now() - tAudio0) / 1000; }, e => { audioErr = e; })
+      .then(() => { audioDone = true; });
+  };
+  let audioJob = startAudio();
+  const waitAudio = () => audioJob;
+  let shown = 0;
+  const showProgress = videoFrac => {
+    shown = Math.max(shown, Math.min(videoFrac, audioFrac));
+    setPct("exportFastPct", shown);
+    $("exportOverlaySub").textContent = audioDone ? "" : T("exportAnalyzingSub");
+  };
+  showProgress(0);
   const tVideo0 = performance.now();
-  fastTimes.audio = (tVideo0 - tAudio0) / 1000;
-  setPct("exportRenderingPct", 0);
-  $("exportOverlaySub").textContent = "";
   kbScanCursor = 0; kbScanLastSec = -1;
   // 3) 編碼器與封裝。輸出邊做邊收(StreamTarget 分塊,收尾時回頭改的地方直接蓋上),
   //    不要整個影片留在一塊不斷加倍的記憶體裡再複製兩次(審查估算:5 分鐘 1080p 原本尖峰約 650MB,iPhone 可能被系統關掉)
-  let encErr = null, venc = null, aenc = null, muxer = null;
+  let encErr = null, venc = null, aenc = null, muxer = null, feeder = null;
   const out = makeChunkCollector();
   const closeAll = () => { try { venc && venc.close(); } catch (e) {} try { aenc && aenc.close(); } catch (e) {} };
+  const cancelExport = async () => { if (feeder) feeder.discard(); closeAll(); await waitAudio(); setStatus(T("exportCancelledStatus")); return true; };
   try {
     const target = new Muxer.StreamTarget({ onData: (data, position) => out.write(data, position), chunked: true, chunkSize: 4 * 1048576 });
     muxer = new Muxer.Muxer(fmtSel.container === "mp4"
       ? { target, video: { codec: fmtSel.muxV, width: cfg.W, height: cfg.H, frameRate: fps }, audio: { codec: fmtSel.muxA, numberOfChannels: 2, sampleRate: sr }, fastStart: false, firstTimestampBehavior: "offset" }
       : { target, video: { codec: fmtSel.muxV, width: cfg.W, height: cfg.H, frameRate: fps }, audio: { codec: fmtSel.muxA, numberOfChannels: 2, sampleRate: sr }, firstTimestampBehavior: "offset" });
-    // 聲音檢查用:找最大聲的 2 秒(0.5 秒一步),記下那段的已編碼聲音與原本的音量
-    let vw0 = 0, vwBest = -1;
-    { const W2 = 2 * sr, step = Math.floor(sr / 2);
-      for (let i = 0; i + W2 <= L.length; i += step) { let e = 0; for (let j = i; j < i + W2; j += 8) e += L[j] * L[j] + R[j] * R[j]; if (e > vwBest) { vwBest = e; vw0 = i; } } }
-    const vwT0 = vw0 / sr, vwT1 = vwT0 + 2;
-    const srcSeg = L.slice(vw0, Math.min(L.length, vw0 + 2 * sr));   // 原本的聲音(左聲道),給匯出後的檢查比對
+    // 聲音檢查用:最大聲的 2 秒(聲音算好之後才找,見下面),記下那段的已編碼聲音與原本的音量
+    let vwT0 = -1, vwT1 = -1, srcSeg = null;
     const vChunks = [];
     const audioTap = (raw, ts, d) => { const t = ts / 1e6; if (t >= vwT0 - 0.05 && t <= vwT1) { const c = raw.slice(); if (window.FAST_EXPORT_BREAK_AUDIO) c.fill(0); vChunks.push({ raw: c, ts, dur: d }); } };   // BREAK_AUDIO:測試用,模擬解不出聲音
     const onVideo = muxVideoChunkFn(muxer, fmtSel, cfg.W, cfg.H, fps), onAudio = muxAudioChunkFn(muxer, fmtSel, sr, audioTap);
@@ -11640,40 +11676,69 @@ async function fastExportVideo(cfg){
     venc.configure(encCfg(fps));
     aenc = new AudioEncoder({ output: (c, m) => { try { onAudio(c, m); } catch (e) { encErr = encErr || e; } }, error: e => { encErr = e; } });
     aenc.configure({ codec: fmtSel.aCodec, sampleRate: sr, numberOfChannels: 2, bitrate: FAST_EXPORT.audioBitrate });
-    // 聲音跟著畫面送(每段 0.1 秒、比畫面超前 1 秒),編碼器佇列裡不會同時堆一整首
-    const CH = sr / 10, nAud = L.length;
-    let aPos = 0;
-    const feedAudio = untilSec => {
-      const stop = Math.min(nAud, Math.ceil(untilSec * sr));
-      for (; aPos < stop; aPos += CH) {
-        const n = Math.min(CH, nAud - aPos);
-        const ad = makeAudioData(audioFmt, L, R, aPos, n, sr);
-        aenc.encode(ad); ad.close();
-      }
-    };
     const nFrames = Math.ceil(dur * fps), keyEvery = Math.round(fps * FAST_EXPORT.keyEverySec);
-    const feeder = makeFeeder(frameSrc, venc);
-    let lastUi = 0;
+    feeder = makeFeeder(frameSrc, venc);
+    let lastUi = 0, lastYield = 0;
     for (let f = 0; f < nFrames; f++) {
       if (exportCancelled) break;
       if (encErr) throw encErr;
       const t = f / fps, songSec = Math.min(Math.max(t - lead, 0), total) + rangeStart;
-      feedAudio(t + 1);
       await drawAt(songSec);
       await feeder.push(Math.round(t * 1e6), f % keyEvery === 0);
-      // 編碼器跟不上時等一下(不然記憶體會一直堆);每 0.1 秒更新一次進度並讓畫面喘口氣(取消按鈕才按得到)
+      // 編碼器跟不上時等一下(不然記憶體會一直堆)
       while (venc.encodeQueueSize > 6) await new Promise(r => setTimeout(r, 2));
       const now = performance.now();
       if (now - lastUi > 100) {
         lastUi = now;
-        setPct("exportRenderingPct", (f + 1) / nFrames);
+        showProgress((f + 1) / nFrames);
         $("exportTime").textContent = fmt(Math.min(total, Math.max(0, t - lead))) + " / " + fmt(total);
-        await new Promise(r => setTimeout(r, 0));
+      }
+      // 讓主執行緒喘口氣:取消按鈕要按得到;聲音還在算時更常讓(離線合成每 1 秒要回主執行緒補排音、Safari 的抄本也在主執行緒)
+      if (now - lastYield > (audioDone ? 100 : 25)) { lastYield = now; await new Promise(r => setTimeout(r, 0)); }
+    }
+    if (exportCancelled) return await cancelExport();
+    await feeder.drain();
+    fastTimes.video = (performance.now() - tVideo0) / 1000;
+    // 畫面做完、聲音還沒好:等聲音(進度照樣更新,取消照樣停)
+    while (!audioDone) {
+      showProgress(1);
+      await Promise.race([audioJob, new Promise(r => setTimeout(r, 200))]);
+      if (exportCancelled) return await cancelExport();
+    }
+    if (audioErr && !audioErr.cancelled && !exportCancelled && !/逾時/.test(audioErr.message || "")) {
+      // 同時做的時候聲音出錯(例如 Safari 的抄本漏抄):畫面已經好了,單獨再算一次聲音
+      console.warn("快速匯出:跟畫面同時算的聲音失敗,單獨再算一次:", audioErr);
+      fastAudioRetry = " · 聲音重算(" + String(audioErr.message || audioErr).slice(0, 80) + ")";
+      audioJob = startAudio();
+      while (!audioDone) {
+        showProgress(1);
+        await Promise.race([audioJob, new Promise(r => setTimeout(r, 200))]);
+        if (exportCancelled) return await cancelExport();
       }
     }
-    if (exportCancelled) { feeder.discard(); closeAll(); setStatus(T("exportCancelledStatus")); return true; }
-    await feeder.drain();
-    feedAudio(Infinity);
+    if (exportCancelled || (audioErr && audioErr.cancelled)) return await cancelExport();
+    if (audioErr) {
+      // 離線合成卡住:即時錄影就不要再算一次響度(一樣會卡),照原本音量錄
+      if (/逾時/.test(audioErr.message || "")) fastExportGainCache = { rangeStart, rangeEnd, g: null };
+      closeAll();
+      console.warn("快速匯出的聲音處理失敗,改用即時錄影:", audioErr);
+      return fastFallback("error", audioErr.message);
+    }
+    $("exportOverlaySub").textContent = "";
+    { // 聲音檢查用的那 2 秒:最大聲的地方(0.5 秒一步)
+      let vw0 = 0, vwBest = -1; const W2 = 2 * sr, step = Math.floor(sr / 2);
+      for (let i = 0; i + W2 <= L.length; i += step) { let e = 0; for (let j = i; j < i + W2; j += 8) e += L[j] * L[j] + R[j] * R[j]; if (e > vwBest) { vwBest = e; vw0 = i; } }
+      vwT0 = vw0 / sr; vwT1 = vwT0 + 2; srcSeg = L.slice(vw0, Math.min(L.length, vw0 + 2 * sr));
+    }
+    // 聲音一次送完(編碼很快);每段 0.1 秒,佇列太長就等一下
+    const CH = sr / 10, nAud = L.length;
+    for (let i = 0; i < nAud; i += CH) {
+      const n = Math.min(CH, nAud - i);
+      const ad = makeAudioData(audioFmt, L, R, i, n, sr);
+      aenc.encode(ad); ad.close();
+      if (aenc.encodeQueueSize > 40) await new Promise(r => setTimeout(r, 2));
+      if (encErr) throw encErr;
+    }
     L = R = null;
     await venc.flush(); await aenc.flush();
     if (encErr) throw encErr;
@@ -11683,10 +11748,12 @@ async function fastExportVideo(cfg){
     fastVerifyNote = "檢查 " + va.why + " · 格式 " + audioFmt + (audioInputFormatCache && /^mono/.test(audioInputFormatCache.info || "") ? "(左右分不開)" : "");
     if (!va.ok) throw Object.assign(new Error(T("fastNoteNoSound", { msg: va.why })), { noSound: true });
     muxer.finalize();
-    fastTimes.video = (performance.now() - tVideo0) / 1000;
     fastTimes.speed = dur / fastTimes.video;
   } catch (e) {
     closeAll();
+    if (feeder) feeder.discard();
+    await waitAudio();   // 全域的音訊狀態換回來之後才能改走即時錄影
+    if (exportCancelled) { setStatus(T("exportCancelledStatus")); return true; }
     fastProbeCacheSet(probeKey, null);   // 下次重新試編
     console.warn("快速匯出失敗,改用即時錄影:", e);
     return fastFallback("error", e && e.message);
@@ -11694,7 +11761,7 @@ async function fastExportVideo(cfg){
   const blob = out.toBlob(fmtSel.container === "mp4" ? "video/mp4" : "video/webm");
   const rangeTag = cfg.startSec != null ? "-" + fmt(rangeStart).replace(":","m") + "s-" + fmt(rangeEnd).replace(":","m") + "s" : "";
   const fileName = "scrollscore-" + cfg.W + "x" + cfg.H + rangeTag + "." + fmtSel.ext;
-  setStatus(T("exportComplete", { mb: (blob.size/1048576).toFixed(1), fmt: mimeLabel(fmtSel.mime) }) + exportTimeNote() + (fastAudioHealth ? " · " + fastAudioHealth + " · " + fastVerifyNote : "") + (selfTest ? " · " + selfTest : ""));
+  setStatus(T("exportComplete", { mb: (blob.size/1048576).toFixed(1), fmt: mimeLabel(fmtSel.mime) }) + exportTimeNote() + fastAudioRetry + (fastAudioHealth ? " · " + fastAudioHealth + " · " + fastVerifyNote : "") + (selfTest ? " · " + selfTest : ""));
   deliverExportedVideo(blob, fileName, fmtSel.mime);
   return true;
 }
@@ -11712,7 +11779,7 @@ async function exportVideo(cfg){
   document.body.classList.add("exporting-active");
   // 匯出畫面先打開:音色還在下載時按「開始匯出」,以前要等下載完才有畫面、也不能取消(審查發現)
   fastExportNote = ""; $("exportFastNote").textContent = "";
-  fastTimes = { t0: performance.now() }; fastAudioHealth = ""; fastVerifyNote = "";
+  fastTimes = { t0: performance.now() }; fastAudioHealth = ""; fastVerifyNote = ""; fastAudioRetry = "";
   $("exportOverlayTitle").textContent = T("exportPreparingPct", { pct: 0 });
   $("exportOverlaySub").textContent = ""; $("exportTime").textContent = ""; $("exportFill").style.width = "0%";
   setExportOverlayMode(EXPORT_MODE.fast);

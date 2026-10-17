@@ -34,6 +34,10 @@ await page.setInputFiles("#fileInput", path.resolve(score));
 await page.waitForFunction(() => typeof events !== "undefined" && events.length > 0, null, { timeout: 120000 });
 await page.evaluate(async () => { const inst = currentInstrument(); if (inst === "drum") await loadDrumKit(); else await loadInstrumentSamples(inst); });
 await page.waitForTimeout(500);
+// --noinc:離線合成照舊先把整首排好(比較 OFFLINE_SCHED 邊合成邊排的速度)
+if (flags.has("--noinc")) await page.evaluate(() => { OFFLINE_SCHED.on = false; });
+// --sched step,ahead:改 OFFLINE_SCHED 的間隔(比較速度)
+if (opt("sched")) await page.evaluate(v => { const [a, b] = v.split(",").map(Number); OFFLINE_SCHED.step = a; OFFLINE_SCHED.ahead = b; }, opt("sched"));
 const res = await page.evaluate(async ({ format, s0, s1, realtime, mp4test, webmtest, dropmeta, nosuspend, failmux, cancelAt, twice, hide, ioslike, breakaudio, noisefmt, breakbuffer }) => {
   if (dropmeta) window.FAST_EXPORT_DROP_META = true;
   if (nosuspend) OfflineAudioContext.prototype.suspend = function(){ return Promise.reject(new Error("no suspend")); };
