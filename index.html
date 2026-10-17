@@ -11218,10 +11218,10 @@ async function fastExportVideo(cfg){
 /* 匯出方式(2026-10,使用者決定:「匯出時長可以更快,但不能比影片長」):
    - fast:WebCodecs 快速匯出。要先把整首聲音在背景合成一遍(雲端實測要樂曲長度的 0.36~1.4 倍,
      時間平均分散在每個音的處理上,沒有單一瓶頸可拿掉),再編畫面,iPhone 上總時間比影片還長 → 停用,程式保留
-   - loudnessPrepass:即時錄影前先在背景算一遍、把成品調到 −14 LUFS(「調整音量中」),一樣要多花一段合成時間 → 停用,
-     影片照 App 播放的音量(鋼琴約 −11.5 LUFS,YouTube 會自動調小;鼓約 −20,比較小聲)
-   都停用時:匯出時間 = 影片長度(加上開頭準備、結尾 1 秒左右) */
-const EXPORT_MODE = { fast: false, loudnessPrepass: false };
+   - loudnessPrepass:即時錄影前先在背景算一遍、把成品調到 −14 LUFS(「調整音量中」)。要多花一段合成時間,
+     停用一版後使用者比較過「固定加大」,決定保留(停用時影片照 App 播放音量:鋼琴約 −12.4 LUFS,鼓約 −22.7、在 YouTube 偏小聲)
+   匯出時間 = 調整音量 + 影片長度 */
+const EXPORT_MODE = { fast: false, loudnessPrepass: true };
 async function exportVideo(cfg){
   if (!events.length || exporting) return;
   exporting = true; exportCancelled = false; $("exportCancel").disabled = false;
