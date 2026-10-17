@@ -1364,6 +1364,7 @@ const I18N = {
     loadScoreFirstTitle: "請先載入樂譜",
     exportBtnLabel: "匯出影片",
     exportBtnTitleReady: "自動產生可下載的影片檔",
+    exportWaitSamples: "音色載入中,完成後才能匯出",
 
     emptyTitle: "點這裡載入樂譜",
     emptySub: "支援 MusicXML 與 Guitar Pro 檔案",
@@ -1620,6 +1621,7 @@ const I18N = {
     loadScoreFirstTitle: "Load a score first",
     exportBtnLabel: "Export Video",
     exportBtnTitleReady: "Automatically generates a downloadable video file",
+    exportWaitSamples: "Loading sounds — export will be available when done",
 
     emptyTitle: "Tap here to load a score",
     emptySub: "MusicXML and Guitar Pro files",
@@ -3681,7 +3683,7 @@ async function renderScore(xmlText){
   resetScroll();
   $("playBtn").disabled = false;
   $("stopBtn").disabled = false;
-  $("exportBtn").disabled = false;
+  refreshExportReady();
   // 原本這裡只是把「請先載入樂譜」移除;現在改成換上真正的說明,
   // 因為面板裡那段解說文字已經拿掉了(太佔手機版面),說明改由 tooltip 承載
   updateActionButtonTitles();
@@ -6554,7 +6556,27 @@ function currentInstrument(){ return $("instrument").value; }
    (refreshDynamicI18nText)也會重新呼叫一次,才不會維持上一個語言寫死的文字 */
 function updateActionButtonTitles(){
   const scoreLoaded = document.body.classList.contains("score-loaded");
-  $("exportBtn").title = scoreLoaded ? T("exportBtnTitleReady") : T("loadScoreFirstTitle");
+  const t = !scoreLoaded ? T("loadScoreFirstTitle") : exportSamplesReady() ? T("exportBtnTitleReady") : T("exportWaitSamples");
+  $("exportBtn").title = t;
+}
+/* 匯出按鈕:音色(鋼琴/鼓組/吉他)全部載入完成之前一律停用(2026-10 使用者要求:載入中按匯出,影片會缺音或要等很久)。
+   載入的 promise 完成時自動重新檢查(trackLoad);換樂器、移調、換曲重新載入時也會再檢查 */
+function trackLoad(p){
+  if (p && !p.__tracked) { p.__tracked = true; p.__done = false; const fin = () => { p.__done = true; refreshExportReady(); }; p.then(fin, fin); }
+  return p;
+}
+function exportSamplesReady(){
+  if (typeof events === "undefined" || !events.length) return false;
+  const inst = currentInstrument(), ps = [];
+  if (inst === "drum" || events.some(ev => ev.notes.some(n => n.drum))) ps.push(kitLoading);
+  if (inst === "piano") ps.push(pianoFallback ? instrumentLoading.piano : pianoLoading);
+  else if (GTR_INSTS[inst]) ps.push(isGuitarSampled(inst) ? GTR_INSTS[inst].loading : instrumentLoading[inst]);
+  return ps.every(p => !p || (trackLoad(p), p.__done));
+}
+function refreshExportReady(){
+  const ready = document.body.classList.contains("score-loaded") && exportSamplesReady();
+  $("exportBtn").disabled = !ready; $("exportHdrBtn").disabled = !ready;
+  updateActionButtonTitles();
 }
 function updateTransposeAvailability(){
   const isDrum = currentInstrument() === "drum";
@@ -6984,6 +7006,7 @@ function loadPianoSamples(){
     await runLimited([...otherAux.map(j => async () => { await j(); tick(); }), ...rest.map(job)], SAMPLE_FETCH_CONCURRENCY);
     if (gen === pianoGen) setStatus(T("statusPianoReady", { n: Object.keys(pianoBuf).length }));
   })();
+  refreshExportReady();
   return pianoLoading;
 }
 function pianoFileFor(c, L){ return "pf-" + pianoNoteName(c) + "-v" + L; }
@@ -8390,6 +8413,7 @@ $("instrument").addEventListener("change", () => {
   ensureAudio();
   if (currentInstrument() === "drum") { loadDrumKit(); }
   else loadInstrumentSamples(currentInstrument());
+  refreshExportReady();
   resizeKeyboardCanvas(); // 鋼琴鍵盤跟鼓組面板高度邏輯不同,切換樂器時要重新算
   drawKeyboardLive(playing ? currentSec() : pausedAtSec);
   updateTransposeAvailability();
@@ -8688,6 +8712,7 @@ function loadDrumKit(){
     }
     setStatus(T("statusDrumKitReady"));
   })();
+  refreshExportReady();
   return kitLoading;
 }
 
@@ -10710,12 +10735,19 @@ async function renderExportAudioFast(rangeStart, rangeEnd, onProgress){
     scheduled = []; ringingOpenHat = null; ringingCymbals = {}; pianoResetVoices();
     startCtxTime = lead;
     computeDrumPerformance();
+    let tp = performance.now();
+    const lap = k => { const now = performance.now(); fastTimes[k] = (now - tp) / 1000; tp = now; };
+    lap("aInit");
     scheduleExportRange(rangeStart, rangeEnd, useCalib(), { defer: true });
     await scheduleOfflineInSlices(f => onProgress && onProgress(f * SCH));
+    lap("aSched");
     tick = renderProgressTicker((len / sr) * 0.3, f => onProgress && onProgress(SCH + (0.85 - SCH) * f));
     buf = await awaitOfflineRender(audioCtx, len / sr, tick);
+    lap("aRender");
     data = await dumpLoudnessTap(tap);
+    lap("aDump");
   } finally { tick.stop(); restore(); }
+  const tLim = performance.now();
   const drums = exportHasDrums();
   const g = solveExportGain(data.E, data.P, data.block, drums ? EXPORT_DRUM_RELEASE : 0.15);
   fastExportGainCache = { rangeStart, rangeEnd, g };
@@ -10724,6 +10756,7 @@ async function renderExportAudioFast(rangeStart, rangeEnd, onProgress){
   await runLimiterOffline(L, R, sr, { ceilingDb: MASTER.ceilingDb, lookahead: MASTER.lookahead,
     release: drums ? EXPORT_DRUM_RELEASE : MASTER.release, releaseSlow: drums ? EXPORT_DRUM_RELEASE : MASTER.releaseSlow },
     f => onProgress && onProgress(0.85 + 0.15 * f));
+  fastTimes.aLimit = (performance.now() - tLim) / 1000;
   return [L, R];
 }
 // 匯出中的說明文字:快速匯出不用等樂曲播完,切出去會中斷(不是「卡住」)
@@ -10869,16 +10902,73 @@ function muxVideoChunkFn(muxer, fmtSel, W, H, fps){
     muxer.addVideoChunkRaw(data, chunk.type, ts, dur, m);
   };
 }
+/* AAC 的 AudioSpecificConfig(ISO 14496-3 1.6.2.1)。2026-10 使用者回報 iPhone 匯出的影片沒有聲音:
+   WebKit 的 AudioEncoder 給的 decoderConfig.description 不是合法的 AudioSpecificConfig(WebKit bug 302253,
+   看起來是 CoreAudio 的 magic cookie / ES 描述子),原樣寫進 MP4 的 esds,播放器解不開 → 整段靜音。
+   現在:description 本身是合法、而且取樣率/聲道對得上的 ASC 才用;是 ES 描述子就找裡面的 DecoderSpecificInfo(tag 5);
+   都不行就自己組 AAC-LC(物件類型 2)。位元流如果是 ADTS(每格有 7/9 位元組的標頭)就把標頭拿掉 */
+const AAC_RATES = [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350];
+function aacMakeAsc(sr, ch){
+  const fi = AAC_RATES.indexOf(sr);
+  if (fi < 0) {   // 表裡沒有的取樣率:索引 15 + 24 位元直接寫取樣率(共 40 位元)
+    const bits = (BigInt(2) << 35n) | (15n << 31n) | (BigInt(sr) << 7n) | (BigInt(ch) << 3n);
+    return Uint8Array.from({ length: 5 }, (_, i) => Number((bits >> BigInt(32 - 8 * i)) & 255n));
+  }
+  return new Uint8Array([(2 << 3) | (fi >> 1), ((fi & 1) << 7) | (ch << 3)]);
+}
+function aacAscOk(u8, sr, ch){
+  if (!u8 || u8.length < 2 || u8.length > 7) return false;
+  const aot = u8[0] >> 3, fi = ((u8[0] & 7) << 1) | (u8[1] >> 7), c = (u8[1] >> 3) & 15;
+  if (![1, 2, 3, 4, 5, 29].includes(aot)) return false;
+  if (fi === 15) return u8.length >= 5 && (((u8[1] & 0x7f) << 17) | (u8[2] << 9) | (u8[3] << 1) | (u8[4] >> 7)) === sr && ((u8[4] >> 3) & 15) === ch;
+  if (fi > 12 || c !== ch) return false;
+  return AAC_RATES[fi] === sr || ((aot === 5 || aot === 29) && AAC_RATES[fi] * 2 === sr);
+}
+function aacFixDescription(desc, sr, ch){
+  let u8 = null;
+  try { if (desc) u8 = desc instanceof Uint8Array ? desc : ArrayBuffer.isView(desc) ? new Uint8Array(desc.buffer, desc.byteOffset, desc.byteLength) : new Uint8Array(desc); } catch (e) {}
+  if (aacAscOk(u8, sr, ch)) return { asc: u8.slice(), from: "encoder" };
+  // ES 描述子 / esds:找 DecoderSpecificInfo(tag 5,長度可能用 0x80 延伸)
+  if (u8) for (let i = 0; i + 2 < u8.length; i++) {
+    if (u8[i] !== 5) continue;
+    let j = i + 1, len = 0, k = 0;
+    do { len = (len << 7) | (u8[j] & 0x7f); } while ((u8[j++] & 0x80) && ++k < 4 && j < u8.length);
+    const body = u8.subarray(j, j + len);
+    if (body.length === len && aacAscOk(body, sr, ch)) return { asc: body.slice(), from: "esds" };
+  }
+  return { asc: aacMakeAsc(sr, ch), from: u8 ? "rebuilt(" + u8.length + "B)" : "rebuilt" };
+}
+// ADTS 標頭:同步字 0xFFF + 標頭裡的長度 = 這一格的長度,才算(避免把剛好 0xFF 開頭的原始 AAC 當成 ADTS)
+function aacAdtsHeaderLen(u8){
+  if (u8.length < 7 || u8[0] !== 0xFF || (u8[1] & 0xF6) !== 0xF0) return 0;
+  const len = ((u8[3] & 3) << 11) | (u8[4] << 3) | (u8[5] >> 5);
+  return len === u8.length ? ((u8[1] & 1) ? 7 : 9) : 0;
+}
+let aacMuxInfo = "";   // 給測試/除錯看:description 從哪來、有沒有 ADTS
 function muxAudioChunkFn(muxer, fmtSel, sr){
-  const mp4 = fmtSel.container === "mp4";
+  const mp4 = fmtSel.container === "mp4", aac = mp4 && fmtSel.muxA === "aac";
+  let first = true, adts = null;
+  aacMuxInfo = "";
   return (chunk, meta) => {
     if (window.FAST_EXPORT_DROP_META) meta = undefined;
     // 編碼器的前置格(priming)時間可能是負的,封裝不接受;影片開頭 0.4 秒本來就是靜音,丟掉沒差
     if (chunk.timestamp < 0) return;
-    const raw = new Uint8Array(chunk.byteLength); chunk.copyTo(raw);
-    const m = meta && meta.decoderConfig && meta.decoderConfig.description ? meta : undefined;
+    let raw = new Uint8Array(chunk.byteLength); chunk.copyTo(raw);
     const ts = chunk.timestamp;
-    if (!mp4) return muxer.addAudioChunkRaw(raw, chunk.type, ts, m);
+    if (!mp4) return muxer.addAudioChunkRaw(raw, chunk.type, ts, meta && meta.decoderConfig && meta.decoderConfig.description ? meta : undefined);
+    let m;
+    if (aac) {
+      if (adts === null) adts = aacAdtsHeaderLen(raw) > 0;
+      if (adts) { const h = aacAdtsHeaderLen(raw); if (h) raw = raw.subarray(h); }
+      if (first) {
+        const ch = (meta && meta.decoderConfig && meta.decoderConfig.numberOfChannels) || 2;
+        const fx = aacFixDescription(meta && meta.decoderConfig && meta.decoderConfig.description, sr, ch);
+        aacMuxInfo = fx.from + (adts ? " adts" : "");
+        if (fx.from !== "encoder") console.info("AAC 設定資料:" + aacMuxInfo);
+        m = { decoderConfig: { codec: "mp4a.40.2", sampleRate: sr, numberOfChannels: ch, description: fx.asc } };
+      }
+    } else m = meta && meta.decoderConfig && meta.decoderConfig.description ? meta : undefined;
+    first = false;
     const dur = Number.isFinite(chunk.duration) ? chunk.duration : Math.round(1024 / sr * 1e6);
     muxer.addAudioChunkRaw(raw, chunk.type, ts, dur, m);
   };
@@ -11125,6 +11215,13 @@ async function fastExportVideo(cfg){
   deliverExportedVideo(blob, fileName, fmtSel.mime);
   return true;
 }
+/* 匯出方式(2026-10,使用者決定:「匯出時長可以更快,但不能比影片長」):
+   - fast:WebCodecs 快速匯出。要先把整首聲音在背景合成一遍(雲端實測要樂曲長度的 0.36~1.4 倍,
+     時間平均分散在每個音的處理上,沒有單一瓶頸可拿掉),再編畫面,iPhone 上總時間比影片還長 → 停用,程式保留
+   - loudnessPrepass:即時錄影前先在背景算一遍、把成品調到 −14 LUFS(「調整音量中」),一樣要多花一段合成時間 → 停用,
+     影片照 App 播放的音量(鋼琴約 −11.5 LUFS,YouTube 會自動調小;鼓約 −20,比較小聲)
+   都停用時:匯出時間 = 影片長度(加上開頭準備、結尾 1 秒左右) */
+const EXPORT_MODE = { fast: false, loudnessPrepass: false };
 async function exportVideo(cfg){
   if (!events.length || exporting) return;
   exporting = true; exportCancelled = false; $("exportCancel").disabled = false;
@@ -11134,7 +11231,7 @@ async function exportVideo(cfg){
   fastTimes = { t0: performance.now() };
   $("exportOverlayTitle").textContent = T("exportPreparingPct", { pct: 0 });
   $("exportOverlaySub").textContent = ""; $("exportTime").textContent = ""; $("exportFill").style.width = "0%";
-  setExportOverlayMode(true);
+  setExportOverlayMode(EXPORT_MODE.fast);
   $("exportOverlay").classList.add("show");
   let aDest = null;
   try {
@@ -11149,10 +11246,10 @@ async function exportVideo(cfg){
     if (GTR_INSTS[currentInstrument()] && GTR_INSTS[currentInstrument()].loading) await untilCancel(GTR_INSTS[currentInstrument()].loading);
     await untilCancel(ensureTitleFontsLoaded(cfg)); // 保險:萬一使用者看到預覽秒按確認,字型下載可能還沒跑完
     if (exportCancelled) throw new Error("cancelled");
-    // 先試快速匯出(WebCodecs,不用照時間跑);不支援或還沒產生影片前就失敗,才往下走原本的即時錄影
+    // 快速匯出(WebCodecs)目前停用(EXPORT_MODE.fast,測試用 FAST_EXPORT_FORCE 仍可走);不支援或還沒產生影片前就失敗,才往下走即時錄影
     fastExportGainCache = null;
-    let fastDone;
-    try { fastDone = await fastExportVideo(cfg); }
+    let fastDone = false;
+    if (EXPORT_MODE.fast || window.FAST_EXPORT_FORCE) try { fastDone = await fastExportVideo(cfg); }
     catch (e) { console.warn("快速匯出出錯,改用即時錄影:", e); fastFallback("error", e && e.message); fastDone = false; }
     finally { stopFastPrepTick(); }
     if (!fastDone && exportCancelled) throw new Error("cancelled");
@@ -11162,10 +11259,12 @@ async function exportVideo(cfg){
       {
         const rs = cfg.startSec != null ? Math.max(0, cfg.startSec) : 0, re = cfg.endSec != null ? Math.min(totalSec(), cfg.endSec) : totalSec();
         const cached = fastExportGainCache && fastExportGainCache.rangeStart === rs && fastExportGainCache.rangeEnd === re ? fastExportGainCache : null;
+        if (cached || EXPORT_MODE.loudnessPrepass) {
         $("exportOverlayTitle").textContent = T("exportAnalyzingPct", { pct: 0 });
         $("exportOverlaySub").textContent = T("exportAnalyzingSub");
         $("exportFill").style.width = "0%";
-        const g = cached ? cached.g : await measureExportGain(rs, re, pct => {   // 快速匯出已經算過就直接用
+        }
+        const g = cached ? cached.g : !EXPORT_MODE.loudnessPrepass ? null : await measureExportGain(rs, re, pct => {   // 快速匯出已經算過就直接用
           $("exportOverlayTitle").textContent = T("exportAnalyzingPct", { pct });
           $("exportFill").style.width = pct + "%";
         });
