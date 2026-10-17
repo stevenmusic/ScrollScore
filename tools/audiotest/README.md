@@ -24,6 +24,7 @@ pip install numpy scipy soundfile pyloudnorm
 | `score_crop.mjs` | 樂譜局部截圖(指定小節,或 0 = 自動找上下兩行最擠的地方),可帶 OSMD 排版規則 |
 | `text_wrap_check.mjs` | 中文換行檢查:打開每個畫面(開始畫面、設定、匯出各步驟、快捷鍵…)× 8 種寬度,逐字算換行位置,列出括號被拆開、數字和單位被拆開、最後一行只剩 1~2 字、標點在行首。`--lang en` 掃英文 |
 | `page_export_check.mjs` | 直式翻頁影片:實際跑一段直式匯出(`<樂譜> <輸出目錄> [開始秒] [結束秒] [piano\|drum]`),列出每次換頁的時間、應該在哪一頁 vs 畫出哪一頁(反覆記號跳回時要立刻換),存下換頁那一格的畫面 |
+| `export_sheet_check.mjs` | 匯出頁版面(20 種尺寸 × 橫/直/方 × 中英文):預覽圖有沒有超出區塊(上面被切、下面蓋住選項)、變形、跟選項重疊,按鈕超出畫面/被截斷、橫向捲動(`<樂譜> [截圖目錄]`) |
 | `fast_export_check.mjs` | 匯出影片(快速匯出 / 即時錄影):實際跑一次「開始匯出」,存下影片、印出花的時間(`<樂譜> <輸出目錄> [landscape\|portrait\|square] [開始秒] [結束秒] [--realtime] [--webmtest] [--mp4test] [--inst drum]`)。雲端沒有硬體編碼器,快速匯出會因為試編太慢自動改即時錄影;--webmtest / --mp4test 強制走快速匯出檢查輸出。模擬 iPhone Safari:--dropmeta(編碼器不給 decoderConfig)、--nosuspend(離線合成不回報進度)、--failmux(封裝出錯要退回即時錄影)、--cancel N;--twice 同一頁匯出兩次(第二次用記住的試編結果);匯出後檢查 audioCtx 有換回即時的;印出標題最久幾秒沒變(看起來卡住)、時間有沒有超過樂曲長度,--log 列出每次變化。用 ffprobe / ffmpeg ebur128 看長度與響度 |
 | `mux_check.mjs` | MP4 封裝:ffmpeg 做真的 H.264 + AAC,模擬 Safari/Chrome 四種編碼器輸出餵給 muxVideoChunkFn / muxAudioChunkFn,解碼要跟原始串流逐位元相同 |
 | `rotate_check.mjs` | 旋轉螢幕:手機尺寸 × 載入前後 × 設定/匯出/主畫面 × 直橫來回(連轉、轉的時候切語言主題、快速轉),轉回來每個元素的字級與高度要跟直接打開一樣;--nofix 拿掉 text-size-adjust 對照 |

@@ -841,13 +841,15 @@ body.exporting-active .empty-card{
 }
 #formatOverlay .exp-sheet .title{text-align:center;margin-bottom:12px}
 .exp-body{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:14px;padding-bottom:12px}
-.exp-preview{position:relative;display:flex;justify-content:center;align-items:center;min-height:120px}
+/* flex:none:手機上預覽與選項上下排、高度不夠時,預覽區塊不能被壓扁(2026-10 iPhone 截圖:被壓到 120px,
+   圖片從中間往上下溢出——上面被捲動區切掉、標題不見,下面蓋住「格式」),放不下就整頁往下捲 */
+.exp-preview{position:relative;display:flex;justify-content:center;align-items:center;min-height:120px;flex:none}
 /* 直式預覽很高:限制在畫面高度約三分之一,選項才看得到;桌機改成左右兩欄 */
 #previewImg{max-width:100%;max-height:34vh;max-height:34dvh;object-fit:contain;display:block;border-radius:var(--radius-sm);border:1px solid var(--line);background:var(--bg)}
 .exp-busy{position:absolute;inset:auto 0 8px;text-align:center;font-size:var(--fs-2xs);color:var(--muted);display:none}
 .exp-preview.busy .exp-busy{display:block}
 .exp-preview.busy #previewImg{opacity:.5}
-.exp-opts{display:flex;flex-direction:column;gap:12px;min-width:0}
+.exp-opts{display:flex;flex-direction:column;gap:12px;min-width:0;flex:none}
 .exp-row{display:flex;flex-direction:column;gap:6px}
 .exp-label{font-size:var(--fs-xs);color:var(--muted)}
 .seg{display:flex;gap:6px}
