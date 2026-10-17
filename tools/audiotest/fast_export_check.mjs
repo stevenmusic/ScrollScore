@@ -26,6 +26,8 @@ await page.route(/raw\.githubusercontent\.com|fonts\.g/, r => r.abort());
 const errs = [];
 page.on("pageerror", e => errs.push(e.message));
 page.on("console", m => { if (m.type() === "error" || m.type() === "warning" || m.type() === "info") errs.push(m.type() + ": " + m.text()); });
+// --noworklet:模擬 Safari(不用 AudioWorklet:播放用備援限幅器、匯出讀離線成品、響度/限幅在主執行緒),見 workletAudioOk
+if (flags.has("--noworklet")) await page.addInitScript(() => { window.FORCE_NO_WORKLET = true; });
 await page.goto(`http://127.0.0.1:${server.address().port}/index.html`);
 if (opt("inst")) await page.selectOption("#instrument", opt("inst"));
 await page.setInputFiles("#fileInput", path.resolve(score));

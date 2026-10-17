@@ -6244,7 +6244,7 @@ function initAudioGraph(){
        峰值來之前就把音量平滑地降好,沒有失真;載好之後把備援換掉(通常在取樣載完之前就好了) */
     masterReady = (async () => {
       try {
-        if (!audioCtx.audioWorklet || typeof AudioWorkletNode === "undefined") return false;
+        if (!audioCtx.audioWorklet || typeof AudioWorkletNode === "undefined" || !workletAudioOk()) return false;
         const url = URL.createObjectURL(new Blob([MASTER_LIMITER_SRC], { type: "text/javascript" }));
         await audioCtx.audioWorklet.addModule(url);
         URL.revokeObjectURL(url);
@@ -6747,6 +6747,16 @@ function pianoToneFor(vel){
    send 校正成單音的共鳴比琴聲本身小約 15dB(0.3~3 秒,實測 send 3.2e-4 時 18dB),和弦的音互相是泛音關係,共鳴自然更大 */
 const PIANO_SYMPA = { send: 4.5e-4, closeTau: 0.1, openTau: 0.02 };
 function isIOSDevice(){ return /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1); }
+/* Safari(iPhone/iPad 上所有瀏覽器與 App 的 WKWebView、Mac Safari)的 AudioWorklet 會把經過它的聲音弄髒(2026-10-17 iPhone 自檢:
+   同一個鋼琴音不經過 AudioWorklet 8kHz 以上 −61dB,經過限幅器 AudioWorklet 變 −42dB = 使用者聽到的沙沙聲;離線合成時圖裡有
+   AudioWorklet,交回的成品更是整段雜訊)。這些瀏覽器不用 AudioWorklet:播放用備援限幅器(DynamicsCompressor + 軟削波,
+   10/01 以前就是這個),匯出直接讀離線合成的成品,響度分析與限幅器在主執行緒跑同一份程式碼(workletClass)。
+   window.FORCE_NO_WORKLET:測試用,在 Chrome 走同一條路 */
+function workletAudioOk(){
+  if (window.FORCE_NO_WORKLET) return false;
+  const ua = navigator.userAgent;
+  return !(isIOSDevice() || (/Safari\//.test(ua) && !/Chrome|Chromium|CriOS|FxiOS|Edg|OPR|Firefox|Android/.test(ua)));
+}
 function pianoMemoryBudgetBytes(){
   const dm = navigator.deviceMemory;
   if (isIOSDevice()) return 220e6;
@@ -10636,7 +10646,8 @@ function renderProgressTicker(estSec, report){
   return { real(f){ real = Math.max(real, f); show(real); }, stop(){ stopped = true; clearInterval(id); } };
 }
 async function measureExportGain(rangeStart, rangeEnd, onProgress){
-  if (typeof OfflineAudioContext === "undefined" || typeof AudioWorkletNode === "undefined") return null;
+  if (typeof OfflineAudioContext === "undefined") return null;
+  const useWk = workletAudioOk() && typeof AudioWorkletNode !== "undefined";
   const KEEP = EXPORT_AUDIO_KEEP;
   const saved = {};
   for (const k of KEEP) saved[k] = eval(k);
@@ -10649,21 +10660,25 @@ async function measureExportGain(rangeStart, rangeEnd, onProgress){
     const SCH = 0.4;
     let tick = { stop(){}, real(){} };
     try {
-      audioCtx = new OfflineAudioContext(1, len, sr);
+      audioCtx = new OfflineAudioContext(useWk ? 1 : 2, len, sr);
       initAudioGraph();
-      if (!await offlineStep("addModule", masterReady, 15000)) { restore(); return null; }
-      const tap = new AudioWorkletNode(audioCtx, "ss-loudness-tap", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1], channelCount: 2, channelCountMode: "explicit" });
+      let tap = null;
+      if (useWk) {
+        if (!await offlineStep("addModule", masterReady, 15000)) { restore(); return null; }
+        tap = new AudioWorkletNode(audioCtx, "ss-loudness-tap", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1], channelCount: 2, channelCountMode: "explicit" });
+      }
       masterOut.disconnect();
-      masterBus.connect(tap); tap.connect(audioCtx.destination);
+      if (tap) { masterBus.connect(tap); tap.connect(audioCtx.destination); }
+      else masterBus.connect(audioCtx.destination);   // 不用 AudioWorklet:讀成品、在主執行緒分析
       scheduled = []; ringingOpenHat = null; ringingCymbals = {}; pianoResetVoices();
       startCtxTime = LEAD;
       computeDrumPerformance();
       scheduleExportRange(rangeStart, rangeEnd, useCalib(), { defer: true });
       await scheduleOfflineInSlices(f => onProgress && onProgress(Math.round(f * SCH * 100)));
       tick = renderProgressTicker(total * 0.3, f => onProgress && onProgress(Math.round((SCH + (1 - SCH) * f) * 100)));
-      await awaitOfflineRender(audioCtx, total, tick);
-      const data = await dumpLoudnessTap(tap);
+      const buf = await awaitOfflineRender(audioCtx, total, tick);
       restore();
+      const data = tap ? await dumpLoudnessTap(tap) : await analyzeLoudnessOffline(buf.getChannelData(0), buf.getChannelData(1), sr);
       return solveExportGain(data.E, data.P, data.block, exportHasDrums() ? EXPORT_DRUM_RELEASE : 0.15);
     } finally { tick.stop(); }
   } catch (e) {
@@ -10762,12 +10777,28 @@ async function pickFastExportFormat(W, H, fps, bitrate){
   return { fail: (await aOk("mp4a.40.2")) || (await aOk("opus")) ? "codecs" : "audio" };
 }
 // 母帶限幅器在主執行緒跑(同一份 AudioWorkletProcessor 程式碼,補上 port/sampleRate/registerProcessor 的殼),直接改寫 L/R
-function runLimiterOffline(L, R, sampleRate, opts, onProgress){
-  let Cls = null;
+// MASTER_LIMITER_SRC 裡的 AudioWorkletProcessor 在主執行緒用(補上 port/sampleRate/registerProcessor 的殼)
+function workletClass(name, sampleRate){
   const shim = new Function("sampleRate", "src",
     "class AudioWorkletProcessor { constructor(){ this.port = { postMessage(){}, set onmessage(f){} }; } }\n" +
     "let found = {}; function registerProcessor(name, c){ found[name] = c; }\n" + "eval(src);\nreturn found;");
-  Cls = shim(sampleRate, MASTER_LIMITER_SRC)["ss-master-limiter"];
+  return shim(sampleRate, MASTER_LIMITER_SRC)[name];
+}
+/* 響度分析在主執行緒跑(不能用 AudioWorklet 的瀏覽器,見 workletAudioOk):同一份 SSLoudnessTap,結果格式跟 tap 的 dump 一樣 */
+async function analyzeLoudnessOffline(L, R, sampleRate){
+  const Cls = workletClass("ss-loudness-tap", sampleRate), tap = new Cls({ processorOptions: {} });
+  const N = L.length, B = 128;
+  for (let i = 0; i < N; ) {
+    if (exportCancelled) throw exportCancelError();
+    const stop = Math.min(N, i + sampleRate * 8);
+    for (; i < stop; i += B) tap.process([[L.subarray(i, Math.min(N, i + B)), R.subarray(i, Math.min(N, i + B))]]);
+    await new Promise(r => setTimeout(r, 0));
+  }
+  const E = tap.E.slice(), P = tap.P.slice(); if (tap.k) { E.push(tap.e / tap.k); P.push(tap.p); }
+  return { E: Float32Array.from(E), P: Float32Array.from(P), block: tap.B / sampleRate };
+}
+function runLimiterOffline(L, R, sampleRate, opts, onProgress){
+  const Cls = workletClass("ss-master-limiter", sampleRate);
   const lim = new Cls({ processorOptions: opts });
   const N = L.length, B = 128, out = [new Float32Array(B), new Float32Array(B)];
   return new Promise((resolve, reject) => {
@@ -10792,6 +10823,8 @@ function runLimiterOffline(L, R, sampleRate, opts, onProgress){
 async function renderExportAudioFast(rangeStart, rangeEnd, onProgress){
   const sr = fastExportSampleRate(), lead = FAST_EXPORT.lead, tail = FAST_EXPORT.tail;
   const len = Math.ceil((rangeEnd - rangeStart + lead + tail) * sr);
+  // Safari 不用 AudioWorklet(見 workletAudioOk):圖裡沒有 Worklet 時成品是好的,直接讀成品、響度在主執行緒分析
+  const useWk = workletAudioOk() && typeof AudioWorkletNode !== "undefined";
   const saved = {};
   for (const k of EXPORT_AUDIO_KEEP) saved[k] = eval(k);
   const restore = () => { for (const k of EXPORT_AUDIO_KEEP) eval(k + " = saved['" + k + "']"); };
@@ -10802,19 +10835,21 @@ async function renderExportAudioFast(rangeStart, rangeEnd, onProgress){
   try {
     audioCtx = new OfflineAudioContext(2, len, sr);
     initAudioGraph();
-    if (!await offlineStep("addModule", masterReady, 15000)) throw new Error("limiter");
-    const tap = new AudioWorkletNode(audioCtx, "ss-loudness-tap", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1], channelCount: 2, channelCountMode: "explicit", processorOptions: { pcm: true } });
-    // tap 送回來的聲音(一段一段放進整首的陣列);最後的響度資料另外等
-    tapL = new Float32Array(len); tapR = new Float32Array(len);
-    let tapFinalRes; const tapFinal = new Promise(r => tapFinalRes = r);
-    tap.port.onmessage = e => { const d = e.data;
-      if (d && d.s != null) { const n = Math.min(d.L.length, len - d.s); if (n > 0 && d.s >= 0) { tapL.set(d.L.subarray(0, n), d.s); tapR.set(d.R.subarray(0, n), d.s); } }
-      else tapFinalRes(d); };
-    tapDump = () => { tap.port.postMessage("dump"); return offlineStep("dump", tapFinal, 10000); };
-    const mute = audioCtx.createGain(); mute.gain.value = 0;
     masterOut.disconnect();
-    masterBus.connect(tap); tap.connect(mute); mute.connect(audioCtx.destination);
     masterBus.connect(audioCtx.destination);   // 限幅器之前的立體聲,後面在主執行緒乘增益、過限幅器
+    if (useWk) {
+      if (!await offlineStep("addModule", masterReady, 15000)) throw new Error("limiter");
+      const tap = new AudioWorkletNode(audioCtx, "ss-loudness-tap", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1], channelCount: 2, channelCountMode: "explicit", processorOptions: { pcm: true } });
+      // tap 送回來的聲音(一段一段放進整首的陣列);最後的響度資料另外等
+      tapL = new Float32Array(len); tapR = new Float32Array(len);
+      let tapFinalRes; const tapFinal = new Promise(r => tapFinalRes = r);
+      tap.port.onmessage = e => { const d = e.data;
+        if (d && d.s != null) { const n = Math.min(d.L.length, len - d.s); if (n > 0 && d.s >= 0) { tapL.set(d.L.subarray(0, n), d.s); tapR.set(d.R.subarray(0, n), d.s); } }
+        else tapFinalRes(d); };
+      tapDump = () => { tap.port.postMessage("dump"); return offlineStep("dump", tapFinal, 10000); };
+      const mute = audioCtx.createGain(); mute.gain.value = 0;
+      masterBus.connect(tap); tap.connect(mute); mute.connect(audioCtx.destination);
+    }
     scheduled = []; ringingOpenHat = null; ringingCymbals = {}; pianoResetVoices();
     startCtxTime = lead;
     computeDrumPerformance();
@@ -10827,24 +10862,25 @@ async function renderExportAudioFast(rangeStart, rangeEnd, onProgress){
     tick = renderProgressTicker((len / sr) * 0.3, f => onProgress && onProgress(SCH + (0.85 - SCH) * f));
     buf = await awaitOfflineRender(audioCtx, len / sr, tick);
     lap("aRender");
-    data = await tapDump();
+    if (tapDump) data = await tapDump();
     lap("aDump");
   } finally { tick.stop(); restore(); }
   const tLim = performance.now();
   const drums = exportHasDrums();
   // 用哪一份聲音:tap 送回來的(iPhone 上唯一正確的)正常就用它;不然用 OfflineAudioContext 的成品(兩份在 Chrome 逐樣本相同)
   if (window.FAST_EXPORT_BREAK_BUFFER) for (const c of [0, 1]) { const d = buf.getChannelData(c); for (let i = 0; i < d.length; i++) d[i] = (Math.random() - 0.5) * 1e5; }   // 測試:模擬 iPhone 的壞成品
-  const stTap = pcmHealth(tapL, tapR, sr), stBuf = pcmHealth(buf.getChannelData(0), buf.getChannelData(1), sr);
-  { let md = 0; const b0 = buf.getChannelData(0); for (let i = 0; i < b0.length; i += 7) md = Math.max(md, Math.abs(b0[i] - tapL[i])); console.info("tap 與成品最大差 " + md.toExponential(2)); }
-  const useTap = stTap.ok || !stBuf.ok;
+  const stBuf = pcmHealth(buf.getChannelData(0), buf.getChannelData(1), sr), stTap = tapL ? pcmHealth(tapL, tapR, sr) : { ok: false };
+  if (tapL) { let md = 0; const b0 = buf.getChannelData(0); for (let i = 0; i < b0.length; i += 7) md = Math.max(md, Math.abs(b0[i] - tapL[i])); console.info("tap 與成品最大差 " + md.toExponential(2)); }
+  const useTap = !!tapL && (stTap.ok || !stBuf.ok);
   const L = useTap ? tapL : buf.getChannelData(0), R = useTap ? tapR : buf.getChannelData(1);
   buf = null;
   // 每一步都檢查聲音正不正常(2026-10:iPhone 兩支影片整段沙沙聲,格式試音與匯出後檢查都過了 → 送進編碼器前的聲音就壞了)。
   // 哪一步壞掉就丟錯、改用即時錄影,訊息寫出是哪一步(合成 / 增益 / 限幅器)
   const st0 = pcmHealth(L, R, sr);
+  if (!data) data = await analyzeLoudnessOffline(L, R, sr);
   let g = solveExportGain(data.E, data.P, data.block, drums ? EXPORT_DRUM_RELEASE : 0.15);
   const gOk = Number.isFinite(g) && g > 0 && g < 100;
-  fastAudioHealth = "合成" + (useTap ? "(tap)" : "") + " " + st0.txt + (useTap && !stBuf.ok ? " · 原成品 " + stBuf.txt : "") + " · 增益 " + (gOk ? g.toFixed(2) : String(g));
+  fastAudioHealth = "合成" + (useTap ? "(tap)" : useWk ? "" : "(無 Worklet)") + " " + st0.txt + (useTap && !stBuf.ok ? " · 原成品 " + stBuf.txt : "") + " · 增益 " + (gOk ? g.toFixed(2) : String(g));
   if (!st0.ok) throw new Error(T("fastNoteNoSound", { msg: fastAudioHealth }));
   if (!gOk) g = 1;   // 增益算不出來就照原本音量(不要把整段乘成 NaN)
   fastExportGainCache = { rangeStart, rangeEnd, g };
@@ -10873,7 +10909,7 @@ function pcmHealth(L, R, sr){
   let sxy = 0, sxx = 0, syy = 0; for (let i = 0; i < seg.length; i++) { sxy += seg[i] * segR[i]; sxx += seg[i] * seg[i]; syy += segR[i] * segR[i]; }
   const corr = sxx && syy ? sxy / Math.sqrt(sxx * syy) : 0;
   const ok = bad === 0 && rms > 1e-4 && hf < 0.35;
-  return { ok, rms, hf, corr, bad, txt: (bad ? "NaN×" + bad + " " : "") + "rms " + rms.toFixed(3) + " hf " + hf.toFixed(2) + " lr " + corr.toFixed(2) };
+  return { ok, rms, hf, corr, bad, txt: (bad ? "NaN×" + bad + " " : "") + "rms " + rms.toFixed(3) + " hf " + hf.toFixed(2) + (hf > 0 ? "(" + (10 * Math.log10(hf)).toFixed(0) + "dB)" : "") + " lr " + corr.toFixed(2) };
 }
 /* 鋼琴聲音自我檢查(2026-10):iPhone 匯出的鋼琴有沙沙聲(8kHz 以上比音樂小 47dB,10/01 的同一首是 75dB)、幾乎單聲道,
    雲端 Chrome 重現不出來 → 在使用者的裝置上用同一套音訊引擎把一個音分段測:原始取樣 / 起音自動變化的音色濾波器 /
@@ -10946,7 +10982,8 @@ async function pianoSelfTest(){
   const saved = {}; for (const k of EXPORT_AUDIO_KEEP) saved[k] = eval(k);
   const out = pre;
   try {
-    for (const st of ["raw", ...["dec", "copy", "mono", "mono0", "monoCT"].filter(k => bufs[k]), "presAuto", "presFix", "bus", "comp", "note"]) {
+    // 下面這些都經過 tap(AudioWorklet),Safari 上量到的是 Worklet 的雜訊(見 workletAudioOk),不能用 Worklet 的瀏覽器就不跑
+    for (const st of !workletAudioOk() ? [] : ["raw", ...["dec", "copy", "mono", "mono0", "monoCT"].filter(k => bufs[k]), "presAuto", "presFix", "bus", "comp", "note"]) {
       audioCtx = new OfflineAudioContext(2, len, sr);
       initAudioGraph();
       if (!await offlineStep("addModule", masterReady, 15000)) throw new Error("limiter");
