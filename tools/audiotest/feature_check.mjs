@@ -82,12 +82,16 @@ await page.click('#cursorColorRow .swatch[data-color="#F2877A"]'); await wait(10
 check("色票換紅色", await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--cursor-col").trim() === "#F2877A"));
 await page.click('#cursorColorRow .swatch[data-color="#E9CB7A"]');
 check("沒有空間感、游標濃度滑桿", await page.evaluate(() => !$("reverbAmount") && !$("cursorOpacity")));
-await page.evaluate(() => document.querySelectorAll("#settingsPanel details").forEach(d => d.open = true));
+check("背景圖不在設定面板(2026-10 搬到匯出頁)", await page.evaluate(() => !$("settingsPanel").contains($("bgImageBtn")) && $("expAdvanced").contains($("bgImageBtn"))));
+await page.evaluate(() => closeSettingsSheet());
+// 背景圖在匯出頁「進階」
+await page.evaluate(() => { $("exportBtn").click(); }); await page.waitForSelector("#formatOverlay.show");
+await page.evaluate(() => { $("expAdvanced").open = true; });
 await page.setInputFiles("#bgImageFile", path.join(ROOT, "app/assets/logo-original.png")); await wait(1200);
 check("背景圖匯入(背景濃度出現且自動設好)", await page.evaluate(() => !!customBgImage && !$("bgOpacityRow").hidden && +$("scoreBgOpacity").value > 0));
 await page.click("#bgImageClearBtn"); await wait(200);
 check("背景圖移除", await page.evaluate(() => !customBgImage && $("bgOpacityRow").hidden));
-await page.evaluate(() => closeSettingsSheet());
+await page.click("#fmtCancel"); await wait(200);
 
 // 6. 主題、語言
 await page.click("#themeToggle"); await wait(200);

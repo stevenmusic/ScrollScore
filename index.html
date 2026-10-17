@@ -314,7 +314,7 @@ input[type=range]::-webkit-slider-thumb{
 .settings-group .tempo-box b{min-width:2.6em;text-align:right}
 /* 背景圖的檔名可能很長,會把後面的「移除」擠到下一行變成孤兒。
    讓它吃掉剩餘寬度並在過長時截斷,整列就能維持一行 */
-#bgImageStatus{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#bgImageStatus{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--fs-2xs);color:var(--muted)}
 /* 還沒匯入時只顯示「匯入」按鈕;匯入後才出現檔名與「移除」(以前是「未匯入」+ 灰掉的移除鈕在佔位置) */
 #bgImageClearBtn:disabled{display:none}
 .tempo-box:has(#bgImageClearBtn:disabled) #bgImageStatus{visibility:hidden}
@@ -866,6 +866,12 @@ body.exporting-active .empty-card{
 }
 .exp-actions .btn{min-height:44px;justify-content:center}
 .exp-actions .btn.primary{flex:1;max-width:260px}
+.exp-actions #coverBtn{white-space:nowrap}
+.exp-bg{display:flex;align-items:center;gap:8px;flex:1;min-width:0}
+#expBgRow .exp-bg .btn{height:34px;min-height:34px;min-width:0;padding:0 12px;font-size:var(--fs-xs);white-space:nowrap}   /* 次要按鈕,不要跟主要按鈕一樣 44px 大 */
+#bgOpacityRow{min-height:34px}
+#bgOpacityRow input[type=range]{flex:1;width:auto}
+#bgOpacityRow b{color:var(--gold-bright);min-width:2em;text-align:right;font-variant-numeric:tabular-nums}
 @media (min-width:760px) and (min-height:520px){
   .exp-body{flex-direction:row;align-items:flex-start;gap:20px}
   .exp-preview{flex:1 1 55%;position:sticky;top:0}
@@ -995,20 +1001,7 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
     </div>
   </div>
 
-  <details class="settings-group settings-collapse">
-    <summary class="settings-group-title"><span data-i18n="advancedSummary">進階</span><span class="chev">›</span></summary>
-    <div class="collapse-body">
-      <!-- 2026-10 使用者請 Claude 判斷「進階」要留什麼:游標顏色、游標濃度拿掉(固定金色、100%);
-           背景圖是做影片會用到的功能,留著;背景濃度匯入圖片後才出現(匯入時已依亮度自動設好) -->
-      <div class="tempo-box"><span class="row-label" data-i18n="bgImageRowLabel">背景圖</span>
-        <button class="btn" id="bgImageBtn" data-i18n="bgImageBtn">匯入背景圖片</button>
-        <input type="file" id="bgImageFile" accept="image/*">
-        <span id="bgImageStatus" style="font-size:12px;opacity:0.75" data-i18n="bgImageStatusDefault">未匯入</span>
-        <button class="btn" id="bgImageClearBtn" style="padding:4px 10px" disabled data-i18n="removeBtn">移除</button>
-      </div>
-      <div class="tempo-box" id="bgOpacityRow" hidden><span class="row-label" data-i18n="scoreBgOpacityLabel">背景濃度</span> <input type="range" id="scoreBgOpacity" min="0" max="100" value="0"><b id="scoreBgOpacityVal">0</b></div>
-    </div>
-  </details>
+  <!-- 背景圖片已搬到匯出頁的「進階」(2026-10,使用者選擇:這個工具主要是把樂譜做成影片,背景圖是為影片設定的,在匯出頁換圖馬上看得到預覽) -->
 
   <!-- 關於與授權(2026-10,上架準備):CC BY 要求在使用者看得到的地方標示來源、授權與「有修改」;程式庫照各自授權標示 -->
   <details class="settings-group settings-collapse" id="aboutCredits">
@@ -1114,16 +1107,16 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
             <span data-i18n="titleLabel">標題</span>
             <input type="text" id="exportTitleInput" class="range-time-input" data-i18n-attr="placeholder:titlePlaceholder" placeholder="樂曲標題(上方置中)">
           </div>
+            <div class="exp-field">
+              <span data-i18n="subtitleLabel">副標題</span>
+              <input type="text" id="exportSubtitleInput" class="range-time-input" data-i18n-attr="placeholder:subtitlePlaceholder" placeholder="演出者/作曲者(標題正下方,選填)">
+            </div>
           <div class="exp-field">
             <span data-i18n="watermarkLabel">浮水印</span>
             <input type="text" id="exportWatermarkInput" class="range-time-input" data-i18n-attr="placeholder:watermarkPlaceholder" placeholder="頻道名稱(右下角)">
           </div>
           <details class="exp-adv" id="expAdvanced">
             <summary><span data-i18n="expAdvanced">進階</span><span class="chev">›</span></summary>
-            <div class="exp-field">
-              <span data-i18n="subtitleLabel">副標題</span>
-              <input type="text" id="exportSubtitleInput" class="range-time-input" data-i18n-attr="placeholder:subtitlePlaceholder" placeholder="副標題(標題正下方,選填)">
-            </div>
             <div class="exp-row">
               <span class="exp-label" data-i18n="expAlignLabel">樂譜位置</span>
               <div class="seg seg-sm" id="expAlignSeg" role="radiogroup">
@@ -1132,6 +1125,15 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
                 <button type="button" data-v="bottom" role="radio"><b data-i18n="expAlignBottom">靠下</b></button>
               </div>
             </div>
+          <div class="exp-field tempo-box" id="expBgRow"><span data-i18n="bgImageRowLabel">背景圖</span>
+            <div class="exp-bg">
+              <button class="btn" id="bgImageBtn" data-i18n="bgImageBtn">選擇圖片</button>
+              <input type="file" id="bgImageFile" accept="image/*">
+              <span id="bgImageStatus" data-i18n="bgImageStatusDefault">未匯入</span>
+              <button class="btn" id="bgImageClearBtn" disabled data-i18n="removeBtn">移除</button>
+            </div>
+          </div>
+          <div class="exp-field" id="bgOpacityRow" hidden><span data-i18n="scoreBgOpacityLabel">背景濃度</span><input type="range" id="scoreBgOpacity" min="0" max="100" value="0"><b id="scoreBgOpacityVal">0</b></div>
             <label class="switch-row exp-switch">
               <span data-i18n="exportRangeToggleLabel">只匯出片段區間</span>
               <span class="switch"><input type="checkbox" id="exportRangeToggle"><span class="switch-track"></span></span>
@@ -1153,6 +1155,7 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
       </div>
       <div class="exp-actions">
         <button class="btn" id="fmtCancel" data-i18n="cancelBtn">取消</button>
+        <button class="btn" id="coverBtn" data-i18n-attr="title:coverBtnTitle"><span data-i18n="coverBtn">存封面圖</span></button>
         <button class="btn primary" id="previewConfirmBtn" data-i18n="previewConfirmBtn">開始匯出</button>
       </div>
     </div>
@@ -1306,10 +1309,19 @@ const I18N = {
     measureHlLabel: "小節高亮",
 
     advancedSummary: "背景圖片",
+    coverBtn: "存封面圖",
+    coverBtnTitle: "用目前的預覽畫面做影片封面/縮圖(橫式 1280×720,YouTube 縮圖尺寸)",
+    coverBusy: "產生中…",
+    coverDone: "封面圖完成({w}×{h})",
+    shareTitleImg: "封面圖完成",
+    shareSubImg: "點「儲存圖片」存到相簿,或分享到其他 App。",
+    shareSaveBtnImg: "儲存圖片",
+    shareSavedSubImg: "封面圖已存到「照片」,也可以分享到其他 App。",
+    shareSaveFailedSubImg: "沒辦法直接存到相簿(可能沒有允許加入照片),請點「儲存圖片」存檔。",
     removeBtn: "移除",
     scoreBgOpacityLabel: "背景濃度",
     bgImageRowLabel: "背景圖",
-    bgImageBtn: "匯入背景圖片",
+    bgImageBtn: "選擇圖片",
     bgImageStatusDefault: "未匯入",
     bgImportedStatus: "已匯入:{name}",
 
@@ -1355,7 +1367,7 @@ const I18N = {
     titleLabel: "標題",
     titlePlaceholder: "樂曲標題(上方置中)",
     subtitleLabel: "副標題",
-    subtitlePlaceholder: "副標題(標題正下方,選填)",
+    subtitlePlaceholder: "演出者/作曲者(標題正下方,選填)",
     watermarkLabel: "浮水印",
     watermarkPlaceholder: "頻道名稱(右下角)",
 
@@ -1545,10 +1557,19 @@ const I18N = {
     measureHlLabel: "Highlight",
 
     advancedSummary: "Background Image",
+    coverBtn: "Save Cover",
+    coverBtnTitle: "Make a cover / thumbnail from the current preview (landscape 1280×720, the YouTube thumbnail size)",
+    coverBusy: "Working…",
+    coverDone: "Cover image ready ({w}×{h})",
+    shareTitleImg: "Cover image ready",
+    shareSubImg: "Tap Save Image to save it to Photos or share it to another app.",
+    shareSaveBtnImg: "Save Image",
+    shareSavedSubImg: "The cover image is in your Photos. You can also share it to another app.",
+    shareSaveFailedSubImg: "Couldn't save to Photos directly (photo access may be off). Tap Save Image to save it.",
     removeBtn: "Remove",
     scoreBgOpacityLabel: "BG Opacity",
     bgImageRowLabel: "Background",
-    bgImageBtn: "Import Background",
+    bgImageBtn: "Choose Image",
     bgImageStatusDefault: "None",
     bgImportedStatus: "Imported: {name}",
 
@@ -1594,7 +1615,7 @@ const I18N = {
     titleLabel: "Title",
     titlePlaceholder: "Score title (centered at top)",
     subtitleLabel: "Subtitle",
-    subtitlePlaceholder: "Subtitle (below title, optional)",
+    subtitlePlaceholder: "Artist / composer (below title, optional)",
     watermarkLabel: "Watermark",
     watermarkPlaceholder: "Channel name (bottom right)",
 
@@ -2298,6 +2319,8 @@ async function loadScoreFile(file){
     }
     // 匯出影片標題浮水印預設值:優先用樂譜內建的標題,沒有的話退回檔名(去掉副檔名),使用者仍可自行修改
     $("exportTitleInput").value = parsed.scoreTitle || file.name.replace(SCORE_FILE_RE, "");
+    // 副標題(使用者通常打演出者/作曲者):換一首就不能留著上一首的;樂譜有寫作曲者就先帶入,使用者照樣可以改
+    $("exportSubtitleInput").value = scoreCreatorFromXml(xmlText);
     arpMap = parsed.arpMap;
     articEntries = buildSortedEntries(articMap);
     arpEntries = buildSortedEntries(arpMap);
@@ -2349,6 +2372,14 @@ $("fileInput").addEventListener("change", async e => {
 /* ── 拖放檔案到樂譜區直接載入(桌面版方便) ─────────────────── */
 const SCORE_FILE_RE = /\.(xml|musicxml|mxl|gp|gpx|gp5|gp4|gp3)$/i;
 const GP_FILE_RE = /\.(gp|gpx|gp5|gp4|gp3)$/i;
+/* 樂譜裡的作曲者(<creator type="composer">,沒有就第一個 <creator>),給匯出影片的副標題當預設值 */
+function scoreCreatorFromXml(xml){
+  const head = String(xml || "").slice(0, 20000);   // 只看檔頭,不用整份解析
+  const m = head.match(/<creator[^>]*type="composer"[^>]*>([^<]+)<\/creator>/) || head.match(/<creator[^>]*>([^<]+)<\/creator>/);
+  if (!m) return "";
+  const t = document.createElement("textarea"); t.innerHTML = m[1].trim();   // 解 &amp; 之類
+  return t.value.replace(/\s+/g, " ").slice(0, 80);
+}
 /* 檔案選擇器一律保留 accept(只列樂譜格式、沒有圖片/影片類型):iPhone 沒有 accept 時會先跳「照片圖庫/拍照或錄影/選擇檔案」選單,
    有 accept 才直接打開「檔案」(使用者要求,2026-10;曾為了怕 .mxl/.gp5 變灰色拿掉過)。選錯檔案時 loadScoreFile 會說明。
    App 裡「支援與聯絡」「隱私權政策」改連網址(用 Safari 打開;App 內的相對路徑是 capacitor:// 開不了,審查發現) */
@@ -5864,6 +5895,7 @@ $("transDown").addEventListener("click", () => applyTranspose(-1));
 $("scoreBgOpacity").addEventListener("input", () => {
   $("scoreBgOpacityVal").textContent = $("scoreBgOpacity").value;
   $("scoreBg").style.opacity = $("scoreBgOpacity").value / 100;
+  if ($("formatOverlay").classList.contains("show")) refreshExportPreview();
 });
 
 /* 匯出浮水印:頻道名稱、標題、「是否加上標題/浮水印」這個開關都存在 localStorage,
@@ -8368,6 +8400,7 @@ $("bgImageFile").addEventListener("change", async e => {
     $("bgImageClearBtn").disabled = false;
     $("bgOpacityRow").hidden = false;
     setStatus(statusMsg);
+    if ($("formatOverlay").classList.contains("show")) refreshExportPreview(true);
   } catch (err) {
     setStatus(T("statusBgReadFailed", { msg: err.message || err }));
   }
@@ -8380,6 +8413,7 @@ $("bgImageClearBtn").addEventListener("click", () => {
   $("bgImageClearBtn").disabled = true;
   $("bgOpacityRow").hidden = true;
   setStatus(T("statusBgRemoved"));
+  if ($("formatOverlay").classList.contains("show")) refreshExportPreview(true);
 });
 
 function schedulePiano(freq, when, dur, legato, pedal, harmonyEndSec, artic, staff){
@@ -9443,6 +9477,105 @@ function refreshExportPreview(now){
   clearTimeout(previewTimer);
   previewTimer = setTimeout(drawExportPreview, now ? 0 : 180);
 }
+function exportPreviewSongSec(cfg){ return cfg.startSec != null ? cfg.startSec : (playing ? currentSec() : pausedAtSec); }
+/* 匯出畫面的一格(預覽、封面圖共用):樂譜點陣化很花時間,同一份樂譜、同一個高度只做一次(previewRaster)。
+   stale() 回傳 true 代表已經有更新的選擇,這張不用畫了(回傳 null) */
+async function renderExportStill(cfg, stale){
+  await ensureTitleFontsLoaded(cfg);
+  const svg = $("score").querySelector("svg");
+  const layout = computeExportLayout(cfg);
+  const songSec = exportPreviewSongSec(cfg);
+  let pg = null;
+  if (cfg.page) {
+    pg = await buildPageScore(cfg, layout);
+    const pos = pagePosAt(pg, songSec);
+    await ensurePageCanvas(pg, pos ? pos.sys.page : 0);
+  } else if (!previewRaster || previewRaster.svg !== svg || previewRaster.scoreH !== cfg.scoreH) {
+    const r = await rasterizeScore(cfg.scoreH);
+    previewRaster = { svg, scoreH: cfg.scoreH, tiles: r.tiles, scale: r.scale };
+  }
+  if (stale && stale()) return null;
+  const cv = document.createElement("canvas");
+  cv.width = cfg.W; cv.height = cfg.H;
+  if (pg) drawExportPageFrame(cv.getContext("2d"), layout, cfg, pg, songSec, useCalib());
+  else drawExportFrame(cv.getContext("2d"), layout, cfg, previewRaster.tiles, previewRaster.scale, songSec, useCalib());
+  return cv;
+}
+/* 封面圖(2026-10,使用者選擇「一鍵存封面圖」):用匯出頁目前的設定與預覽位置畫一格(不畫標題/副標題),
+   有標題時蓋一層半透明底色、把標題放大置中——縮圖在 YouTube 列表上只有約 320px 寬,
+   影片裡的標題(畫面寬的 5.5%)縮小後幾乎看不清楚。不放頻道名稱(列表旁邊本來就有)。
+   橫式輸出 1280×720(YouTube 縮圖建議尺寸,上限 2MB),直式/方形照影片尺寸;JPEG 0.92 */
+const COVER = { titleMax: 0.15, titleMin: 0.07, widthFrac: 0.86, veil: 0.74, landscapeW: 1280 };
+async function renderCoverImage(cfg){
+  const base = { ...cfg, title: "", subtitle: "", channel: "" };   // 縮圖不放頻道名稱:YouTube 列表旁邊本來就有頻道名與頭像(使用者確認)
+  const cv = await renderExportStill(base);
+  const W = cv.width, H = cv.height, ctx = cv.getContext("2d");
+  if (cfg.watermarkEnabled && (cfg.title || cfg.subtitle)) {
+    ctx.save();
+    ctx.globalAlpha = COVER.veil;
+    ctx.fillStyle = currentInstrument() === "drum" ? "#FFFFFF" : "#FFFDF6";
+    ctx.fillRect(0, 0, W, H);
+    ctx.globalAlpha = 1;
+    const ref = Math.min(W, H), maxW = W * COVER.widthFrac;
+    const fontOf = px => "700 " + px + "px '" + EXPORT_FONT_FAMILY + "', 'Noto Serif TC', serif";
+    // 一行放得下就一行;放不下先縮字(最小 7%),還是放不下就從中間附近的空格(沒有就照字數)切成兩行
+    const fit = (lines) => { ctx.font = fontOf(100); const w = Math.max(...lines.map(l => ctx.measureText(l).width)); return Math.min(ref * COVER.titleMax, 100 * maxW / Math.max(1, w)); };
+    let lines = cfg.title ? [cfg.title] : [];
+    let size = lines.length ? fit(lines) : ref * COVER.titleMax;
+    if (lines.length && size < ref * COVER.titleMin) {
+      const t = cfg.title, mid = Math.floor(t.length / 2);
+      let cut = -1;
+      for (let d = 0; d < mid && cut < 0; d++) { if (t[mid - d] === " ") cut = mid - d; else if (t[mid + d] === " ") cut = mid + d; }
+      lines = cut > 0 ? [t.slice(0, cut).trim(), t.slice(cut + 1).trim()] : [t.slice(0, mid), t.slice(mid)];
+      size = Math.max(ref * COVER.titleMin * 0.8, fit(lines));
+    }
+    size = Math.round(size);
+    const subSize = Math.round(Math.max(ref * 0.035, size * 0.4));
+    const lineH = Math.round(size * 1.18), gap = Math.round(size * 0.35);
+    const blockH = lines.length * lineH + (cfg.subtitle ? gap + subSize : 0);
+    // 有鍵盤/鼓組面板時,標題放在樂譜區(面板上面)的正中間,底帶才不會壓到面板;放不下才用整張的中間
+    const lay = computeExportLayout(base), padY0 = Math.round(size * 0.45);
+    const areaB = base.includeKeyboard && lay.kbY > blockH + padY0 * 2 ? lay.kbY : H;
+    let y = Math.round((areaB - blockH) / 2);
+    // 標題後面再墊一條較不透明的橫帶:譜線/音符不要穿過字(縮圖很小,背景越乾淨字越好讀)
+    const padY = padY0;
+    ctx.globalAlpha = 0.8;
+    ctx.fillRect(0, y - padY, W, blockH + padY * 2);
+    ctx.globalAlpha = 1;
+    ctx.textAlign = "center"; ctx.textBaseline = "top";
+    ctx.fillStyle = exportInkColor(hlCursorColor());   // 跟影片標題同色
+    ctx.font = fontOf(size);
+    for (const l of lines) { ctx.fillText(l, W / 2, y, maxW); y += lineH; }
+    if (cfg.subtitle) {
+      ctx.font = "600 " + subSize + "px '" + EXPORT_FONT_FAMILY + "', 'Noto Serif TC', serif";
+      ctx.fillStyle = "rgba(42,42,42,0.85)";
+      ctx.fillText(cfg.subtitle, W / 2, y + gap - Math.round(size * 0.18), maxW);
+    }
+    ctx.restore();
+  }
+  if (W > H && W !== COVER.landscapeW) {   // 橫式縮成 YouTube 縮圖尺寸
+    const out = document.createElement("canvas");
+    out.width = COVER.landscapeW; out.height = Math.round(COVER.landscapeW * H / W);
+    const o = out.getContext("2d"); o.imageSmoothingQuality = "high";
+    o.drawImage(cv, 0, 0, out.width, out.height);
+    return out;
+  }
+  return cv;
+}
+$("coverBtn").addEventListener("click", async () => {
+  const cfg = buildExportCfg();
+  if (!cfg) { setStatus(T("statusExportRangeInvalid")); return; }
+  const btn = $("coverBtn"), label = btn.querySelector("span");
+  btn.disabled = true; label.textContent = T("coverBusy");
+  try {
+    const cv = await renderCoverImage(cfg);
+    const blob = await new Promise(res => cv.toBlob(res, "image/jpeg", 0.92));
+    const name = "scrollscore-cover-" + cv.width + "x" + cv.height + ".jpg";
+    setStatus(T("coverDone", { w: cv.width, h: cv.height }));
+    await deliverExportedImage(blob, name);
+  } catch (e) { setStatus(T("exportFailed", { msg: e.message || e })); }
+  finally { btn.disabled = false; label.textContent = T("coverBtn"); }
+});
 async function drawExportPreview(){
   const token = ++previewToken;
   const cfg = buildExportCfg();
@@ -9451,24 +9584,8 @@ async function drawExportPreview(){
   const wrap = $("previewImg").parentElement;
   wrap.classList.add("busy");
   try {
-    await ensureTitleFontsLoaded(cfg);
-    const svg = $("score").querySelector("svg");
-    const layout = computeExportLayout(cfg);
-    const previewSongSec = cfg.startSec != null ? cfg.startSec : (playing ? currentSec() : pausedAtSec);
-    let pg = null;
-    if (cfg.page) {
-      pg = await buildPageScore(cfg, layout);
-      const pos = pagePosAt(pg, previewSongSec);
-      await ensurePageCanvas(pg, pos ? pos.sys.page : 0);
-    } else if (!previewRaster || previewRaster.svg !== svg || previewRaster.scoreH !== cfg.scoreH) {
-      const r = await rasterizeScore(cfg.scoreH);
-      previewRaster = { svg, scoreH: cfg.scoreH, tiles: r.tiles, scale: r.scale };
-    }
-    if (token !== previewToken) return;   // 已經有更新的選擇,這張不用畫了
-    const cv = document.createElement("canvas");
-    cv.width = cfg.W; cv.height = cfg.H;
-    if (pg) drawExportPageFrame(cv.getContext("2d"), layout, cfg, pg, previewSongSec, useCalib());
-    else drawExportFrame(cv.getContext("2d"), layout, cfg, previewRaster.tiles, previewRaster.scale, previewSongSec, useCalib());
+    const cv = await renderExportStill(cfg, () => token !== previewToken);
+    if (!cv) return;   // 已經有更新的選擇,這張不用畫了
     $("previewImg").src = cv.toDataURL("image/jpeg", 0.85);
   } catch (e) { setStatus(T("exportFailed", { msg: e.message || e })); }
   finally { if (token === previewToken) wrap.classList.remove("busy"); }
@@ -10923,6 +11040,33 @@ function nativeMediaPlugins(){
 function blobToBase64(b){
   return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1] || ""); r.onerror = () => rej(r.error); r.readAsDataURL(b); });
 }
+/* 封面圖:App 直接存相簿(Media.savePhoto,只要「加入照片」權限);網頁版 iOS 用分享(要使用者點一下);其他下載 */
+async function deliverExportedImage(blob, fileName){
+  let file = null;
+  try { file = new File([blob], fileName, { type: "image/jpeg" }); } catch (e) {}
+  const canShareFile = !!(file && navigator.canShare && (() => { try { return navigator.canShare({ files: [file] }); } catch (e) { return false; } })());
+  const P = nativeMediaPlugins();
+  if (P) {
+    showShareOverlay("saving", file, canShareFile, fileName, "image");
+    const path = "exports/" + fileName;
+    try {
+      await P.FS.writeFile({ path, data: await blobToBase64(blob), directory: "CACHE", recursive: true });
+      const { uri } = await P.FS.getUri({ path, directory: "CACHE" });
+      try { await P.Media.savePhoto({ path: uri }); }
+      finally { try { await P.FS.deleteFile({ path, directory: "CACHE" }); } catch (e) {} }
+      showShareOverlay("saved", file, canShareFile, fileName, "image"); return;
+    } catch (e) {
+      console.warn("save cover to photos", e);
+      if (canShareFile) { showShareOverlay("fallback", file, canShareFile, fileName, "image"); return; }
+      $("shareOverlay").classList.remove("show"); setStatus(T("shareFailed")); return;
+    }
+  }
+  if ((window.IN_NATIVE_APP || isIOSDevice()) && canShareFile) { showShareOverlay("share", file, canShareFile, fileName, "image"); return; }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = fileName;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+}
 async function saveVideoToPhotosNative(blob, fileName){
   const { FS, Media } = nativeMediaPlugins();
   const path = "exports/" + fileName, CH = 3 * 1024 * 1024;
@@ -10936,16 +11080,17 @@ async function saveVideoToPhotosNative(blob, fileName){
   finally { try { await FS.deleteFile({ path, directory: "CACHE" }); } catch (e) {} }
 }
 // 匯出完成的小視窗:saving 存相簿中 / saved 已存好(可再分享)/ share 用系統分享存檔(網頁版 iOS、外掛失敗時)
-function showShareOverlay(mode, file, canShare, fileName){
+function showShareOverlay(mode, file, canShare, fileName, kind){
+  const K = key => (kind === "image" && I18N[currentLang] && I18N[currentLang][key + "Img"]) ? key + "Img" : key;   // 圖片(封面圖)用自己的說明
   const ov = $("shareOverlay"), save = $("shareSaveBtn"), close = $("shareCloseBtn");
   const share = async () => {
     try { await navigator.share({ files: [file], title: fileName }); if (mode !== "saved") ov.classList.remove("show"); }
     catch (e) { if (e && e.name !== "AbortError") setStatus(T("shareFailed")); }
   };
-  $("shareTitle").textContent = T(mode === "saving" ? "shareSavingTitle" : mode === "saved" ? "shareSavedTitle" : "shareTitle");
-  $("shareSub").textContent = mode === "saving" ? "" : T(mode === "saved" ? "shareSavedSub" : mode === "fallback" ? "shareSaveFailedSub" : "shareSub");
+  $("shareTitle").textContent = T(mode === "saving" ? "shareSavingTitle" : mode === "saved" ? "shareSavedTitle" : K("shareTitle"));
+  $("shareSub").textContent = mode === "saving" ? "" : T(K(mode === "saved" ? "shareSavedSub" : mode === "fallback" ? "shareSaveFailedSub" : "shareSub"));
   save.style.display = mode === "saving" || (mode === "saved" && !canShare) ? "none" : "";
-  save.textContent = T(mode === "saved" ? "shareShareBtn" : "shareSaveBtn");
+  save.textContent = T(mode === "saved" ? "shareShareBtn" : K("shareSaveBtn"));
   save.onclick = share;
   close.style.display = mode === "saving" ? "none" : "";
   ov.dataset.mode = mode;

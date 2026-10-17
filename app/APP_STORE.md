@@ -28,7 +28,8 @@ App 沒有帳號、分析、廣告或追蹤功能。匯入的樂譜和匯出的�
 > ・真實錄音的音色：16 層力度的平台鋼琴、整套錄音室鼓組
 > ・自然的演奏：依樂譜的力度記號、圓滑線、踏板演奏，速度也會像真人一樣有快慢
 > ・可以調速度、移調、預備拍、標示目前小節
-> ・匯出影片：橫式、直式、方形，可加上鍵盤或鼓組動畫、標題與浮水印；音量自動符合 YouTube 標準
+> ・匯出影片：橫式、直式、方形，可加上鍵盤或鼓組動畫、標題、浮水印與背景圖；音量自動符合 YouTube 標準
+> ・一鍵存影片封面圖（YouTube 縮圖尺寸）
 > ・內建範例樂譜，打開就能試
 > ・完全離線使用，不需要帳號，不收集任何資料
 
@@ -40,7 +41,8 @@ App 沒有帳號、分析、廣告或追蹤功能。匯入的樂譜和匯出的�
 > • Real recorded instruments: a 16-layer grand piano and a full studio drum kit
 > • Natural playback that follows dynamics, slurs and pedal markings, with human-like tempo shaping
 > • Tempo, transpose, count-in and current-measure highlight
-> • Video export in landscape, portrait or square, with an animated keyboard or drum kit, titles and watermark; loudness matched to YouTube
+> • Video export in landscape, portrait or square, with an animated keyboard or drum kit, titles, watermark and background image; loudness matched to YouTube
+> • One-tap cover image (YouTube thumbnail size)
 > • Built-in sample scores to try right away
 > • Works fully offline. No account, no data collected
 
