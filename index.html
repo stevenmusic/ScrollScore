@@ -7679,7 +7679,108 @@ function rebuildKeyboardRange(){
 }
 rebuildKeyboardRange(); // 初始建立(此時還沒有樂譜,會用預設88鍵)
 
+/* 鍵盤每一格都要整組重畫(匯出影片每秒 30~60 格):每個鍵的漸層、外框、按下時的 shadowBlur 光暈在 iPhone 上很慢
+   (2026-10-17:iPhone 1080p 每格 23ms,聲音同時在算時 36ms,匯出比影片長)。改成每個鍵依狀態先畫成一張小圖(含光暈)存起來,
+   每格依原本的順序貼上去:先畫陰影再畫鍵 = 貼一張「陰影上面畫鍵」的圖(source-over 可結合),小圖用同樣的小數位置畫,
+   像素跟直接畫一樣。沒按下的整組鍵盤也先存成一張(C.full),每格貼上它,再只在按下的鍵(含光暈)範圍內照原本順序重畫
+   底板、白鍵、黑鍵;唯一的差別是鍵盤上緣外那一列像素(外框線半透明疊兩次,每個按下的鍵約 90 個像素、最多差 60/255,看不出來)。
+   雲端 1080p:每格 11 → 2ms。只用在沒有縮放的畫布(匯出);畫面上的鍵盤有 devicePixelRatio 縮放,照原本直接畫 */
+const KB_SPRITE = { on: true, margin: 40 };
+let kbSpriteCache = null;
 function drawKeyboard(ctx, x, y, w, h, activeMap){
+  if (KB_SPRITE.on && !window.KB_SPRITE_OFF && ctx.getTransform) {
+    const m = ctx.getTransform();
+    if (m.a === 1 && m.b === 0 && m.c === 0 && m.d === 1 && m.e === 0 && m.f === 0) return drawKeyboardSprites(ctx, x, y, w, h, activeMap);
+  }
+  drawKeyboardDirect(ctx, x, y, w, h, activeMap);
+}
+function drawKeyboardSprites(ctx, x, y, w, h, activeMap){
+  const geo = [x, y, w, h, KB_LOW, KB_HIGH].join("|");
+  if (!kbSpriteCache || kbSpriteCache.geo !== geo) kbSpriteCache = { geo, map: new Map(), base: null, full: null };
+  const C = kbSpriteCache, M = KB_SPRITE.margin;
+  const whiteW = w / KB_WHITE_KEYS.length, blackH = h * 0.6, blackW = whiteW * 0.62;
+  // 每個鍵:種類、編號、位置大小、在 activeMap 裡的音
+  if (!C.keys) {
+    C.keys = [];
+    for (let i = 0; i < KB_WHITE_KEYS.length; i++) C.keys.push({ kind: "w", idx: i, midi: KB_WHITE_KEYS[i], kx: x + i * whiteW, kw: whiteW - 1, kh: h });
+    for (let m = KB_LOW; m <= KB_HIGH; m++) {
+      if (!isBlackKey(m)) continue;
+      let leftWhite = m - 1; while (isBlackKey(leftWhite)) leftWhite--;
+      const li = KB_WHITE_IDX[leftWhite]; if (li === undefined) continue;
+      C.keys.push({ kind: "b", idx: m, midi: m, kx: x + (li + 1) * whiteW - blackW / 2, kw: blackW, kh: blackH });
+    }
+    for (const k of C.keys) { k.ox = Math.floor(k.kx) - M; k.oy = Math.floor(y) - M; k.sw = Math.ceil(k.kx + k.kw) + M - k.ox + 2; k.sh = Math.ceil(y + k.kh) + M - k.oy + 8; }
+  }
+  const stateOf = info => !info || !info.staff ? (info && info.attack ? "a" : "") : info.staff + (info.attack ? "a" : "");
+  const sprite = (tc, k, info) => {
+    const key = k.kind + k.idx + "|" + stateOf(info);
+    let sp = C.map.get(key);
+    if (!sp) {
+      const cv = document.createElement("canvas"); cv.width = k.sw; cv.height = k.sh;
+      const c2 = cv.getContext("2d"); c2.translate(-k.ox, -k.oy);
+      (k.kind === "w" ? drawWhiteKey : drawBlackKey)(c2, k.kx, y, k.kw, k.kh, info);
+      sp = cv; C.map.set(key, sp);
+    }
+    tc.drawImage(sp, k.ox, k.oy);
+  };
+  if (!C.base) {
+    // 多留 2px:鍵的外框線(線寬 1)會畫到鍵盤上緣外半個像素
+    const fx = Math.floor(x) - 2, fy = Math.floor(y) - 2, bw = Math.ceil(x + w) - fx + 2, bh = Math.ceil(y + h) - fy + 2;
+    const mk = () => { const c = document.createElement("canvas"); c.width = bw; c.height = bh; const g = c.getContext("2d"); g.translate(-fx, -fy); return [c, g]; };
+    const [b, bc] = mk();
+    const g = bc.createLinearGradient(0, y, 0, y + h); g.addColorStop(0, "#050403"); g.addColorStop(1, "#0C0A07");
+    bc.fillStyle = g; bc.fillRect(x, y, w, h);
+    const [f, fc] = mk();   // 整組沒按下的鍵盤
+    fc.drawImage(b, fx, fy);
+    for (const k of C.keys) sprite(fc, k, null);
+    C.base = { cv: b, x: fx, y: fy }; C.full = f;
+  }
+  ctx.drawImage(C.full, C.base.x, C.base.y);
+  // 有按下的鍵:只在它們(含光暈)的範圍內,照原本的順序把底板、白鍵、黑鍵重畫一遍
+  const dirty = [];
+  for (const k of C.keys) if (activeMap.get(k.midi)) dirty.push(k);
+  if (!dirty.length) return;
+  const hit = k => dirty.some(d => k.ox < d.ox + d.sw && d.ox < k.ox + k.sw);
+  ctx.save();
+  ctx.beginPath(); for (const d of dirty) ctx.rect(d.ox, d.oy, d.sw, d.sh); ctx.clip();
+  ctx.drawImage(C.base.cv, C.base.x, C.base.y);
+  for (const k of C.keys) if (hit(k)) sprite(ctx, k, activeMap.get(k.midi));
+  ctx.restore();
+}
+function kbRoundRect(ctx, cx, cy, cw, ch, r){
+  if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(cx, cy, cw, ch, r); }
+  else { ctx.beginPath(); ctx.rect(cx, cy, cw, ch); }
+}
+// 一個白鍵(kw = 白鍵寬 − 1)/ 黑鍵(含投影到白鍵上的陰影),跟 drawKeyboardDirect 逐行相同
+function drawWhiteKey(ctx, kx, y, kw, h, info){
+  const staff = info && info.staff, attack = info && info.attack;
+  let baseColor = staff === 2 ? ["#5FE0CE", "#22887A"] : staff === 1 ? ["#FFDA7A", "#C4901A"] : ["#FFFDF6", "#DDD6C4"];
+  if (attack) baseColor = staff === 2 ? ["#B6FFF4", "#3FBFAE"] : ["#FFF3CC", "#F2B94B"];
+  const g = ctx.createLinearGradient(kx, y, kx, y + h);
+  g.addColorStop(0, baseColor[0]); g.addColorStop(0.85, baseColor[1]); g.addColorStop(1, baseColor[1]);
+  if (staff) { ctx.save(); ctx.shadowColor = staff === 2 ? "rgba(63,191,174,0.85)" : "rgba(242,185,75,0.85)"; ctx.shadowBlur = attack ? 24 : 14; }
+  kbRoundRect(ctx, kx, y, kw, h, [3, 3, 6, 6]); ctx.fillStyle = g; ctx.fill();
+  if (staff) ctx.restore();
+  ctx.strokeStyle = "rgba(0,0,0,0.35)"; ctx.lineWidth = 1;
+  kbRoundRect(ctx, kx, y, kw, h, [3, 3, 6, 6]); ctx.stroke();
+  ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(kx + 2, y + 1); ctx.lineTo(kx + kw - 2, y + 1); ctx.stroke();
+}
+function drawBlackKey(ctx, kx, y, blackW, blackH, info){
+  const staff = info && info.staff, attack = info && info.attack;
+  let baseColor = staff === 2 ? ["#3FBFAE", "#0F5F56"] : staff === 1 ? ["#F2B94B", "#8A6410"] : ["#3a3a3a", "#0a0a0a"];
+  if (attack) baseColor = staff === 2 ? ["#8FFFF0", "#22887A"] : staff === 1 ? ["#FFE39A", "#C4901A"] : baseColor;
+  ctx.fillStyle = "rgba(0,0,0,0.45)";
+  ctx.fillRect(kx - 1, y + blackH, blackW + 2, 6);
+  const g = ctx.createLinearGradient(kx, y, kx, y + blackH);
+  g.addColorStop(0, baseColor[0]); g.addColorStop(1, baseColor[1]);
+  if (staff) { ctx.save(); ctx.shadowColor = staff === 2 ? "rgba(63,191,174,0.9)" : "rgba(242,185,75,0.9)"; ctx.shadowBlur = 12; }
+  kbRoundRect(ctx, kx, y, blackW, blackH, [2, 2, 4, 4]); ctx.fillStyle = g; ctx.fill();
+  if (staff) ctx.restore();
+  ctx.fillStyle = "rgba(255,255,255,0.18)";
+  ctx.fillRect(kx + blackW * 0.15, y + 2, blackW * 0.3, blackH * 0.35);
+}
+function drawKeyboardDirect(ctx, x, y, w, h, activeMap){
   const whiteW = w / KB_WHITE_KEYS.length;
 
   // 底板陰影,讓整個鍵盤看起來有深度
@@ -10270,6 +10371,20 @@ function drawExportOverlays(ctx, layout, cfg, songSec, calib, scoreBottomY){
   // 直式標題會變成橫式的兩倍大、留白比例整個跑掉。
   // 版面:標題置中在畫面上方,副標題緊接在標題正下方(字級較小),頻道名稱放右下角
   if (cfg.watermarkEnabled && (cfg.title || cfg.subtitle || cfg.channel)) {
+    // 文字每格都一樣:第一次畫在一張透明圖上存起來,之後每格貼上(跟直接畫同樣的像素;iPhone 每格少畫三段文字)
+    const tkey = [W, H, cfg.title, cfg.subtitle, cfg.channel, cfg.includeKeyboard ? layout.kbY : H, exportInkColor(hlCursorColor()), EXPORT_FONT_FAMILY, document.fonts ? document.fonts.status : ""].join("|");   // 字型還在下載時畫的不能留
+    if (!exportTextCache || exportTextCache.key !== tkey) {
+      const tc = document.createElement("canvas"); tc.width = W; tc.height = H;
+      drawExportTexts(tc.getContext("2d"), layout, cfg);
+      exportTextCache = { key: tkey, cv: tc };
+    }
+    ctx.drawImage(exportTextCache.cv, 0, 0);
+  }
+}
+let exportTextCache = null;
+function drawExportTexts(ctx, layout, cfg){
+  const { W, H } = layout;
+  {
     const wmRef = Math.min(W, H);
     const titleFontSize = Math.round(wmRef * 0.055);
     const subtitleFontSize = Math.round(wmRef * 0.03);
@@ -10995,7 +11110,7 @@ async function renderExportAudioFast(rangeStart, rangeEnd, onProgress){
 }
 /* 一段聲音正不正常:有沒有 NaN/無限大、音量、8kHz 以上的比例、左右相關(音樂左右高度相關,雜訊左右無關)。
    取中間最大聲的 2 秒算頻譜(整首做 FFT 太慢) */
-let fastAudioHealth = "", fastVerifyNote = "", fastAudioRetry = "";
+let fastAudioHealth = "", fastVerifyNote = "", fastAudioRetry = "", fastFrameNote = "";
 function pcmHealth(L, R, sr){
   let bad = 0, e = 0;
   for (let i = 0; i < L.length; i++) { const a = L[i], b = R[i]; if (!Number.isFinite(a) || !Number.isFinite(b)) { bad++; continue; } e += a * a + b * b; }
@@ -11468,7 +11583,7 @@ async function verifyEncodedAudio(chunks, codec, sr, asc, srcL){
 /* 試編結果記在這台裝置上(2026-10,使用者要求加快匯出):同樣的尺寸/格式下次直接用,省掉 2~3 秒的試編。
    夠快的記 30 天、太慢的記 3 天(瀏覽器/系統更新後可能變快);快速匯出出錯就刪掉,下次重新試編。
    匯出程式改了(畫法、取影格方式)要把 v 加一 */
-const FAST_PROBE_KEY = "scrollscore_fastprobe_v2";   // v2:iPhone 太慢也不退回即時錄影
+const FAST_PROBE_KEY = "scrollscore_fastprobe_v3";   // v2:iPhone 太慢也不退回即時錄影;v3:鍵盤/文字改用預先畫好的圖(取影格方法要重選)
 function fastProbeCacheGet(key){
   try {
     const e = (JSON.parse(localStorage.getItem(FAST_PROBE_KEY) || "{}") || {})[key];
@@ -11679,14 +11794,19 @@ async function fastExportVideo(cfg){
     const nFrames = Math.ceil(dur * fps), keyEvery = Math.round(fps * FAST_EXPORT.keyEverySec);
     feeder = makeFeeder(frameSrc, venc);
     let lastUi = 0, lastYield = 0;
+    const ft = { draw: 0, push: 0, wait: 0, n: 0 };   // 每格各段花的時間(完成訊息,找出 iPhone 上的瓶頸)
     for (let f = 0; f < nFrames; f++) {
       if (exportCancelled) break;
       if (encErr) throw encErr;
       const t = f / fps, songSec = Math.min(Math.max(t - lead, 0), total) + rangeStart;
+      let t0 = performance.now();
       await drawAt(songSec);
+      let t1 = performance.now(); ft.draw += t1 - t0;
       await feeder.push(Math.round(t * 1e6), f % keyEvery === 0);
+      t0 = performance.now(); ft.push += t0 - t1;
       // 編碼器跟不上時等一下(不然記憶體會一直堆)
       while (venc.encodeQueueSize > 6) await new Promise(r => setTimeout(r, 2));
+      ft.wait += performance.now() - t0; ft.n++;
       const now = performance.now();
       if (now - lastUi > 100) {
         lastUi = now;
@@ -11699,6 +11819,7 @@ async function fastExportVideo(cfg){
     if (exportCancelled) return await cancelExport();
     await feeder.drain();
     fastTimes.video = (performance.now() - tVideo0) / 1000;
+    if (ft.n) fastFrameNote = " · 每格 " + (fastTimes.video * 1000 / ft.n).toFixed(0) + "ms(畫 " + (ft.draw / ft.n).toFixed(1) + " · 取影格 " + (ft.push / ft.n).toFixed(1) + " · 等編碼 " + (ft.wait / ft.n).toFixed(1) + ")" + (frameSrc ? " " + frameSrc : "");
     // 畫面做完、聲音還沒好:等聲音(進度照樣更新,取消照樣停)
     while (!audioDone) {
       showProgress(1);
@@ -11761,7 +11882,7 @@ async function fastExportVideo(cfg){
   const blob = out.toBlob(fmtSel.container === "mp4" ? "video/mp4" : "video/webm");
   const rangeTag = cfg.startSec != null ? "-" + fmt(rangeStart).replace(":","m") + "s-" + fmt(rangeEnd).replace(":","m") + "s" : "";
   const fileName = "scrollscore-" + cfg.W + "x" + cfg.H + rangeTag + "." + fmtSel.ext;
-  setStatus(T("exportComplete", { mb: (blob.size/1048576).toFixed(1), fmt: mimeLabel(fmtSel.mime) }) + exportTimeNote() + fastAudioRetry + (fastAudioHealth ? " · " + fastAudioHealth + " · " + fastVerifyNote : "") + (selfTest ? " · " + selfTest : ""));
+  setStatus(T("exportComplete", { mb: (blob.size/1048576).toFixed(1), fmt: mimeLabel(fmtSel.mime) }) + exportTimeNote() + fastFrameNote + fastAudioRetry + (fastAudioHealth ? " · " + fastAudioHealth + " · " + fastVerifyNote : "") + (selfTest ? " · " + selfTest : ""));
   deliverExportedVideo(blob, fileName, fmtSel.mime);
   return true;
 }
@@ -11779,7 +11900,7 @@ async function exportVideo(cfg){
   document.body.classList.add("exporting-active");
   // 匯出畫面先打開:音色還在下載時按「開始匯出」,以前要等下載完才有畫面、也不能取消(審查發現)
   fastExportNote = ""; $("exportFastNote").textContent = "";
-  fastTimes = { t0: performance.now() }; fastAudioHealth = ""; fastVerifyNote = ""; fastAudioRetry = "";
+  fastTimes = { t0: performance.now() }; fastAudioHealth = ""; fastVerifyNote = ""; fastAudioRetry = ""; fastFrameNote = "";
   $("exportOverlayTitle").textContent = T("exportPreparingPct", { pct: 0 });
   $("exportOverlaySub").textContent = ""; $("exportTime").textContent = ""; $("exportFill").style.width = "0%";
   setExportOverlayMode(EXPORT_MODE.fast);
