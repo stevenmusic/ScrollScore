@@ -72,7 +72,7 @@
 - AAC 設定資料(2026-10,使用者回報 iPhone 快速匯出的影片沒聲音):WebKit 的 AudioEncoder 給的 description 不是合法的 AudioSpecificConfig(WebKit bug 302253),原樣寫進 MP4 的 esds 播放器解不開。muxAudioChunkFn 現在 aacFixDescription:合法且取樣率/聲道對得上才用,ES 描述子就取出 DecoderSpecificInfo,否則自己組 AAC-LC;ADTS 標頭(長度欄位要對)會拿掉。快速匯出停用中,這段要實機確認後才算修好
 - 匯出按鈕:音色(鋼琴/鼓組/吉他)全部載入完成前停用(使用者要求,2026-10;refreshExportReady / exportSamplesReady / trackLoad,promise 完成自動重新檢查),title 寫「音色載入中,完成後才能匯出」
 - 匯出加速(2026-10,使用者:「合成中、調整音量中、匯出影片花太多時間」,從 Claude 的建議選了三項):
-  - 影片一律 30fps(exportFps,即時錄影與快速匯出都是;以前 60):樂譜慢慢捲動,30fps 看起來一樣順,要畫/編碼的格數少一半;試編裡「60 不夠改 30」的程式保留
+  - 影片 fps:曾改 30fps(快速匯出格數少一半),快速匯出停用後改回 60(exportFps;即時錄影 30fps 省不到時間、捲動較不順,使用者覺得「改動之前很順」)。快速匯出若恢復,試編裡「60 不夠改 30」的程式還在
   - 聲音跟畫面同時做:做過(commit 7f9cbd5,雲端歡樂頌 96.3 → 45.2 秒),使用者 iPhone 實測「變慢、比影片時長還長」,已退回先後做。注意事項留著:聲音在算時全域 audioCtx 是離線那組,成功/取消/出錯都要先等它結束;mp4-muxer 非 fastStart 聲音最後才送沒問題,webm-muxer 會把畫面留在記憶體等聲音
   - 完成訊息寫各階段用時(fastTimes / exportTimeNote):「用時 49 秒(準備 1 · 聲音 15 · 畫面 33 秒)」,退回即時錄影時只寫總用時(原因照舊寫在前面)
   - 記住這台裝置的試編結果:localStorage scrollscore_fastprobe_v1,key = 尺寸|編碼格式|Annex B/avc|fps,存 速度/取影格方法/fps/說明;夠快記 30 天、太慢記 3 天;有記錄就跳過試編(說明加「· cached」),快速匯出出錯就刪掉那筆。匯出程式改了(畫法、取影格)要把 v 加一。fast_export_check.mjs --twice 測第二次
