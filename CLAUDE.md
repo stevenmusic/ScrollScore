@@ -126,7 +126,7 @@
   - App 狀態列:@capacitor/status-bar 8.0.4,applyTheme 設 DARK(淺色字)/LIGHT;狀態列那一條塗頂欄顏色(body 的 background-image,所以 body 的底色要寫 background-color 不能用 background 簡寫)
   - App 裡「支援與聯絡」「隱私權政策」改連 https://stevenmusic.github.io/ScrollScore/(capacitor:// 的相對路徑開不了)
   - 審查員第三輪:沒有新問題(確認 Capacitor 8 不用打包工具 window.Capacitor.Plugins.StatusBar/Filesystem/Media 都會在網頁載入前註冊;隱私權清單足夠)。CapApp-SPM/Package.swift 已用 npx cap update ios 加進三個外掛(路徑指向 app/node_modules,Mac 上一樣要先 npm install)
-  - 上傳樂譜的檔案選擇器(使用者要求,2026-10):accept 一律保留(副檔名 + MusicXML/XML 的 MIME,不含圖片/影片),iPhone 才會直接打開「檔案」;沒有 accept 會先跳「照片圖庫/拍照或錄影/選擇檔案」選單(曾為了怕 .mxl/.gp5 變灰色在 iOS 拿掉,使用者反映後改回)。.mxl/.gp5 等在「檔案」裡選不選得到要實機確認;選到其他副檔名時 loadScoreFile 顯示「不支援這種檔案」
+  - 上傳樂譜的檔案選擇器(使用者要求,2026-10):accept 一律保留(副檔名 + MusicXML/XML 的 MIME,不含圖片/影片),iPhone 才會直接打開「檔案」;沒有 accept 會先跳「照片圖庫/拍照或錄影/選擇檔案」選單(曾為了怕 .mxl/.gp5 變灰色在 iOS 拿掉,使用者反映後改回)。選到其他副檔名時 loadScoreFile 顯示「不支援這種檔案」。**iPhone X(iOS 16)實測 .mxl 在「檔案」裡選不到(2026-10-17)**:iOS 不認得 .mxl 這個副檔名,也不把檔案當成 MusicXML 的 MIME → 灰色。accept 加 application/octet-stream(= public.data,所有檔案都能選;不是圖片/影片類型,所以 iPhone 照樣直接開「檔案」、不跳照片選單)。要實機確認
 - 旋轉螢幕字變大(使用者反映,2026-10:設定頁直式 → 橫式 → 直式字變大):iPhone Safari 橫式會自動放大文字(text autosizing),轉回直式不一定縮回。html 一律 -webkit-text-size-adjust:100%(index/privacy/support 都有;新頁面也要加)。檢查:tools/audiotest/rotate_check.mjs(手機尺寸 × 載入前後 × 設定/匯出/主畫面 × 各種轉法,轉回來要跟直接打開一樣;Chromium 沒有 iOS 的放大行為,抓的是程式本身的問題)
 - 設定面板排版(2026-10,使用者問「每個欄位是不是要改窄一點」;使用者:可以收窄但不要影響閱讀美感):寬 ≥ 700(iPad 直式起)內容寬 640px 置中(以前 900 以上才收、收到 960;手機本來就是螢幕寬,再收只會讓字換行,不收);手機滑桿與下方色票多留 12px(樂器/移調、兩欄開關、速度滑桿以前拉太開);觸控裝置設定裡的按鈕 44 → 36px、卡片內距 14/16 → 12/14(「匯出影片」主按鈕不變)
 - 影片方向的功能(2026-10,使用者:「這個工具主要是把樂譜做成影片」,從 Claude 的建議裡選了兩項;沒選:深色影片底、片頭標題卡/片尾淡出、4K/位元率〔Claude 不建議:iPhone 編碼更慢、YouTube 會重壓〕;練習功能〔段落反覆、節拍器、左右手分開〕使用者決定先不加):
