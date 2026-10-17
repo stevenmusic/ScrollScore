@@ -1415,7 +1415,9 @@ const I18N = {
     exportAnalyzingSub: "YouTube 標準音量 −14 LUFS",
     exportFastPct: "匯出中 {pct}%",
     exportWarnTitle: "⚠ 請讓這個畫面保持在最前面",
-    exportWarnBody: "切到其他 App 或讓螢幕熄滅,|錄出來會一格一格卡住,|只能重新匯出。",
+    exportWarnBody: "切到其他 App 或螢幕熄滅時|會自動暫停,|回到這個畫面|就繼續錄。",
+    exportFpsNote: "畫面 {fps} 格/秒(畫 {draw}ms · 送出 {push}ms · 排音 {sched}ms/秒)",
+    exportPausedNote: "離開畫面暫停 {n} 次",
     exportInfoP: "輸出時間 = 樂曲長度。|匯出時喇叭靜音|(避免爆音),|影片裡的聲音不受影響。",
     exportWarnBodyFast: "切到其他 App 或讓螢幕熄滅,|匯出可能會中斷。",
     fastNoteNoCodecs: "這台裝置不支援快速匯出|(需要 iOS 16.4 以上),|改用即時錄影",
@@ -1672,7 +1674,9 @@ const I18N = {
     exportAnalyzingSub: "YouTube standard: −14 LUFS",
     exportFastPct: "Exporting {pct}%",
     exportWarnTitle: "⚠ Keep this window in the foreground",
-    exportWarnBody: "Switching apps or letting the screen sleep will cause stuttering frames — you'll have to export again.",
+    exportWarnBody: "Switching apps or letting the screen sleep pauses the export; it continues when you come back.",
+    exportFpsNote: "{fps} fps (draw {draw}ms · push {push}ms · scheduling {sched}ms/s)",
+    exportPausedNote: "paused {n}× while away",
     exportInfoP: "Export time equals the piece's length. Speakers are muted while exporting to avoid crackling; the video's audio is unaffected.",
     exportWarnBodyFast: "Switching apps or letting the screen sleep may interrupt the export.",
     fastNoteNoCodecs: "Fast export isn't supported on this device (needs iOS 16.4+); using real-time recording",
@@ -6491,7 +6495,12 @@ function startNoteScheduler(fromSec, toSec, base, calib, opts){
   // limit:離線時只排到這個時間(分段排、中間讓畫面更新進度,見 scheduleOfflineInSlices);預設一次排完
   const st = { k: 0, timer: null, errCount: 0, lastErr: null, limit: (opts && opts.defer) ? 0 : Infinity };
   while (st.k < order.length && order[st.k][0] < fromSec - 0.02) st.k++;
+  st.pumpMs = 0;
   st.pump = () => {
+    const tP = performance.now();
+    try { pumpInner(); } finally { st.pumpMs += performance.now() - tP; }
+  };
+  const pumpInner = () => {
     // 離線:排到這個離線 context 的長度為止(後面的音算不到,排了只會拖慢)
     const horizon = live ? audioCtx.currentTime + (document.hidden ? SCHED_AHEAD_HIDDEN : SCHED_AHEAD) : Math.min(offEnd, st.limit);
     while (st.k < order.length) {
@@ -11379,15 +11388,43 @@ async function exportVideo(cfg){
       // 會跟音訊執行緒搶資源,是造成合成過程「聲音斷斷續續」的其中一個來源。
       // 改成只有顯示出來的值真的改變(整數百分比、整秒)時才寫入
       let lastPct = -1, lastTimeText = "";
+      /* 離開畫面(切到別的 App、鎖螢幕、拉通知中心)時自動暫停、回來接著錄(2026-10,使用者 iPhone 影片每 152ms 才一格):
+         網頁不在前景時 iPhone 會把計時器節流到每秒約 6.5 次,聲音照常(播放模式),畫面卻一格一格。
+         暫停錄影 + 暫停 audioCtx(時間軸跟著停),回來先接回錄影再接回聲音,影片裡看不出中斷。
+         recStats:實際錄進去的格數(只算畫面看得到、沒暫停的時間),寫在完成訊息,萬一還是不順看得出原因 */
+      const recStats = { frames: 0, visMs: 0, lastT: 0, pauses: 0, drawMs: 0, pushMs: 0, n: 0, sched0: 0 };
+      recStats.sched0 = noteSched ? (noteSched.pumpMs || 0) : 0;
+      const canPause = typeof rec.pause === "function" && typeof rec.resume === "function";
+      const onVis = () => {
+        if (!canPause || exportCancelled) return;
+        if (document.hidden && rec.state === "recording") {
+          recStats.pauses++; recStats.lastT = 0;
+          try { rec.pause(); } catch (e) {}
+          audioCtx.suspend().catch(() => {});
+        } else if (!document.hidden && rec.state === "paused") {
+          try { rec.resume(); } catch (e) {}
+          audioCtx.resume().catch(() => {});
+        }
+      };
+      document.addEventListener("visibilitychange", onVis);
+      try {
       await new Promise(resolve => {
         const draw = () => {
           if (exportCancelled) { resolve(); return; }
+          if (!document.hidden && rec.state === "recording") {
+            const now = performance.now();
+            if (recStats.lastT) { const d = now - recStats.lastT; if (d < 1000) { recStats.visMs += d; recStats.frames++; } }
+            recStats.lastT = now;
+          }
           const el = audioCtx.currentTime - t0;
           const sec = Math.min(Math.max(el - LEAD, 0), total);
           const songSec = sec + rangeStart; // 匯出片段內的相對時間 → 換算回整首曲子的實際位置,拿來對應樂譜捲動/鍵盤高亮
+          const tA = performance.now();
           if (pg) drawExportPageFrame(ctx, layout, cfg, pg, songSec, calib);
           else drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib);
+          const tB = performance.now();
           pushFrame();
+          recStats.drawMs += tB - tA; recStats.pushMs += performance.now() - tB; recStats.n++;
           const timeText = fmt(sec) + " / " + fmt(total);
           if (timeText !== lastTimeText) { lastTimeText = timeText; $("exportTime").textContent = timeText; }
           const exportPct = Math.min(100, Math.round(sec / total * 100));
@@ -11401,6 +11438,17 @@ async function exportVideo(cfg){
         };
         draw();
       });
+      } finally {
+        document.removeEventListener("visibilitychange", onVis);
+        if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+      }
+      const recFps = recStats.visMs > 0 ? Math.round(recStats.frames / (recStats.visMs / 1000)) : 0;
+      const per = k => recStats.n ? Math.round(recStats[k] / recStats.n) : 0;
+      const schedMs = Math.round(((noteSched && noteSched.pumpMs) || 0) - recStats.sched0);
+      console.info("即時錄影:" + recFps + " fps,每格畫 " + per("drawMs") + "ms、送出 " + per("pushMs") + "ms,排音共 " + schedMs + "ms,暫停 " + recStats.pauses + " 次");
+      // 每秒格數正常就不寫細節;不夠(< 45)才寫出每一段花的時間,使用者回報時看得出卡在哪
+      const recNote = (recFps && recFps < 45 ? " · " + T("exportFpsNote", { fps: recFps, draw: per("drawMs"), push: per("pushMs"), sched: Math.round(schedMs / Math.max(1, recStats.visMs / 1000)) }) : "")
+        + (recStats.pauses ? " · " + T("exportPausedNote", { n: recStats.pauses }) : "");
 
       stopAudioOnly();
       rec.stop();
@@ -11410,7 +11458,7 @@ async function exportVideo(cfg){
         const ext = mimeExt(mime);
         const rangeTag = cfg.startSec != null ? "-" + fmt(rangeStart).replace(":","m") + "s-" + fmt(rangeEnd).replace(":","m") + "s" : "";
         const fileName = "scrollscore-" + W + "x" + H + rangeTag + "." + ext;
-        setStatus(T("exportComplete", { mb: (blob.size/1048576).toFixed(1), fmt: mimeLabel(mime) }) + (fastExportNote ? " · " + fastExportNote : "") + exportTimeNote());
+        setStatus(T("exportComplete", { mb: (blob.size/1048576).toFixed(1), fmt: mimeLabel(mime) }) + (fastExportNote ? " · " + fastExportNote : "") + exportTimeNote() + recNote);
         deliverExportedVideo(blob, fileName, mime);
       } else {
         setStatus(T("exportCancelledStatus"));
