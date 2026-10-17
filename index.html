@@ -771,15 +771,32 @@ body.exporting-active .empty-card{
 #shareOverlay .box{display:flex;flex-direction:column;gap:10px}
 #shareOverlay .share-sub{margin:0;color:var(--muted);font-size:var(--fs-sm);line-height:1.6}
 #shareOverlay .btn{min-height:40px;justify-content:center}
+#coverOverlay{
+  position:fixed;inset:0;z-index:67;display:none;
+  align-items:center;justify-content:center;
+  background:var(--scrim);backdrop-filter:blur(3px);
+}
+#coverOverlay .box{display:flex;flex-direction:column;gap:12px;width:min(640px, 92vw)}
+#coverOverlay .share-sub{margin:0;color:var(--muted);font-size:var(--fs-sm)}
+.cover-choices{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media (max-width:600px){ .cover-choices.wide{grid-template-columns:1fr} }   /* 橫式封面在手機上下排,並排太小看不清楚 */
+.cover-choice{display:flex;flex-direction:column;gap:8px;align-items:center;padding:8px;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--bg);color:var(--ivory);cursor:pointer;font-family:inherit;font-size:var(--fs-sm)}
+.cover-choice[aria-checked="true"]{border-color:var(--gold)}
+.cover-choice:active{border-color:var(--gold-bright)}
+.cover-thumb{display:flex;align-items:center;justify-content:center;width:100%;min-height:80px;background:var(--panel)}
+.cover-thumb img{display:block;width:100%;height:auto;max-height:52dvh;object-fit:contain;border-radius:4px}
+.cover-choice.busy .cover-thumb::after{content:"…";color:var(--muted)}
+#coverOverlay .btn{min-height:40px;justify-content:center}
+#coverOverlay.show{display:flex}
 #formatOverlay.show,#trackOverlay.show,#shareOverlay.show{display:flex}
-#formatOverlay .box,#trackOverlay .box,#shareOverlay .box{
+#formatOverlay .box,#trackOverlay .box,#shareOverlay .box,#coverOverlay .box{
   text-align:center;padding:26px 28px;border:1px solid var(--gold);
   border-radius:var(--radius-md);background:var(--panel-2);width:min(300px, 86vw);
   max-height:86vh;max-height:86dvh;overflow-y:auto;box-sizing:border-box;
   box-shadow:var(--shadow-lg);
 }
 .fmt-step{display:flex;flex-direction:column;align-items:stretch}
-#formatOverlay .title,#trackOverlay .title,#shareOverlay .title{
+#formatOverlay .title,#trackOverlay .title,#shareOverlay .title,#coverOverlay .title{
   font-family:"Noto Serif TC",serif;font-size:var(--fs-xl);color:var(--gold);
   letter-spacing:.1em;margin-bottom:18px;
 }
@@ -1065,6 +1082,18 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
   </div>
   <div id="scroller"><div id="measureHighlight"></div><div id="score"></div></div>
   <div id="playline"></div>
+  <!-- 封面樣式選擇(2026-10,使用者問「封面圖如何選擇樣式」:以前收在進階裡找不到):按「存封面圖」後兩種樣式並排、點一下就存那一張 -->
+  <div id="coverOverlay" role="dialog" aria-modal="true" aria-labelledby="coverPickTitle">
+    <div class="box">
+      <div class="title" id="coverPickTitle" data-i18n="coverPickTitle">選擇封面樣式</div>
+      <p class="share-sub" data-i18n="coverPickHint">點一下想要的那張就會存下來</p>
+      <div class="cover-choices">
+        <button type="button" class="cover-choice" data-v="editorial"><span class="cover-thumb"><img alt=""></span><b data-i18n="coverStyleEditorial">雜誌排版</b></button>
+        <button type="button" class="cover-choice" data-v="card"><span class="cover-thumb"><img alt=""></span><b data-i18n="coverStyleCard">置中卡片</b></button>
+      </div>
+      <button class="btn" id="coverCancel" data-i18n="cancelBtn">取消</button>
+    </div>
+  </div>
   <div id="shareOverlay" role="dialog" aria-modal="true" aria-labelledby="shareTitle">
     <div class="box">
       <div class="title" id="shareTitle" data-i18n="shareTitle">影片完成</div>
@@ -1134,13 +1163,6 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
             </div>
           </div>
           <div class="exp-field" id="bgOpacityRow" hidden><span data-i18n="scoreBgOpacityLabel">背景濃度</span><input type="range" id="scoreBgOpacity" min="0" max="100" value="0"><b id="scoreBgOpacityVal">0</b></div>
-            <div class="exp-row">
-              <span class="exp-label" data-i18n="coverStyleLabel">封面樣式</span>
-              <div class="seg seg-sm" id="expCoverSeg" role="radiogroup">
-                <button type="button" data-v="card" role="radio"><b data-i18n="coverStyleCard">置中卡片</b></button>
-                <button type="button" data-v="editorial" role="radio"><b data-i18n="coverStyleEditorial">雜誌排版</b></button>
-              </div>
-            </div>
             <label class="switch-row exp-switch">
               <span data-i18n="exportRangeToggleLabel">只匯出片段區間</span>
               <span class="switch"><input type="checkbox" id="exportRangeToggle"><span class="switch-track"></span></span>
@@ -1318,9 +1340,11 @@ const I18N = {
     advancedSummary: "背景圖片",
     coverBtn: "存封面圖",
     coverStyleLabel: "封面樣式",
+    coverPickTitle: "選擇封面樣式",
+    coverPickHint: "點一下想要的那張就會存下來",
     coverStyleCard: "置中卡片",
     coverStyleEditorial: "雜誌排版",
-    coverBtnTitle: "用目前的預覽畫面做影片封面/縮圖(橫式 1280×720,YouTube 縮圖尺寸)",
+    coverBtnTitle: "用目前的設定做影片封面/縮圖,兩種樣式選一張(橫式 1280×720,YouTube 縮圖尺寸)",
     coverBusy: "產生中…",
     coverDone: "封面圖完成({w}×{h})",
     shareTitleImg: "封面圖完成",
@@ -1569,6 +1593,8 @@ const I18N = {
     advancedSummary: "Background Image",
     coverBtn: "Save Cover",
     coverStyleLabel: "Cover style",
+    coverPickTitle: "Choose a cover style",
+    coverPickHint: "Tap the one you like to save it",
     coverStyleCard: "Centered card",
     coverStyleEditorial: "Magazine",
     coverBtnTitle: "Make a cover / thumbnail from the current preview (landscape 1280×720, the YouTube thumbnail size)",
@@ -6446,20 +6472,22 @@ let noteSched = null;
 let pianoPedalQueue = [];   // 還沒排的踏板機械聲 [audioCtx 時間, buffer, gain](pianoSchedulePedalNoise 填)
 function stopNoteScheduler(){ if (noteSched && noteSched.timer) clearInterval(noteSched.timer); noteSched = null; }
 /* 排程 [fromSec, toSec) 之間的事件;base = 樂曲第 0 秒對應的 audioCtx 時間 */
-function startNoteScheduler(fromSec, toSec, base, calib){
+function startNoteScheduler(fromSec, toSec, base, calib, opts){
   stopNoteScheduler();
   const live = !(typeof OfflineAudioContext !== "undefined" && audioCtx instanceof OfflineAudioContext);
+  const offEnd = live ? 0 : audioCtx.length / audioCtx.sampleRate + 1;
   const isGuitar = currentInstrument() === "guitar" || currentInstrument() === "guitarnylon";
   const order = events.map((ev, i) => [posToSec(ev.tWhole, calib), i]).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-  const st = { k: 0, timer: null, errCount: 0, lastErr: null };
+  // limit:離線時只排到這個時間(分段排、中間讓畫面更新進度,見 scheduleOfflineInSlices);預設一次排完
+  const st = { k: 0, timer: null, errCount: 0, lastErr: null, limit: (opts && opts.defer) ? 0 : Infinity };
   while (st.k < order.length && order[st.k][0] < fromSec - 0.02) st.k++;
   st.pump = () => {
     // 離線:排到這個離線 context 的長度為止(後面的音算不到,排了只會拖慢)
-    const horizon = live ? audioCtx.currentTime + (document.hidden ? SCHED_AHEAD_HIDDEN : SCHED_AHEAD) : audioCtx.length / audioCtx.sampleRate + 1;
+    const horizon = live ? audioCtx.currentTime + (document.hidden ? SCHED_AHEAD_HIDDEN : SCHED_AHEAD) : Math.min(offEnd, st.limit);
     while (st.k < order.length) {
       const [t, idx] = order[st.k];
       if (t >= toSec + 0.02) { st.k = order.length; break; }
-      if (base + t > horizon) { if (!live) st.k = order.length; break; }
+      if (base + t > horizon) { if (!live && horizon >= offEnd) st.k = order.length; break; }
       scheduleEventNotes(events[idx], t, base, calib, isGuitar, live, st);
       st.k++;
     }
@@ -6470,7 +6498,7 @@ function startNoteScheduler(fromSec, toSec, base, calib){
     if (st.errCount) { setStatus(T("statusScheduleWarn", { n: st.errCount, msg: (st.lastErr && st.lastErr.message) || "" })); st.errCount = 0; }
   };
   noteSched = st;
-  st.pump();
+  if (live || st.limit > 0) st.pump();
   if (live && (st.k < order.length || pianoPedalQueue.length)) st.timer = setInterval(st.pump, SCHED_TICK_MS);
 }
 document.addEventListener("visibilitychange", () => { if (noteSched) noteSched.pump(); });
@@ -9315,7 +9343,6 @@ function openExportSheet(){
   resetExportRange();
   syncSeg("expFormatSeg", exportPrefs.format);
   syncSeg("expAlignSeg", exportPrefs.align);
-  syncSeg("expCoverSeg", COVER_STYLES[exportPrefs.cover] ? exportPrefs.cover : "editorial");
   $("expPanelToggle").checked = !!exportPrefs.panel;
   syncExportPanelRow();
   $("formatOverlay").classList.add("show");
@@ -9334,10 +9361,6 @@ $("expFormatSeg").addEventListener("click", e => {
 $("expAlignSeg").addEventListener("click", e => {
   const b = e.target.closest("button[data-v]"); if (!b) return;
   exportPrefs.align = b.dataset.v; saveExportPrefs(); syncSeg("expAlignSeg", exportPrefs.align); refreshExportPreview();
-});
-$("expCoverSeg").addEventListener("click", e => {
-  const b = e.target.closest("button[data-v]"); if (!b) return;
-  exportPrefs.cover = b.dataset.v; saveExportPrefs(); syncSeg("expCoverSeg", exportPrefs.cover);
 });
 $("expPanelToggle").addEventListener("change", () => { exportPrefs.panel = $("expPanelToggle").checked; saveExportPrefs(); refreshExportPreview(); });
 for (const id of ["exportTitleInput", "exportSubtitleInput", "exportWatermarkInput"]) $(id).addEventListener("input", () => refreshExportPreview());
@@ -9678,20 +9701,44 @@ async function renderCoverImage(cfg, style){
   }
   return cv;
 }
+// 按「存封面圖」:兩種樣式都先畫出來並排給使用者選,點哪張就存哪張(記住這次的選擇,下次框起來)
+let coverPick = null;
 $("coverBtn").addEventListener("click", async () => {
   const cfg = buildExportCfg();
   if (!cfg) { setStatus(T("statusExportRangeInvalid")); return; }
-  const btn = $("coverBtn"), label = btn.querySelector("span");
-  btn.disabled = true; label.textContent = T("coverBusy");
+  const ov = $("coverOverlay"), token = {};
+  coverPick = { token, cfg, canvases: {} };
+  ov.querySelector(".cover-choices").classList.toggle("wide", cfg.W > cfg.H);
+  for (const b of ov.querySelectorAll(".cover-choice")) {
+    b.classList.add("busy"); b.disabled = true; b.querySelector("img").removeAttribute("src");
+    b.setAttribute("aria-checked", String(b.dataset.v === (COVER_STYLES[exportPrefs.cover] ? exportPrefs.cover : "editorial")));
+  }
+  ov.classList.add("show");
+  for (const b of ov.querySelectorAll(".cover-choice")) {
+    try {
+      const cv = await renderCoverImage(cfg, b.dataset.v);
+      if (coverPick && coverPick.token === token) {
+        coverPick.canvases[b.dataset.v] = cv;
+        b.querySelector("img").src = cv.toDataURL("image/jpeg", 0.8);
+        b.classList.remove("busy"); b.disabled = false;
+      }
+    } catch (e) { setStatus(T("exportFailed", { msg: e.message || e })); }
+  }
+});
+for (const b of document.querySelectorAll("#coverOverlay .cover-choice")) b.addEventListener("click", async () => {
+  const cv = coverPick && coverPick.canvases[b.dataset.v];
+  if (!cv) return;
+  exportPrefs.cover = b.dataset.v; saveExportPrefs();
+  $("coverOverlay").classList.remove("show");
   try {
-    const cv = await renderCoverImage(cfg, exportPrefs.cover);
     const blob = await new Promise(res => cv.toBlob(res, "image/jpeg", 0.92));
     const name = "scrollscore-cover-" + cv.width + "x" + cv.height + ".jpg";
     setStatus(T("coverDone", { w: cv.width, h: cv.height }));
     await deliverExportedImage(blob, name);
   } catch (e) { setStatus(T("exportFailed", { msg: e.message || e })); }
-  finally { btn.disabled = false; label.textContent = T("coverBtn"); }
+  coverPick = null;
 });
+$("coverCancel").addEventListener("click", () => { $("coverOverlay").classList.remove("show"); coverPick = null; });
 async function drawExportPreview(){
   const token = ++previewToken;
   const cfg = buildExportCfg();
@@ -10489,7 +10536,9 @@ async function measureExportGain(rangeStart, rangeEnd, onProgress){
     const sr = saved.audioCtx ? saved.audioCtx.sampleRate : 48000, LEAD = 0.1, TAIL = 3;
     const len = Math.ceil((rangeEnd - rangeStart + LEAD + TAIL) * sr);
     const total = len / sr;
-    const tick = renderProgressTicker(total * 0.3, f => onProgress && onProgress(Math.round(f * 100)));   // 載入限幅器時就開始動
+    // 進度:排音 0~40%、合成 40~100%
+    const SCH = 0.4;
+    let tick = { stop(){}, real(){} };
     try {
       audioCtx = new OfflineAudioContext(1, len, sr);
       initAudioGraph();
@@ -10500,7 +10549,9 @@ async function measureExportGain(rangeStart, rangeEnd, onProgress){
       scheduled = []; ringingOpenHat = null; ringingCymbals = {}; pianoResetVoices();
       startCtxTime = LEAD;
       computeDrumPerformance();
-      scheduleExportRange(rangeStart, rangeEnd, useCalib());
+      scheduleExportRange(rangeStart, rangeEnd, useCalib(), { defer: true });
+      await scheduleOfflineInSlices(f => onProgress && onProgress(Math.round(f * SCH * 100)));
+      tick = renderProgressTicker(total * 0.3, f => onProgress && onProgress(Math.round((SCH + (1 - SCH) * f) * 100)));
       await awaitOfflineRender(audioCtx, total, tick);
       const data = await dumpLoudnessTap(tap);
       restore();
@@ -10514,10 +10565,27 @@ async function measureExportGain(rangeStart, rangeEnd, onProgress){
 }
 /* 匯出區間的所有音符排程到目前的 audioCtx(以 startCtxTime 為曲子 rangeStart 的時間點)。
    即時匯出與匯出前的離線響度分析共用,兩邊排的音完全一樣 */
-function scheduleExportRange(rangeStart, rangeEnd, calib){
+function scheduleExportRange(rangeStart, rangeEnd, calib, opts){
   gtrRR = {}; ringingCymbals = {}; pianoPedalQueue = [];
   if (currentInstrument() === "piano") pianoSchedulePedalNoise(rangeStart, rangeEnd, sec => startCtxTime + sec - rangeStart);
-  startNoteScheduler(rangeStart, rangeEnd, startCtxTime - rangeStart, calib);   // 即時匯出邊錄邊排;離線量響度一次排完
+  startNoteScheduler(rangeStart, rangeEnd, startCtxTime - rangeStart, calib, opts);   // 即時匯出邊錄邊排;離線一次排完(opts.defer:分段排)
+}
+/* 離線合成前把整首的音排進去。以前一次排完:iPhone 上要好幾秒,這段時間畫面完全不能更新,
+   「調整音量中」停在 0%、排完才一下跳到八成(使用者截圖)。現在每次排 1 秒的音、中間讓畫面喘口氣,進度照實際排了多少 */
+async function scheduleOfflineInSlices(onFrac){
+  const st = noteSched, end = audioCtx.length / audioCtx.sampleRate + 1;
+  let lastYield = performance.now();
+  for (let lim = 1; ; lim += 1) {
+    st.limit = Math.min(lim, end); st.pump();
+    if (st.limit >= end) break;
+    if (performance.now() - lastYield > 40) {   // 大約每 40ms 讓畫面更新一次
+      if (onFrac) onFrac(st.limit / end);
+      await new Promise(r => setTimeout(r, 0));
+      lastYield = performance.now();
+      if (exportCancelled) throw exportCancelError();
+    }
+  }
+  if (onFrac) onFrac(1);
 }
 /* ── 快速匯出(2026-10,使用者要求「匯出影片有辦法更快速嗎?不用真的跟著樂譜跑」)──────────────
    以前一定要即時錄影(canvas.captureStream + MediaRecorder):影片多長就要等多久,中途切出去畫面會卡。
@@ -10529,7 +10597,7 @@ function scheduleExportRange(rangeStart, rangeEnd, calib){
    3) 封裝:mp4-muxer(H.264 + AAC,iPhone「照片」、QuickTime 都能播)或 webm-muxer(VP9 + Opus,沒有 AAC 編碼器的瀏覽器)
    瀏覽器不支援、或中途任何一步失敗(還沒產生影片前),自動退回原本的即時錄影,使用者不會拿不到影片。
    影片開頭留 FAST_EXPORT.lead 秒、結尾留 tail 秒讓殘響收尾(即時匯出是 0.4 / 0.6 秒) */
-const FAST_EXPORT = { lead: 0.4, tail: 1.2, audioBitrate: 192000, keyEverySec: 2, minSpeed: 1.2 };   // minSpeed:試編至少要幾倍速才用快速匯出(聲音處理兩邊都要做,影片編碼比樂曲短就划算)
+const FAST_EXPORT = { lead: 0.4, tail: 1.2, audioBitrate: 192000, keyEverySec: 2, minSpeed: 1.0 };   // minSpeed:試編至少要幾倍速才用快速匯出。2026-10 從 1.2 改 1.0:聲音處理兩邊都要做,影片編碼不比樂曲長就不吃虧,而且每一格都完整、不會掉格
 // 取樣率跟著播放用的 AudioContext(殘響等 ConvolverNode 的 IR 是照它解碼的,離線 context 取樣率不同會出錯);通常 48000 或 44100
 function fastExportSampleRate(){ return (audioCtx && audioCtx.sampleRate) || 48000; }
 const MUXER_URLS = {
@@ -10619,7 +10687,9 @@ async function renderExportAudioFast(rangeStart, rangeEnd, onProgress){
   for (const k of EXPORT_AUDIO_KEEP) saved[k] = eval(k);
   const restore = () => { for (const k of EXPORT_AUDIO_KEEP) eval(k + " = saved['" + k + "']"); };
   let buf, data;
-  const tick = renderProgressTicker((len / sr) * 0.3, f => onProgress && onProgress(f * 0.85));   // 載入限幅器時就開始動
+  // 進度:排音 0~30%、合成 30~85%、限幅器 85~100%
+  const SCH = 0.3;
+  let tick = { stop(){}, real(){} };
   try {
     audioCtx = new OfflineAudioContext(2, len, sr);
     initAudioGraph();
@@ -10632,7 +10702,9 @@ async function renderExportAudioFast(rangeStart, rangeEnd, onProgress){
     scheduled = []; ringingOpenHat = null; ringingCymbals = {}; pianoResetVoices();
     startCtxTime = lead;
     computeDrumPerformance();
-    scheduleExportRange(rangeStart, rangeEnd, useCalib());
+    scheduleExportRange(rangeStart, rangeEnd, useCalib(), { defer: true });
+    await scheduleOfflineInSlices(f => onProgress && onProgress(f * SCH));
+    tick = renderProgressTicker((len / sr) * 0.3, f => onProgress && onProgress(SCH + (0.85 - SCH) * f));
     buf = await awaitOfflineRender(audioCtx, len / sr, tick);
     data = await dumpLoudnessTap(tap);
   } finally { tick.stop(); restore(); }
@@ -10842,9 +10914,27 @@ async function fastExportVideo(cfg){
   //    取影格有兩種方法(直接從 canvas、先轉 ImageBitmap),Safari 上哪個快不一定,兩個都試、用快的。
   //    60fps 不夠快、30fps 夠快時改用 30fps
   const encCfg = rate => ({ codec: fmtSel.vCodec, width: cfg.W, height: cfg.H, bitrate: cfg.bitrate, framerate: rate, latencyMode: "realtime", ...(fmtSel.avcFormat ? { avc: { format: fmtSel.avcFormat } } : {}) });
-  const FRAME_SRC = {
-    canvas: async (ts) => new VideoFrame(cv, { timestamp: ts }),
-    bitmap: async (ts) => { const bm = await createImageBitmap(cv); const fr = new VideoFrame(bm, { timestamp: ts }); bm.close(); return fr; },
+  /* 從畫布取影格送進編碼器。bitmap:createImageBitmap 在呼叫的當下就把畫面定格,讀回的結果晚點才拿,
+     所以最多 4 張同時在讀、不用等上一張讀回來就能畫下一格(2026-10:iPhone 讀回一格要 28ms、畫只要 0ms,
+     一張一張等的話只有 0.54 倍速)。canvas:直接 new VideoFrame(canvas),本身就是同步的 */
+  const makeFeeder = (srcName, enc) => {
+    const q = [], DEPTH = srcName === "bitmap" ? 4 : 0;
+    let grabMs = 0;
+    const finish = async item => {
+      const t = performance.now(); const bm = await item.p; grabMs += performance.now() - t;
+      const fr = new VideoFrame(bm, { timestamp: item.ts }); bm.close();
+      enc.encode(fr, { keyFrame: item.key }); fr.close();
+    };
+    return {
+      async push(ts, key){
+        if (srcName === "canvas") { const t = performance.now(); const fr = new VideoFrame(cv, { timestamp: ts }); grabMs += performance.now() - t; enc.encode(fr, { keyFrame: key }); fr.close(); return; }
+        q.push({ p: createImageBitmap(cv), ts, key });
+        while (q.length > DEPTH) await finish(q.shift());
+      },
+      async drain(){ while (q.length) await finish(q.shift()); },
+      discard(){ for (const it of q.splice(0)) it.p.then(b => b.close(), () => {}); },
+      get grabMs(){ return grabMs; },
+    };
   };
   let frameSrc = "canvas", probeInfo = "";
   const runProbe = async srcName => {
@@ -10857,23 +10947,24 @@ async function fastExportVideo(cfg){
     }, error: e => { err = e; } });
     probe.configure(encCfg(fps));
     const tA = performance.now();
+    const feed = makeFeeder(srcName, probe);
     await drawAt(rangeStart);
-    const f0 = await FRAME_SRC[srcName](0);
-    probe.encode(f0, { keyFrame: true }); f0.close();
+    await feed.push(0, true); await feed.drain();
     await probe.flush();
     if (err) throw err;
     if (pk && !hasCfg) { probe.close(); throw new Error("H.264 沒有 SPS/PPS(" + (fmtSel.avcFormat || "avc") + ")"); }
     const warm = performance.now() - tA;
-    let tDraw = 0, tGrab = 0, n = 0;
-    const tB = performance.now();
+    let tDraw = 0, n = 0;
+    const g0 = feed.grabMs, tB = performance.now();
     while (n < fps && performance.now() - tB < 2500 && !exportCancelled) {   // 最多 1 秒的影片或 2.5 秒的時間(按取消就停)
       n++;
       const ts = Math.round(n * 1e6 / fps);
       let t = performance.now(); await drawAt(rangeStart + n / fps); tDraw += performance.now() - t;
-      t = performance.now(); const fr = await FRAME_SRC[srcName](ts); tGrab += performance.now() - t;
-      probe.encode(fr, { keyFrame: false }); fr.close();
+      await feed.push(ts, false);
       while (probe.encodeQueueSize > 6) await new Promise(r => setTimeout(r, 2));
     }
+    await feed.drain();
+    const tGrab = feed.grabMs - g0;
     await probe.flush(); probe.close();
     const total = performance.now() - tB;
     if (err) throw err;
@@ -10941,6 +11032,7 @@ async function fastExportVideo(cfg){
       }
     };
     const nFrames = Math.ceil(dur * fps), keyEvery = Math.round(fps * FAST_EXPORT.keyEverySec);
+    const feeder = makeFeeder(frameSrc, venc);
     let lastUi = 0;
     for (let f = 0; f < nFrames; f++) {
       if (exportCancelled) break;
@@ -10948,9 +11040,7 @@ async function fastExportVideo(cfg){
       const t = f / fps, songSec = Math.min(Math.max(t - lead, 0), total) + rangeStart;
       feedAudio(t + 1);
       await drawAt(songSec);
-      const frame = await FRAME_SRC[frameSrc](Math.round(t * 1e6));
-      venc.encode(frame, { keyFrame: f % keyEvery === 0 });
-      frame.close();
+      await feeder.push(Math.round(t * 1e6), f % keyEvery === 0);
       // 編碼器跟不上時等一下(不然記憶體會一直堆);每 0.1 秒更新一次進度並讓畫面喘口氣(取消按鈕才按得到)
       while (venc.encodeQueueSize > 6) await new Promise(r => setTimeout(r, 2));
       const now = performance.now();
@@ -10961,7 +11051,8 @@ async function fastExportVideo(cfg){
         await new Promise(r => setTimeout(r, 0));
       }
     }
-    if (exportCancelled) { closeAll(); setStatus(T("exportCancelledStatus")); return true; }
+    if (exportCancelled) { feeder.discard(); closeAll(); setStatus(T("exportCancelledStatus")); return true; }
+    await feeder.drain();
     feedAudio(Infinity);
     L = R = null;
     await venc.flush(); await aenc.flush();
