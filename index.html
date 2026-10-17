@@ -10836,7 +10836,7 @@ function attachPcmCapture(node, len){
   if (!ctx.createScriptProcessor) return null;
   // 第 3 聲道放一個記號(CAP_MARK 秒的單一脈衝),合成完找它的位置換算抄本的延遲(ScriptProcessor 的延遲各瀏覽器不一樣)
   const cap = { L: new Float32Array(len), R: new Float32Array(len), M: new Float32Array(len), n: 0, mark: Math.round(0.05 * ctx.sampleRate) };
-  const sp = ctx.createScriptProcessor(4096, 3, 1);
+  const sp = ctx.createScriptProcessor(16384, 3, 1);   // 最大的區塊:回主執行緒的次數最少(iPhone 整首合成 136 秒,4096 時)
   sp.channelCount = 3; sp.channelCountMode = "explicit"; sp.channelInterpretation = "discrete";
   sp.onaudioprocess = e => {
     const ib = e.inputBuffer, s0 = Math.round(e.playbackTime * ctx.sampleRate), n = Math.min(ib.length, len - s0);
@@ -10884,8 +10884,10 @@ function pickHealthyPcm(buf, cap, sr){
 async function renderExportAudioFast(rangeStart, rangeEnd, onProgress){
   const sr = fastExportSampleRate(), lead = FAST_EXPORT.lead, tail = FAST_EXPORT.tail;
   const len = Math.ceil((rangeEnd - rangeStart + lead + tail) * sr);
-  // Safari 不用 AudioWorklet(見 workletAudioOk):圖裡沒有 Worklet 時成品是好的,直接讀成品、響度在主執行緒分析
+  // Safari 不用 AudioWorklet(見 workletAudioOk):成品壞掉時用 ScriptProcessor 的抄本(attachPcmCapture)。
+  // 抄本比合成晚 2 個區塊,多合成 CAP_PAD 讓結尾的殘響尾巴也抄得到,最後再切回 len
   const useWk = workletAudioOk() && typeof AudioWorkletNode !== "undefined";
+  const CAP_PAD = useWk ? 0 : 2 * 16384 + Math.round(0.2 * sr), rlen = len + CAP_PAD;   // 延遲 2×16384−128,再多 0.2 秒讓抄本結尾的淡出落在切掉的部分
   const saved = {};
   for (const k of EXPORT_AUDIO_KEEP) saved[k] = eval(k);
   const restore = () => { for (const k of EXPORT_AUDIO_KEEP) eval(k + " = saved['" + k + "']"); };
@@ -10894,11 +10896,11 @@ async function renderExportAudioFast(rangeStart, rangeEnd, onProgress){
   const SCH = 0.3;
   let tick = { stop(){}, real(){} };
   try {
-    audioCtx = new OfflineAudioContext(2, len, sr);
+    audioCtx = new OfflineAudioContext(2, rlen, sr);
     initAudioGraph();
     masterOut.disconnect();
     masterBus.connect(audioCtx.destination);   // 限幅器之前的立體聲,後面在主執行緒乘增益、過限幅器
-    if (!useWk) cap = attachPcmCapture(masterBus, len);
+    if (!useWk) cap = attachPcmCapture(masterBus, rlen);
     if (useWk) {
       if (!await offlineStep("addModule", masterReady, 15000)) throw new Error("limiter");
       const tap = new AudioWorkletNode(audioCtx, "ss-loudness-tap", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1], channelCount: 2, channelCountMode: "explicit", processorOptions: { pcm: true } });
@@ -10922,7 +10924,7 @@ async function renderExportAudioFast(rangeStart, rangeEnd, onProgress){
     await scheduleOfflineInSlices(f => onProgress && onProgress(f * SCH));
     lap("aSched");
     tick = renderProgressTicker((len / sr) * 0.3, f => onProgress && onProgress(SCH + (0.85 - SCH) * f));
-    buf = await awaitOfflineRender(audioCtx, len / sr, tick, { noSuspend: !useWk });
+    buf = await awaitOfflineRender(audioCtx, rlen / sr, tick, { noSuspend: !useWk });
     lap("aRender");
     if (tapDump) data = await tapDump();
     lap("aDump");
@@ -10936,7 +10938,8 @@ async function renderExportAudioFast(rangeStart, rangeEnd, onProgress){
   const useTap = !!tapL && (stTap.ok || !stBuf.ok);
   // 不用 AudioWorklet 時:成品與 ScriptProcessor 抄本哪個正常用哪個(都不正常就照成品,下面會丟錯、訊息寫出兩份的數值)
   const pick = !useWk ? pickHealthyPcm(buf, cap, sr) : null;
-  const L = useTap ? tapL : pick && pick.L ? pick.L : buf.getChannelData(0), R = useTap ? tapR : pick && pick.L ? pick.R : buf.getChannelData(1);
+  let L = useTap ? tapL : pick && pick.L ? pick.L : buf.getChannelData(0), R = useTap ? tapR : pick && pick.L ? pick.R : buf.getChannelData(1);
+  if (L.length > len) { L = L.slice(0, len); R = R.slice(0, len); }   // 切掉為了抄本多合成的部分
   buf = null; cap = null;
   // 每一步都檢查聲音正不正常(2026-10:iPhone 兩支影片整段沙沙聲,格式試音與匯出後檢查都過了 → 送進編碼器前的聲音就壞了)。
   // 哪一步壞掉就丟錯、改用即時錄影,訊息寫出是哪一步(合成 / 增益 / 限幅器)
@@ -11595,9 +11598,9 @@ async function fastExportVideo(cfg){
   setPct("exportAnalyzingPct", 0);
   $("exportOverlaySub").textContent = T("exportAnalyzingSub");
   $("exportTime").textContent = "";
-  // 鋼琴聲音自我檢查(iPhone/App 才跑,約 1 秒;結果寫在完成訊息,見 pianoSelfTest)
+  // 鋼琴聲音自我檢查(見 pianoSelfTest;2026-10-17 找到 Safari AudioWorklet 的問題後不再自動跑,測試時設 window.PIANO_SELFTEST)
   let selfTest = "";
-  if ((isIOSDevice() || window.IN_NATIVE_APP || window.PIANO_SELFTEST) && events.some(e => e.notes.some(n => !n.drum && n.freq))) {
+  if (window.PIANO_SELFTEST && events.some(e => e.notes.some(n => !n.drum && n.freq))) {
     try { selfTest = await pianoSelfTest(); } catch (e) { if (e.cancelled) { setStatus(T("exportCancelledStatus")); return true; } selfTest = "自檢 err " + e.message; }
   }
   let L, R;
