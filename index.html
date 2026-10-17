@@ -11721,7 +11721,7 @@ async function fastExportVideo(cfg){
       .catch(e => { audioErr = e; })
       .then(() => { audioDone = true; });
   };
-  const probeKey = [cfg.W + "x" + cfg.H, fmtSel.vCodec, fmtSel.avcFormat || "", fps].join("|");
+  let probeKey = [cfg.W + "x" + cfg.H, fmtSel.vCodec, fmtSel.avcFormat || "", fps].join("|");
   const cachedProbe = window.FAST_EXPORT_NO_PROBE_CACHE ? null : fastProbeCacheGet(probeKey);
   if (!window.FAST_EARLY_AUDIO_OFF && (cachedProbe || fastMinSpeed() < FAST_EXPORT.minSpeed)) { tAudio0 = performance.now(); audioJob = startAudio(); }
   const bail = async v => {
@@ -11816,7 +11816,27 @@ async function fastExportVideo(cfg){
       console.info("快速匯出試編(記住的結果):" + fps + "fps " + probeInfo);
       if (!window.FAST_EXPORT_FORCE && cachedProbe.speed < fastMinSpeed()) return bail(fastFallback("slow", probeInfo));
     } else {
-    let r = await runProbe("canvas");
+    /* 試編拿不到 SPS/PPS(2026-10-17 iPhone X / iOS 16:「H.264 沒有 SPS/PPS(annexb)」→ 以前直接退回即時錄影、影片一格一格):
+       H.264 才依序換 位元流格式(annexb → avc → 不指定)與 profile(High → Main → Baseline)再試,哪個拿得到設定資料就用哪個 */
+    const h264Alts = [];
+    if (fmtSel.muxV === "avc") {
+      const lv = fmtSel.vCodec.slice(-2);
+      for (const v of [fmtSel.vCodec, "avc1.6400" + lv, "avc1.4d00" + lv, "avc1.42e0" + lv])
+        for (const f of ["annexb", "avc", null])
+          if (!(v === fmtSel.vCodec && f === fmtSel.avcFormat) && !h264Alts.some(a => a.v === v && a.f === f)) h264Alts.push({ v, f });
+    }
+    let r = null;
+    const tried = [fmtSel.vCodec + " " + (fmtSel.avcFormat || "-")];
+    for (let i = 0; ; i++) {
+      try { r = await runProbe("canvas"); break; }
+      catch (e) {
+        if (e.cancelled || exportCancelled || i >= h264Alts.length) throw Object.assign(e, { message: (e.message || String(e)) + (i ? "(試過 " + tried.join("、") + ")" : "") });
+        console.warn("快速匯出試編失敗(" + fmtSel.vCodec + " " + (fmtSel.avcFormat || "-") + "):", e.message, ",換下一種格式");
+        fmtSel.vCodec = h264Alts[i].v; fmtSel.avcFormat = h264Alts[i].f;
+        tried.push(fmtSel.vCodec + " " + (fmtSel.avcFormat || "-"));
+      }
+    }
+    probeKey = [cfg.W + "x" + cfg.H, fmtSel.vCodec, fmtSel.avcFormat || "", fps].join("|");
     if (exportCancelled) throw exportCancelError();
     // 取影格佔了大部分時間就試另一種方法
     if (r.speed < FAST_EXPORT.minSpeed && r.grab > r.per * 0.4) {
