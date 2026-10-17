@@ -11030,40 +11030,116 @@ function muxAudioChunkFn(muxer, fmtSel, sr, tap){
 /* 快速匯出。回傳 true = 已經處理完(成功、取消或在產生影片後失敗);false = 這台機器不支援或還沒開始就失敗,改用即時錄影 */
 let fastPrepTick = null;
 function stopFastPrepTick(){ if (fastPrepTick) { fastPrepTick.stop(); fastPrepTick = null; } }
-/* 匯出完先確認影片裡的聲音解得出來(2026-10,使用者回報 iPhone 快速匯出的影片沒有聲音):
-   把最大聲那 2 秒的已編碼聲音,用 AudioDecoder + 寫進檔案的同一份設定資料(AudioSpecificConfig)解回來,
-   音量要有原本的四分之一以上(−12dB)。解不開或幾乎沒聲音 → 不交出這個檔案、改用即時錄影。
-   瀏覽器沒有 AudioDecoder 或 10 秒沒結果就略過(不擋) */
-async function verifyEncodedAudio(chunks, codec, sr, asc, srcRms){
-  if (typeof AudioDecoder === "undefined" || !chunks.length || !(srcRms > 1e-4)) return { ok: true, why: "skip" };
-  let sum = 0, n = 0, err = null;
-  const dec = new AudioDecoder({
-    output: ad => {
-      try {
-        const f = ad.format || "f32", planar = /-planar$/.test(f), planes = planar ? ad.numberOfChannels : 1;
-        for (let p = 0; p < planes; p++) {
-          const bytes = ad.allocationSize({ planeIndex: p });
-          const buf = /^f32/.test(f) ? new Float32Array(bytes / 4) : /^s16/.test(f) ? new Int16Array(bytes / 2) : /^s32/.test(f) ? new Int32Array(bytes / 4) : new Uint8Array(bytes);
-          ad.copyTo(buf, { planeIndex: p });
-          const k = /^f32/.test(f) ? 1 : /^s16/.test(f) ? 1 / 32768 : /^s32/.test(f) ? 1 / 2147483648 : 1 / 128, off = /^u8/.test(f) ? 128 : 0;
-          for (let i = 0; i < buf.length; i++) { const v = (buf[i] - off) * k; sum += v * v; }
-          n += buf.length;
-        }
-      } catch (e) { err = err || e; }
-      ad.close();
-    },
-    error: e => { err = err || e; }
-  });
+/* ── 聲音編碼的檢查(2026-10,使用者回報 iPhone 快速匯出:第一次整段沒聲音,修好設定資料後變成整段沙沙聲)──
+   沙沙聲那支影片:AAC 封包、設定資料都正確,解出來 8kHz 以上佔一半能量(正常音樂一成以下)= 編碼器拿到的不是我們的聲音,
+   最可能是 Safari 的 AudioEncoder 沒照 AudioData 標的格式(f32-planar)讀。不再假設:
+   ① pickAudioInputFormat:匯出前用 0.5 秒 1kHz 測試音,把幾種格式各編一次再用 AudioDecoder 解回來,用第一個「1kHz 附近佔八成以上」的格式
+   ② verifyEncodedAudio:匯出完把最大聲 2 秒解回來,音量要有原本 −12dB 以上,而且 8kHz 以上的比例不能比原本多太多(雜訊會被擋下)
+   兩個都過不了就不交出檔案、改用即時錄影 */
+// AudioDecoder 的輸出 → 每個聲道的 Float32Array(各種格式都換成 −1~1)
+function audioDataToChannels(ad){
+  const f = ad.format || "f32", planar = /-planar$/.test(f), ch = ad.numberOfChannels, nf = ad.numberOfFrames;
+  const read = p => {
+    const bytes = ad.allocationSize({ planeIndex: p });
+    const buf = /^f32/.test(f) ? new Float32Array(bytes / 4) : /^s16/.test(f) ? new Int16Array(bytes / 2) : /^s32/.test(f) ? new Int32Array(bytes / 4) : new Uint8Array(bytes);
+    ad.copyTo(buf, { planeIndex: p });
+    const k = /^f32/.test(f) ? 1 : /^s16/.test(f) ? 1 / 32768 : /^s32/.test(f) ? 1 / 2147483648 : 1 / 128, off = /^u8/.test(f) ? 128 : 0;
+    const out = new Float32Array(buf.length); for (let i = 0; i < buf.length; i++) out[i] = (buf[i] - off) * k;
+    return out;
+  };
+  if (planar) return Array.from({ length: ch }, (_, c) => read(c));
+  const all = read(0), outs = Array.from({ length: ch }, () => new Float32Array(nf));
+  for (let i = 0; i < nf; i++) for (let c = 0; c < ch; c++) outs[c][i] = all[i * ch + c];
+  return outs;
+}
+// 一段聲音的頻譜比例:目標頻帶(lo~hi)佔多少、8kHz 以上佔多少(直接做 DFT 太慢,用 4096 點 FFT 平均)
+function bandFractions(x, sr, lo, hi){
+  const N = 4096, re = new Float64Array(N), im = new Float64Array(N);
+  let tot = 0, band = 0, hf = 0;
+  for (let s0 = 0; s0 + N <= x.length; s0 += N) {
+    for (let i = 0; i < N; i++) { re[i] = x[s0 + i] * (0.5 - 0.5 * Math.cos(2 * Math.PI * i / N)); im[i] = 0; }
+    for (let i = 1, j = 0; i < N; i++) { let bit = N >> 1; for (; j & bit; bit >>= 1) j ^= bit; j ^= bit; if (i < j) { [re[i], re[j]] = [re[j], re[i]]; } }
+    for (let len = 2; len <= N; len <<= 1) {
+      const a = -2 * Math.PI / len, wr = Math.cos(a), wi = Math.sin(a);
+      for (let i = 0; i < N; i += len) { let cr = 1, ci = 0;
+        for (let j = 0; j < len / 2; j++) { const ur = re[i + j], ui = im[i + j], vr = re[i + j + len / 2] * cr - im[i + j + len / 2] * ci, vi = re[i + j + len / 2] * ci + im[i + j + len / 2] * cr;
+          re[i + j] = ur + vr; im[i + j] = ui + vi; re[i + j + len / 2] = ur - vr; im[i + j + len / 2] = ui - vi; const t = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = t; } }
+    }
+    for (let k = 1; k < N / 2; k++) { const e = re[k] * re[k] + im[k] * im[k], f = k * sr / N; tot += e; if (f >= lo && f <= hi) band += e; if (f > 8000) hf += e; }
+  }
+  return { band: tot ? band / tot : 0, hf: tot ? hf / tot : 0, tot };
+}
+// 已編碼的聲音 → 解回來的左右聲道(解不開回傳 { err })
+async function decodeAudioChunks(chunks, codec, sr, asc){
+  const L = [], R = []; let err = null;
+  const dec = new AudioDecoder({ output: ad => { try { const c = audioDataToChannels(ad); L.push(c[0]); R.push(c[1] || c[0]); } catch (e) { err = err || e; } ad.close(); }, error: e => { err = err || e; } });
   try {
     dec.configure({ codec, sampleRate: sr, numberOfChannels: 2, ...(asc ? { description: asc } : {}) });
     for (const c of chunks) dec.decode(new EncodedAudioChunk({ type: "key", timestamp: c.ts, duration: c.dur || undefined, data: c.raw }));
     const done = await Promise.race([dec.flush().then(() => true), new Promise(r => setTimeout(() => r(false), 10000))]);
-    if (!done) return { ok: true, why: "timeout" };
+    if (!done) err = err || new Error("decode timeout");
   } catch (e) { err = err || e; }
   try { dec.close(); } catch (e) {}
-  if (err) return { ok: false, why: String(err.message || err) };
-  const rms = Math.sqrt(sum / Math.max(1, n));
-  return { ok: rms > srcRms * 0.25, why: "rms " + rms.toFixed(4) + " / " + srcRms.toFixed(4) };
+  if (err) return { err };
+  const cat = a => { const n = a.reduce((t, x) => t + x.length, 0), o = new Float32Array(n); let p = 0; for (const x of a) { o.set(x, p); p += x.length; } return o; };
+  return { L: cat(L), R: cat(R) };
+}
+// 給編碼器的 AudioData:照選好的格式排(f32-planar 是規格標準;Safari 可能要別種)
+function makeAudioData(fmt, L, R, pos, n, sr){
+  const ts = Math.round(pos / sr * 1e6);
+  let data;
+  if (fmt === "f32-planar") { data = new Float32Array(n * 2); data.set(L.subarray(pos, pos + n), 0); data.set(R.subarray(pos, pos + n), n); }
+  else if (fmt === "f32") { data = new Float32Array(n * 2); for (let i = 0; i < n; i++) { data[2 * i] = L[pos + i]; data[2 * i + 1] = R[pos + i]; } }
+  else {
+    const q = v => Math.max(-32768, Math.min(32767, Math.round(v * 32767)));
+    data = new Int16Array(n * 2);
+    if (fmt === "s16-planar") for (let i = 0; i < n; i++) { data[i] = q(L[pos + i]); data[n + i] = q(R[pos + i]); }
+    else for (let i = 0; i < n; i++) { data[2 * i] = q(L[pos + i]); data[2 * i + 1] = q(R[pos + i]); }
+  }
+  return new AudioData({ format: fmt, sampleRate: sr, numberOfFrames: n, numberOfChannels: 2, timestamp: ts, data });
+}
+const AUDIO_INPUT_FORMATS = ["f32-planar", "f32", "s16", "s16-planar"];
+let audioInputFormatCache = null;
+async function pickAudioInputFormat(fmtSel, sr){
+  const key = fmtSel.aCodec + "|" + sr;
+  if (audioInputFormatCache && audioInputFormatCache.key === key) return audioInputFormatCache.fmt;
+  if (typeof AudioDecoder === "undefined") return "f32-planar";   // 沒辦法檢查就照規格
+  const n = Math.round(sr * 0.5), L = new Float32Array(n), R = new Float32Array(n);
+  for (let i = 0; i < n; i++) { L[i] = 0.4 * Math.sin(2 * Math.PI * 1000 * i / sr); R[i] = 0.3 * Math.sin(2 * Math.PI * 1000 * i / sr + 0.5); }
+  const tried = [];
+  for (const fmt of (window.FAST_EXPORT_AUDIO_FORMATS || AUDIO_INPUT_FORMATS)) {
+    const chunks = []; let err = null;
+    const fakeMuxer = { addAudioChunkRaw(){} };
+    const tap = muxAudioChunkFn(fakeMuxer, fmtSel, sr, (raw, ts, d) => chunks.push({ raw: raw.slice(), ts, dur: d }));
+    const enc = new AudioEncoder({ output: (c, m) => { try { tap(c, m); } catch (e) { err = err || e; } }, error: e => { err = err || e; } });
+    try {
+      enc.configure({ codec: fmtSel.aCodec, sampleRate: sr, numberOfChannels: 2, bitrate: FAST_EXPORT.audioBitrate });
+      const CH = Math.round(sr / 10);
+      for (let p = 0; p < n; p += CH) { const ad = makeAudioData(fmt, L, R, p, Math.min(CH, n - p), sr); enc.encode(ad); ad.close(); }
+      await enc.flush();
+    } catch (e) { err = err || e; }
+    try { enc.close(); } catch (e) {}
+    let ok = false, why = err ? String(err.message || err) : "";
+    if (!err) {
+      const d = await decodeAudioChunks(chunks, fmtSel.aCodec, sr, fmtSel.muxA === "aac" ? aacMuxAsc : null);
+      if (d.err) why = String(d.err.message || d.err);
+      else { const b = bandFractions(d.L.subarray(Math.min(d.L.length, 2048)), sr, 900, 1100); ok = b.band > 0.8; why = "1k " + b.band.toFixed(2) + " hf " + b.hf.toFixed(2); }
+    }
+    tried.push(fmt + ": " + why);
+    if (ok) { console.info("聲音輸入格式:" + fmt + "(" + tried.join(";") + ")"); audioInputFormatCache = { key, fmt }; return fmt; }
+  }
+  console.warn("聲音輸入格式都不對:" + tried.join(";"));
+  throw new Error(T("fastNoteNoSound", { msg: tried.join("; ") }));
+}
+async function verifyEncodedAudio(chunks, codec, sr, asc, srcL){
+  if (typeof AudioDecoder === "undefined" || !chunks.length) return { ok: true, why: "skip" };
+  const src = bandFractions(srcL, sr, 0, 0), srcRms = Math.sqrt(srcL.reduce((t, v) => t + v * v, 0) / Math.max(1, srcL.length));
+  if (!(srcRms > 1e-4)) return { ok: true, why: "quiet" };
+  const d = await decodeAudioChunks(chunks, codec, sr, asc);
+  if (d.err) return /timeout/.test(d.err.message || "") ? { ok: true, why: "timeout" } : { ok: false, why: String(d.err.message || d.err) };
+  const rms = Math.sqrt(d.L.reduce((t, v) => t + v * v, 0) / Math.max(1, d.L.length)), dec = bandFractions(d.L, sr, 0, 0);
+  const ok = rms > srcRms * 0.25 && dec.hf <= src.hf * 2 + 0.05;
+  return { ok, why: "rms " + rms.toFixed(3) + "/" + srcRms.toFixed(3) + " hf " + dec.hf.toFixed(2) + "/" + src.hf.toFixed(2) };
 }
 /* 試編結果記在這台裝置上(2026-10,使用者要求加快匯出):同樣的尺寸/格式下次直接用,省掉 2~3 秒的試編。
    夠快的記 30 天、太慢的記 3 天(瀏覽器/系統更新後可能變快);快速匯出出錯就刪掉,下次重新試編。
@@ -11104,6 +11180,11 @@ async function fastExportVideo(cfg){
   setExportOverlayMode(true);
   let fps = cfg.fps || 30;
   const sr = fastExportSampleRate();
+  // 先確認聲音編碼器吃哪種格式(測試音編了再解回來);都不對就不用快速匯出(以免做出整段沙沙聲的影片)
+  let audioFmt;
+  try { audioFmt = await pickAudioInputFormat(fmtSel, sr); }
+  catch (e) { console.warn(e); return fastFallback("error", e.message); }
+  if (cancelledNow()) return true;
   const rangeStart = cfg.startSec != null ? Math.max(0, cfg.startSec) : 0;
   const rangeEnd = cfg.endSec != null ? Math.min(totalSec(), cfg.endSec) : totalSec();
   const total = rangeEnd - rangeStart, lead = FAST_EXPORT.lead, dur = lead + total + FAST_EXPORT.tail;
@@ -11253,7 +11334,7 @@ async function fastExportVideo(cfg){
     { const W2 = 2 * sr, step = Math.floor(sr / 2);
       for (let i = 0; i + W2 <= L.length; i += step) { let e = 0; for (let j = i; j < i + W2; j += 8) e += L[j] * L[j] + R[j] * R[j]; if (e > vwBest) { vwBest = e; vw0 = i; } } }
     const vwT0 = vw0 / sr, vwT1 = vwT0 + 2;
-    let srcRms = 0; { let e = 0, n = 0; for (let j = vw0; j < Math.min(L.length, vw0 + 2 * sr); j++) { e += L[j] * L[j] + R[j] * R[j]; n += 2; } srcRms = Math.sqrt(e / Math.max(1, n)); }
+    const srcSeg = L.slice(vw0, Math.min(L.length, vw0 + 2 * sr));   // 原本的聲音(左聲道),給匯出後的檢查比對
     const vChunks = [];
     const audioTap = (raw, ts, d) => { const t = ts / 1e6; if (t >= vwT0 - 0.05 && t <= vwT1) { const c = raw.slice(); if (window.FAST_EXPORT_BREAK_AUDIO) c.fill(0); vChunks.push({ raw: c, ts, dur: d }); } };   // BREAK_AUDIO:測試用,模擬解不出聲音
     const onVideo = muxVideoChunkFn(muxer, fmtSel, cfg.W, cfg.H, fps), onAudio = muxAudioChunkFn(muxer, fmtSel, sr, audioTap);
@@ -11267,9 +11348,8 @@ async function fastExportVideo(cfg){
     const feedAudio = untilSec => {
       const stop = Math.min(nAud, Math.ceil(untilSec * sr));
       for (; aPos < stop; aPos += CH) {
-        const n = Math.min(CH, nAud - aPos), planar = new Float32Array(n * 2);
-        planar.set(L.subarray(aPos, aPos + n), 0); planar.set(R.subarray(aPos, aPos + n), n);
-        const ad = new AudioData({ format: "f32-planar", sampleRate: sr, numberOfFrames: n, numberOfChannels: 2, timestamp: Math.round(aPos / sr * 1e6), data: planar });
+        const n = Math.min(CH, nAud - aPos);
+        const ad = makeAudioData(audioFmt, L, R, aPos, n, sr);
         aenc.encode(ad); ad.close();
       }
     };
@@ -11300,7 +11380,7 @@ async function fastExportVideo(cfg){
     await venc.flush(); await aenc.flush();
     if (encErr) throw encErr;
     closeAll();
-    const va = await verifyEncodedAudio(vChunks, fmtSel.aCodec, sr, fmtSel.muxA === "aac" ? aacMuxAsc : null, srcRms);
+    const va = await verifyEncodedAudio(vChunks, fmtSel.aCodec, sr, fmtSel.muxA === "aac" ? aacMuxAsc : null, srcSeg);
     console.info("快速匯出聲音檢查:" + (va.ok ? "OK" : "失敗") + " " + va.why + " · " + aacMuxInfo);
     if (!va.ok) throw Object.assign(new Error(T("fastNoteNoSound", { msg: va.why })), { noSound: true });
     muxer.finalize();
