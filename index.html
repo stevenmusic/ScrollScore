@@ -1514,7 +1514,6 @@ const I18N = {
     combineDone: "完成,已下載",
     combineFailed: "合成失敗:{msg}",
     exportComplete: "影片輸出完成({mb} MB,{fmt})",
-    exportTimeFast: "用時 {t} 秒(準備 {p} · 聲音 {a} · 畫面 {v} 秒)",
     exportTimeTotal: "用時 {t} 秒",
     exportCancelledStatus: "已取消輸出",
     exportFailed: "輸出失敗:{msg}",
@@ -1773,7 +1772,6 @@ const I18N = {
     combineDone: "Done — downloaded",
     combineFailed: "Combine failed: {msg}",
     exportComplete: "Video export complete ({mb} MB, {fmt})",
-    exportTimeFast: "took {t}s (prep {p} · audio {a} · video {v}s)",
     exportTimeTotal: "took {t}s",
     exportCancelledStatus: "Export cancelled",
     exportFailed: "Export failed: {msg}",
@@ -7020,8 +7018,6 @@ function loadPianoSamples(){
     const auxList = [...aux].filter(a => pianoMan.aux[a]);
     const auxBytes = auxList.reduce((t, a) => t + pianoMan.aux[a].frames / 48000 * audioCtx.sampleRate * 4 * (auxMono ? 1 : 2), 0);
     const plan = pianoPlan(need, auxBytes);
-    { const mb = plan.reduce((t, p) => t + p.len * audioCtx.sampleRate * 4 * p.ch, 0) / 1e6;
-      pianoPlanInfo = "鋼琴 " + plan.length + "/" + need.size + " 層 單聲道 " + plan.filter(p => p.ch === 1).length + " · " + mb.toFixed(0) + "+" + (auxBytes / 1e6).toFixed(0) + "/" + (pianoMemoryBudgetBytes() / 1e6).toFixed(0) + "MB"; }
     const want = new Set(plan.map(p => p.key));
     for (const k of Object.keys(pianoBuf)) if (!want.has(k)) delete pianoBuf[k];   // 換曲/移調後用不到的釋放掉
     // 先每個音各載一層(用最多次的那層),馬上可以播;再補其餘的層
@@ -11010,7 +11006,6 @@ function pickHealthyPcm(buf, cap, sr){
   if (stCap && (cap.gaps || cap.n < cap.L.length - 2 * 16384)) { stCap.ok = false; stCap.txt += " 漏抄 " + cap.gaps + " · " + (cap.n / sr).toFixed(1) + "/" + (cap.L.length / sr).toFixed(1) + "s"; }
   if (cap && stCap && stBuf.ok) {   // 兩份都在時記一下差多少(Chrome 應該幾乎相同)
     let md = 0; for (let i = 0; i < bL.length; i += 7) md = Math.max(md, Math.abs(bL[i] - cap.L[i])); console.info("抄本與成品最大差 " + md.toExponential(2));
-    if (window.CAP_DEBUG) { let best = 0, bd = 1e9; for (let o = -1024; o <= 1024; o++) { let d = 0; for (let i = 30000; i < 90000; i += 3) { const j = i + o; d += Math.abs(bL[i] - cap.L[j]); } if (d < bd) { bd = d; best = o; } } console.info("抄本最佳位移 " + best + " 差 " + bd); }
   }
   const info = "成品 " + stBuf.txt + (stCap ? " · 抄本 " + stCap.txt + " 延遲 " + cap.lag : cap ? " · 抄本 空" : "");
   if (stBuf.ok) return { L: bL, R: bR, st: stBuf, src: "成品", info };
@@ -11124,121 +11119,6 @@ function pcmHealth(L, R, sr){
   const ok = bad === 0 && rms > 1e-4 && hf < 0.35;
   return { ok, rms, hf, corr, bad, txt: (bad ? "NaN×" + bad + " " : "") + "rms " + rms.toFixed(3) + " hf " + hf.toFixed(2) + (hf > 0 ? "(" + (10 * Math.log10(hf)).toFixed(0) + "dB)" : "") + " lr " + corr.toFixed(2) };
 }
-/* 鋼琴聲音自我檢查(2026-10):iPhone 匯出的鋼琴有沙沙聲(8kHz 以上比音樂小 47dB,10/01 的同一首是 75dB)、幾乎單聲道,
-   雲端 Chrome 重現不出來 → 在使用者的裝置上用同一套音訊引擎把一個音分段測:原始取樣 / 起音自動變化的音色濾波器 /
-   固定的音色濾波器 / 鋼琴匯流排(EQ + 立體聲加寬)/ 再過響度壓縮器 / 完整的一個音(playPianoNote),
-   各段量 8kHz 以上(起音之後 0.3~1.5 秒,自然泛音最少的地方)與左右相關,寫在完成訊息,看沙沙聲從哪一段開始。
-   每段用新的 OfflineAudioContext,聲音從 ss-loudness-tap 取(Safari 離線合成的成品是壞的) */
-let pianoPlanInfo = "";
-async function pianoSelfTest(){
-  const s = typeof pianoSampleFor === "function" && pianoMan ? pianoSampleFor(60, pianoLayerFor(80)) : null;
-  if (!s || typeof OfflineAudioContext === "undefined" || typeof AudioWorkletNode === "undefined") return "";
-  const sr = fastExportSampleRate(), len = Math.round(sr * 1.6), at = 0.05, tone = pianoToneFor(80);
-  // 2026-10-17 iPhone 第一次自檢:raw(單聲道取樣直接播)就已經 −42dB(雲端 −77)。取樣檔沒變,單聲道是程式自己把左右相加做的 →
-  // 同一個檔案用幾種方式做成 AudioBuffer 分別測:dec 解碼原樣(立體聲)/ copy 複製成新的立體聲 / mono 現在的左右相加 /
-  // mono0 只複製左聲道 / monoCT 先在 Float32Array 加好再 copyToChannel
-  const bufs = {};
-  try {
-    const res = await fetchSample(pianoBase + pianoFileFor(s.c, s.L) + ".flac");
-    const dec = await audioCtx.decodeAudioData(await res.arrayBuffer());
-    const n = dec.length, l = dec.getChannelData(0), r = dec.getChannelData(Math.min(1, dec.numberOfChannels - 1));
-    bufs.dec = dec;
-    const copy = audioCtx.createBuffer(dec.numberOfChannels, n, dec.sampleRate);
-    for (let c = 0; c < dec.numberOfChannels; c++) copy.getChannelData(c).set(dec.getChannelData(c));
-    bufs.copy = copy;
-    const mono = audioCtx.createBuffer(1, n, dec.sampleRate), md = mono.getChannelData(0);
-    for (let i = 0; i < n; i++) md[i] = 0.5 * (l[i] + r[i]);
-    bufs.mono = mono;
-    const mono0 = audioCtx.createBuffer(1, n, dec.sampleRate); mono0.getChannelData(0).set(l); bufs.mono0 = mono0;
-    const sum = new Float32Array(n); for (let i = 0; i < n; i++) sum[i] = 0.5 * (l[i] + r[i]);
-    const monoCT = audioCtx.createBuffer(1, n, dec.sampleRate); monoCT.copyToChannel(sum, 0); bufs.monoCT = monoCT;
-  } catch (e) { bufs.err = e && e.message || String(e); }
-  // 2026-10-17 第二次自檢:dec(解碼原樣)也是 −42,而且每一段都剛好 −42(加亮高頻的濾波器也沒讓它變)→ 雜訊可能是量測/輸出那端加的。
-  // 上面每一段都經過 AudioWorklet(tap);10/01 沒問題的影片是在 AudioWorklet 限幅器上線之前錄的。
-  // 這裡加幾段不經過 tap 的:file = 解碼結果直接在 JS 算(完全不合成)/ noWk = 不載 AudioWorklet 的離線合成,讀成品 /
-  // wkIdle = 載了 AudioWorklet、節點掛在旁邊但聲音不經過它 / wkLim = 聲音經過限幅器 AudioWorklet(上限 0dB,幾乎不壓)
-  const pre = [];
-  const hfOf = (L, R, sr0) => {
-    const a = Math.round(0.35 * sr0), l = L.subarray(a), r = R.subarray(a);
-    const hf = bandFractions(l, sr0, 0, 0).hf;
-    let sxy = 0, sxx = 0, syy = 0, bad = 0; for (let i = 0; i < l.length; i++) { if (!Number.isFinite(l[i])) { bad++; continue; } sxy += l[i] * r[i]; sxx += l[i] * l[i]; syy += r[i] * r[i]; }
-    return (bad ? "NaN×" + bad + " " : "") + (hf > 0 ? (10 * Math.log10(hf)).toFixed(0) : "-inf") + "dB lr " + (sxx && syy ? (sxy / Math.sqrt(sxx * syy)).toFixed(2) : "-");
-  };
-  if (bufs.dec) {
-    const d = bufs.dec;
-    pre.push("file " + hfOf(d.getChannelData(0), d.getChannelData(Math.min(1, d.numberOfChannels - 1)), d.sampleRate));
-    for (const mode of ["noWk", "wkIdle", "wkLim"]) {
-      try {
-        const ctx = new OfflineAudioContext(2, len, sr);
-        const src = ctx.createBufferSource(); src.buffer = d;
-        if (mode === "noWk") src.connect(ctx.destination);
-        else {
-          const url = URL.createObjectURL(new Blob([MASTER_LIMITER_SRC], { type: "text/javascript" }));
-          await offlineStep("addModule", ctx.audioWorklet.addModule(url), 15000);
-          URL.revokeObjectURL(url);
-          if (mode === "wkIdle") {
-            const t = new AudioWorkletNode(ctx, "ss-loudness-tap", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1], channelCount: 2, channelCountMode: "explicit" });
-            const m = ctx.createGain(); m.gain.value = 0; src.connect(t); t.connect(m); m.connect(ctx.destination);
-            src.connect(ctx.destination);
-          } else {
-            const lim = new AudioWorkletNode(ctx, "ss-master-limiter", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2], channelCount: 2, channelCountMode: "explicit",
-              processorOptions: { ceilingDb: 0, lookahead: MASTER.lookahead, release: MASTER.release, releaseSlow: MASTER.releaseSlow } });
-            src.connect(lim); lim.connect(ctx.destination);
-          }
-        }
-        src.start(at);
-        const b = await awaitOfflineRender(ctx, len / sr, { real(){}, stop(){} });
-        pre.push(mode + " " + hfOf(b.getChannelData(0), b.getChannelData(1), sr));
-      } catch (e) { if (e && e.cancelled) throw e; pre.push(mode + " err " + (e && e.message || e)); }
-    }
-  }
-  const saved = {}; for (const k of EXPORT_AUDIO_KEEP) saved[k] = eval(k);
-  const out = pre;
-  try {
-    // 下面這些都經過 tap(AudioWorklet),Safari 上量到的是 Worklet 的雜訊(見 workletAudioOk),不能用 Worklet 的瀏覽器就不跑
-    for (const st of !workletAudioOk() ? [] : ["raw", ...["dec", "copy", "mono", "mono0", "monoCT"].filter(k => bufs[k]), "presAuto", "presFix", "bus", "comp", "note"]) {
-      audioCtx = new OfflineAudioContext(2, len, sr);
-      initAudioGraph();
-      if (!await offlineStep("addModule", masterReady, 15000)) throw new Error("limiter");
-      const tap = new AudioWorkletNode(audioCtx, "ss-loudness-tap", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1], channelCount: 2, channelCountMode: "explicit", processorOptions: { pcm: true } });
-      const L = new Float32Array(len), R = new Float32Array(len);
-      let fin; const done = new Promise(r => fin = r);
-      tap.port.onmessage = e => { const d = e.data;
-        if (d && d.s != null) { const n = Math.min(d.L.length, len - d.s); if (n > 0 && d.s >= 0) { L.set(d.L.subarray(0, n), d.s); R.set(d.R.subarray(0, n), d.s); } }
-        else fin(d); };
-      const mute = audioCtx.createGain(); mute.gain.value = 0; tap.connect(mute); mute.connect(audioCtx.destination);
-      masterOut.disconnect();
-      scheduled = []; pianoResetVoices();
-      if (st === "note") {
-        masterGain.connect(tap);
-        playPianoNote(261.63, at, 1.4, false, false, null, null, 80);
-      } else {
-        const src = audioCtx.createBufferSource(); src.buffer = bufs[st] || s.buf;
-        let node = src;
-        if (/^pres|^bus|^comp/.test(st)) {
-          const pres = audioCtx.createBiquadFilter(); pres.type = "highshelf"; pres.frequency.value = PIANO_TONE.presFreq;
-          if (st === "presAuto") { pres.gain.setValueAtTime(tone.pres + tone.attack, at); pres.gain.setTargetAtTime(tone.pres, at, PIANO_TONE.attackTau); }
-          else pres.gain.value = tone.pres;
-          const air = audioCtx.createBiquadFilter(); air.type = "highshelf"; air.frequency.value = PIANO_TONE.airFreq; air.gain.value = tone.air;
-          src.connect(pres); pres.connect(air); node = air;
-        }
-        if (st === "bus" || st === "comp") { node.connect(getPianoBus()); (st === "bus" ? masterGain : masterBus).connect(tap); }
-        else node.connect(tap);
-        src.start(at);
-      }
-      await awaitOfflineRender(audioCtx, len / sr, { real(){}, stop(){} });
-      tap.port.postMessage("dump"); await offlineStep("dump", done, 10000);
-      const a = Math.round(0.35 * sr), segL = L.subarray(a), segR = R.subarray(a);
-      const hf = bandFractions(segL, sr, 0, 0).hf;
-      let sxy = 0, sxx = 0, syy = 0; for (let i = 0; i < segL.length; i++) { sxy += segL[i] * segR[i]; sxx += segL[i] * segL[i]; syy += segR[i] * segR[i]; }
-      out.push(st + " " + (hf > 0 ? (10 * Math.log10(hf)).toFixed(0) : "-inf") + "dB lr " + (sxx && syy ? (sxy / Math.sqrt(sxx * syy)).toFixed(2) : "-"));
-    }
-  } catch (e) { if (e && e.cancelled) throw e; out.push("err " + (e && e.message || e)); }
-  finally { for (const k of EXPORT_AUDIO_KEEP) eval(k + " = saved['" + k + "']"); }
-  const txt = "自檢 ch" + s.buf.numberOfChannels + " " + out.join(" / ") + (bufs.err ? " · 讀檔 err " + bufs.err : "") + (pianoPlanInfo ? " · " + pianoPlanInfo : "");
-  console.info(txt);
-  return txt;
-}
 // 匯出中的說明文字:快速匯出不用等樂曲播完,切出去會中斷(不是「卡住」)
 function setExportOverlayMode(fast){
   setPhrasedText($("exportWarnBodyEl"), T(fast ? "exportWarnBodyFast" : "exportWarnBody"));
@@ -11250,10 +11130,13 @@ let fastExportNote = "";
 let fastTimes = {};
 function exportTimeNote(){
   if (!fastTimes.t0) return "";
-  const r = x => Math.round(x), t = (performance.now() - fastTimes.t0) / 1000;
-  return " · " + (fastTimes.video != null
-    ? T("exportTimeFast", { t: r(t), p: r(fastTimes.prep || 0), a: r(fastTimes.audio || 0), v: r(fastTimes.video) })
-    : T("exportTimeTotal", { t: r(t) }));
+  return " · " + T("exportTimeTotal", { t: Math.round((performance.now() - fastTimes.t0) / 1000) });
+}
+// 各階段用時(只印在 console)
+function exportTimeDetail(){
+  if (!fastTimes.t0 || fastTimes.video == null) return "";
+  const r = x => Math.round(x);
+  return "用時 " + r((performance.now() - fastTimes.t0) / 1000) + " 秒(準備 " + r(fastTimes.prep || 0) + " · 聲音 " + r(fastTimes.audio || 0) + " · 畫面 " + r(fastTimes.video) + " 秒)";
 }
 function fastFallback(reason, detail){
   stopFastPrepTick();
@@ -11748,11 +11631,6 @@ async function fastExportVideo(cfg){
   fastTimes.prep = (tAudio0 - fastTimes.t0) / 1000;
   $("exportOverlaySub").textContent = T("exportAnalyzingSub");
   $("exportTime").textContent = "";
-  // 鋼琴聲音自我檢查(見 pianoSelfTest;2026-10-17 找到 Safari AudioWorklet 的問題後不再自動跑,測試時設 window.PIANO_SELFTEST)
-  let selfTest = "";
-  if (window.PIANO_SELFTEST && events.some(e => e.notes.some(n => !n.drum && n.freq))) {
-    try { selfTest = await pianoSelfTest(); } catch (e) { if (e.cancelled) { setStatus(T("exportCancelledStatus")); return true; } selfTest = "自檢 err " + e.message; }
-  }
   let L = null, R = null, audioFrac = 0, audioErr = null, audioDone = false;
   const startAudio = () => {
     audioDone = false; audioErr = null; audioFrac = 0;
@@ -11882,7 +11760,9 @@ async function fastExportVideo(cfg){
   const blob = out.toBlob(fmtSel.container === "mp4" ? "video/mp4" : "video/webm");
   const rangeTag = cfg.startSec != null ? "-" + fmt(rangeStart).replace(":","m") + "s-" + fmt(rangeEnd).replace(":","m") + "s" : "";
   const fileName = "scrollscore-" + cfg.W + "x" + cfg.H + rangeTag + "." + fmtSel.ext;
-  setStatus(T("exportComplete", { mb: (blob.size/1048576).toFixed(1), fmt: mimeLabel(fmtSel.mime) }) + exportTimeNote() + fastFrameNote + fastAudioRetry + (fastAudioHealth ? " · " + fastAudioHealth + " · " + fastVerifyNote : "") + (selfTest ? " · " + selfTest : ""));
+  // 完成訊息只寫大小、格式、用時(2026-10-17 使用者:檢查數值拿掉);各段數值照樣印在 console,出問題時看得到
+  console.info("快速匯出完成:" + [exportTimeDetail(), fastFrameNote, fastAudioRetry, fastAudioHealth, fastVerifyNote].map(x => (x || "").replace(/^ · /, "")).filter(Boolean).join(" · "));
+  setStatus(T("exportComplete", { mb: (blob.size/1048576).toFixed(1), fmt: mimeLabel(fmtSel.mime) }) + exportTimeNote());
   deliverExportedVideo(blob, fileName, fmtSel.mime);
   return true;
 }
