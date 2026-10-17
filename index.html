@@ -10615,10 +10615,10 @@ function offlineStep(stage, p, ms){
 }
 /* 等離線合成:進度(真的進度沒來就照時間推)、取消、卡住偵測。有真的進度時超過 max(20 秒, 2×估計)沒前進算卡住;
    沒有進度回報(Safari 可能不照 suspend 停)時總時間超過 max(60 秒, 音訊長度 × 4)算卡住 */
-async function awaitOfflineRender(ctx, total, tick){
+async function awaitOfflineRender(ctx, total, tick, opts){
   const sr = ctx.sampleRate, t0 = activeNow(), est = Math.max(3, total * 0.3) * 1000;
   let gotReal = false, lastReal = t0;
-  for (let k = 1; k < 20; k++) {   // 進度:每 5% 暫停一下更新畫面
+  for (let k = 1; k < 20 && !(opts && opts.noSuspend); k++) {   // 進度:每 5% 暫停一下更新畫面
     const at = Math.floor(total * k / 20 * sr / 128) * 128 / sr;
     ctx.suspend(at).then(() => { gotReal = true; lastReal = activeNow(); tick.real(k / 20); ctx.resume(); }).catch(() => {});
   }
@@ -10668,17 +10668,26 @@ async function measureExportGain(rangeStart, rangeEnd, onProgress){
         tap = new AudioWorkletNode(audioCtx, "ss-loudness-tap", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1], channelCount: 2, channelCountMode: "explicit" });
       }
       masterOut.disconnect();
+      let cap = null;
       if (tap) { masterBus.connect(tap); tap.connect(audioCtx.destination); }
-      else masterBus.connect(audioCtx.destination);   // 不用 AudioWorklet:讀成品、在主執行緒分析
+      else { masterBus.connect(audioCtx.destination); cap = attachPcmCapture(masterBus, len); }   // 不用 AudioWorklet:讀成品(壞的話用抄本)、在主執行緒分析
       scheduled = []; ringingOpenHat = null; ringingCymbals = {}; pianoResetVoices();
       startCtxTime = LEAD;
       computeDrumPerformance();
       scheduleExportRange(rangeStart, rangeEnd, useCalib(), { defer: true });
       await scheduleOfflineInSlices(f => onProgress && onProgress(Math.round(f * SCH * 100)));
       tick = renderProgressTicker(total * 0.3, f => onProgress && onProgress(Math.round((SCH + (1 - SCH) * f) * 100)));
-      const buf = await awaitOfflineRender(audioCtx, total, tick);
+      const buf = await awaitOfflineRender(audioCtx, total, tick, { noSuspend: !tap });
       restore();
-      const data = tap ? await dumpLoudnessTap(tap) : await analyzeLoudnessOffline(buf.getChannelData(0), buf.getChannelData(1), sr);
+      let data;
+      if (tap) data = await dumpLoudnessTap(tap);
+      else {
+        if (window.FAST_EXPORT_BREAK_BUFFER) for (const c of [0, 1]) { const d = buf.getChannelData(c); for (let i = 0; i < d.length; i++) d[i] = (Math.random() - 0.5) * 1e5; }   // 測試:模擬 iPhone 的壞成品
+        const pick = pickHealthyPcm(buf, cap, sr);
+        console.info("匯出響度分析:" + pick.info);
+        if (!pick.L) { console.warn("匯出響度分析:合成的聲音不正常,照原本音量匯出"); return null; }   // 2026-10-17 iPhone:讀到壞成品算出增益 0.06,影片只有 −36 LUFS
+        data = await analyzeLoudnessOffline(pick.L, pick.R, sr);
+      }
       return solveExportGain(data.E, data.P, data.block, exportHasDrums() ? EXPORT_DRUM_RELEASE : 0.15);
     } finally { tick.stop(); }
   } catch (e) {
@@ -10819,6 +10828,58 @@ function runLimiterOffline(L, R, sampleRate, opts, onProgress){
     step();
   });
 }
+/* Safari 的整首離線合成:startRendering 交回的成品是壞的(2026-10-17 iPhone:不放 AudioWorklet 也一樣,rms 51249、純雜訊;
+   一個音的短測試卻正常),AudioWorklet 又會加沙沙聲。所以同一次合成用 ScriptProcessorNode 把母帶限幅器前的立體聲抄一份
+   (playbackTime 標位置),合成中途也不暫停(suspend 可能是成品壞掉的原因),之後成品與抄本哪個正常用哪個(pickHealthyPcm) */
+function attachPcmCapture(node, len){
+  const ctx = audioCtx;
+  if (!ctx.createScriptProcessor) return null;
+  // 第 3 聲道放一個記號(CAP_MARK 秒的單一脈衝),合成完找它的位置換算抄本的延遲(ScriptProcessor 的延遲各瀏覽器不一樣)
+  const cap = { L: new Float32Array(len), R: new Float32Array(len), M: new Float32Array(len), n: 0, mark: Math.round(0.05 * ctx.sampleRate) };
+  const sp = ctx.createScriptProcessor(4096, 3, 1);
+  sp.channelCount = 3; sp.channelCountMode = "explicit"; sp.channelInterpretation = "discrete";
+  sp.onaudioprocess = e => {
+    const ib = e.inputBuffer, s0 = Math.round(e.playbackTime * ctx.sampleRate), n = Math.min(ib.length, len - s0);
+    if (n > 0 && s0 >= 0) { cap.L.set(ib.getChannelData(0).subarray(0, n), s0); cap.R.set(ib.getChannelData(1).subarray(0, n), s0); cap.M.set(ib.getChannelData(2).subarray(0, n), s0); cap.n += n; }
+  };
+  const split = ctx.createChannelSplitter(2), merge = ctx.createChannelMerger(3);
+  const up = ctx.createGain(); up.channelCount = 2; up.channelCountMode = "explicit"; up.channelInterpretation = "speakers";
+  node.connect(up); up.connect(split); split.connect(merge, 0, 0); split.connect(merge, 1, 1);
+  const mk = ctx.createBuffer(1, 1, ctx.sampleRate); mk.getChannelData(0)[0] = 1;
+  const ms = ctx.createBufferSource(); ms.buffer = mk; ms.connect(merge, 0, 2); ms.start(cap.mark / ctx.sampleRate);
+  merge.connect(sp);
+  const mute = ctx.createGain(); mute.gain.value = 0;
+  sp.connect(mute); mute.connect(ctx.destination);
+  return cap;
+}
+// 照記號把抄本移回正確位置;找不到記號就當成空的
+function alignPcmCapture(cap){
+  if (!cap || !cap.n) return;
+  let at = -1; for (let i = 0; i < cap.M.length; i++) if (cap.M[i] > 0.5) { at = i; break; }
+  if (at < 0) { cap.n = 0; return; }
+  const lag = at - cap.mark; cap.lag = lag;
+  if (lag > 0) {
+    cap.L.copyWithin(0, lag); cap.R.copyWithin(0, lag); cap.L.fill(0, cap.L.length - lag); cap.R.fill(0, cap.R.length - lag);
+    // 最後 lag 個取樣抄不到(合成已經結束),前面 0.1 秒淡出(結尾是殘響尾巴,避免突然切斷)
+    const e = cap.L.length - lag, f = Math.min(e, 4800);
+    for (let i = 0; i < f; i++) { const k = 1 - (i + 1) / f; cap.L[e - f + i] *= k; cap.R[e - f + i] *= k; }
+  }
+  else if (lag < 0) { cap.L.copyWithin(-lag, 0); cap.R.copyWithin(-lag, 0); cap.L.fill(0, 0, -lag); cap.R.fill(0, 0, -lag); }
+  cap.M = null;
+}
+function pickHealthyPcm(buf, cap, sr){
+  alignPcmCapture(cap);
+  const bL = buf.getChannelData(0), bR = buf.getChannelData(1), stBuf = pcmHealth(bL, bR, sr);
+  const stCap = cap && cap.n > 0 ? pcmHealth(cap.L, cap.R, sr) : null;
+  if (cap && stCap && stBuf.ok) {   // 兩份都在時記一下差多少(Chrome 應該幾乎相同)
+    let md = 0; for (let i = 0; i < bL.length; i += 7) md = Math.max(md, Math.abs(bL[i] - cap.L[i])); console.info("抄本與成品最大差 " + md.toExponential(2));
+    if (window.CAP_DEBUG) { let best = 0, bd = 1e9; for (let o = -1024; o <= 1024; o++) { let d = 0; for (let i = 30000; i < 90000; i += 3) { const j = i + o; d += Math.abs(bL[i] - cap.L[j]); } if (d < bd) { bd = d; best = o; } } console.info("抄本最佳位移 " + best + " 差 " + bd); }
+  }
+  const info = "成品 " + stBuf.txt + (stCap ? " · 抄本 " + stCap.txt + " 延遲 " + cap.lag : cap ? " · 抄本 空" : "");
+  if (stBuf.ok) return { L: bL, R: bR, st: stBuf, src: "成品", info };
+  if (stCap && stCap.ok) return { L: cap.L, R: cap.R, st: stCap, src: "抄本", info };
+  return { L: null, info };
+}
 // 整段聲音:離線合成(母帶限幅器之前)+ 響度分析 → 增益 → 限幅器;回傳 [L, R](已經是最後要放進影片的聲音)
 async function renderExportAudioFast(rangeStart, rangeEnd, onProgress){
   const sr = fastExportSampleRate(), lead = FAST_EXPORT.lead, tail = FAST_EXPORT.tail;
@@ -10828,7 +10889,7 @@ async function renderExportAudioFast(rangeStart, rangeEnd, onProgress){
   const saved = {};
   for (const k of EXPORT_AUDIO_KEEP) saved[k] = eval(k);
   const restore = () => { for (const k of EXPORT_AUDIO_KEEP) eval(k + " = saved['" + k + "']"); };
-  let buf, data, tapL = null, tapR = null, tapDump = null;
+  let buf, data, tapL = null, tapR = null, tapDump = null, cap = null;
   // 進度:排音 0~30%、合成 30~85%、限幅器 85~100%
   const SCH = 0.3;
   let tick = { stop(){}, real(){} };
@@ -10837,6 +10898,7 @@ async function renderExportAudioFast(rangeStart, rangeEnd, onProgress){
     initAudioGraph();
     masterOut.disconnect();
     masterBus.connect(audioCtx.destination);   // 限幅器之前的立體聲,後面在主執行緒乘增益、過限幅器
+    if (!useWk) cap = attachPcmCapture(masterBus, len);
     if (useWk) {
       if (!await offlineStep("addModule", masterReady, 15000)) throw new Error("limiter");
       const tap = new AudioWorkletNode(audioCtx, "ss-loudness-tap", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1], channelCount: 2, channelCountMode: "explicit", processorOptions: { pcm: true } });
@@ -10860,7 +10922,7 @@ async function renderExportAudioFast(rangeStart, rangeEnd, onProgress){
     await scheduleOfflineInSlices(f => onProgress && onProgress(f * SCH));
     lap("aSched");
     tick = renderProgressTicker((len / sr) * 0.3, f => onProgress && onProgress(SCH + (0.85 - SCH) * f));
-    buf = await awaitOfflineRender(audioCtx, len / sr, tick);
+    buf = await awaitOfflineRender(audioCtx, len / sr, tick, { noSuspend: !useWk });
     lap("aRender");
     if (tapDump) data = await tapDump();
     lap("aDump");
@@ -10872,15 +10934,17 @@ async function renderExportAudioFast(rangeStart, rangeEnd, onProgress){
   const stBuf = pcmHealth(buf.getChannelData(0), buf.getChannelData(1), sr), stTap = tapL ? pcmHealth(tapL, tapR, sr) : { ok: false };
   if (tapL) { let md = 0; const b0 = buf.getChannelData(0); for (let i = 0; i < b0.length; i += 7) md = Math.max(md, Math.abs(b0[i] - tapL[i])); console.info("tap 與成品最大差 " + md.toExponential(2)); }
   const useTap = !!tapL && (stTap.ok || !stBuf.ok);
-  const L = useTap ? tapL : buf.getChannelData(0), R = useTap ? tapR : buf.getChannelData(1);
-  buf = null;
+  // 不用 AudioWorklet 時:成品與 ScriptProcessor 抄本哪個正常用哪個(都不正常就照成品,下面會丟錯、訊息寫出兩份的數值)
+  const pick = !useWk ? pickHealthyPcm(buf, cap, sr) : null;
+  const L = useTap ? tapL : pick && pick.L ? pick.L : buf.getChannelData(0), R = useTap ? tapR : pick && pick.L ? pick.R : buf.getChannelData(1);
+  buf = null; cap = null;
   // 每一步都檢查聲音正不正常(2026-10:iPhone 兩支影片整段沙沙聲,格式試音與匯出後檢查都過了 → 送進編碼器前的聲音就壞了)。
   // 哪一步壞掉就丟錯、改用即時錄影,訊息寫出是哪一步(合成 / 增益 / 限幅器)
   const st0 = pcmHealth(L, R, sr);
   if (!data) data = await analyzeLoudnessOffline(L, R, sr);
   let g = solveExportGain(data.E, data.P, data.block, drums ? EXPORT_DRUM_RELEASE : 0.15);
   const gOk = Number.isFinite(g) && g > 0 && g < 100;
-  fastAudioHealth = "合成" + (useTap ? "(tap)" : useWk ? "" : "(無 Worklet)") + " " + st0.txt + (useTap && !stBuf.ok ? " · 原成品 " + stBuf.txt : "") + " · 增益 " + (gOk ? g.toFixed(2) : String(g));
+  fastAudioHealth = "合成" + (useTap ? "(tap)" : useWk ? "" : "(無 Worklet,用" + (pick && pick.src || "成品") + ")") + " " + st0.txt + (useTap && !stBuf.ok ? " · 原成品 " + stBuf.txt : "") + (pick ? " [" + pick.info + "]" : "") + " · 增益 " + (gOk ? g.toFixed(2) : String(g));
   if (!st0.ok) throw new Error(T("fastNoteNoSound", { msg: fastAudioHealth }));
   if (!gOk) g = 1;   // 增益算不出來就照原本音量(不要把整段乘成 NaN)
   fastExportGainCache = { rangeStart, rangeEnd, g };
