@@ -886,6 +886,8 @@ body.exporting-active .empty-card{
 .exp-actions .btn{min-height:44px;justify-content:center}
 .exp-actions .btn.primary{flex:1;max-width:260px}
 .exp-actions #coverBtn{white-space:nowrap}
+.share-diag{margin:10px 0 0;font-size:var(--fs-2xs);color:var(--muted);line-height:1.45;word-break:break-word;user-select:text;-webkit-user-select:text}
+.share-diag:empty{display:none}
 .exp-bg{display:flex;align-items:center;gap:8px;flex:1;min-width:0}
 #expBgRow .exp-bg .btn{height:34px;min-height:34px;min-width:0;padding:0 12px;font-size:var(--fs-xs);white-space:nowrap}   /* 次要按鈕,不要跟主要按鈕一樣 44px 大 */
 #bgOpacityRow{min-height:34px}
@@ -1102,6 +1104,7 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
       <p class="share-sub" id="shareSub" data-i18n="shareSub">點「儲存影片」存到相簿,或分享到其他 App。</p>
       <button class="btn primary" id="shareSaveBtn" data-i18n="shareSaveBtn">儲存影片</button>
       <button class="btn" id="shareCloseBtn" data-i18n="closeBtn">關閉</button>
+      <p class="share-diag" id="shareDiag"></p>
     </div>
   </div>
   <div id="trackOverlay" role="dialog" aria-modal="true" aria-labelledby="trackTitle">
@@ -10800,15 +10803,42 @@ async function renderExportAudioFast(rangeStart, rangeEnd, onProgress){
   } finally { tick.stop(); restore(); }
   const tLim = performance.now();
   const drums = exportHasDrums();
-  const g = solveExportGain(data.E, data.P, data.block, drums ? EXPORT_DRUM_RELEASE : 0.15);
-  fastExportGainCache = { rangeStart, rangeEnd, g };
   const L = buf.getChannelData(0), R = buf.getChannelData(1);
+  // 每一步都檢查聲音正不正常(2026-10:iPhone 兩支影片整段沙沙聲,格式試音與匯出後檢查都過了 → 送進編碼器前的聲音就壞了)。
+  // 哪一步壞掉就丟錯、改用即時錄影,訊息寫出是哪一步(合成 / 增益 / 限幅器)
+  const st0 = pcmHealth(L, R, sr);
+  let g = solveExportGain(data.E, data.P, data.block, drums ? EXPORT_DRUM_RELEASE : 0.15);
+  const gOk = Number.isFinite(g) && g > 0 && g < 100;
+  fastAudioHealth = "合成 " + st0.txt + " · 增益 " + (gOk ? g.toFixed(2) : String(g));
+  if (!st0.ok) throw new Error(T("fastNoteNoSound", { msg: fastAudioHealth }));
+  if (!gOk) g = 1;   // 增益算不出來就照原本音量(不要把整段乘成 NaN)
+  fastExportGainCache = { rangeStart, rangeEnd, g };
   if (g !== 1) for (let i = 0; i < L.length; i++) { L[i] *= g; R[i] *= g; }
   await runLimiterOffline(L, R, sr, { ceilingDb: MASTER.ceilingDb, lookahead: MASTER.lookahead,
     release: drums ? EXPORT_DRUM_RELEASE : MASTER.release, releaseSlow: drums ? EXPORT_DRUM_RELEASE : MASTER.releaseSlow },
     f => onProgress && onProgress(0.85 + 0.15 * f));
+  const st1 = pcmHealth(L, R, sr);
+  fastAudioHealth += " · 限幅後 " + st1.txt;
+  console.info("快速匯出聲音:" + fastAudioHealth);
+  if (!st1.ok || st1.hf > st0.hf * 2 + 0.05) throw new Error(T("fastNoteNoSound", { msg: fastAudioHealth }));
   fastTimes.aLimit = (performance.now() - tLim) / 1000;
   return [L, R];
+}
+/* 一段聲音正不正常:有沒有 NaN/無限大、音量、8kHz 以上的比例、左右相關(音樂左右高度相關,雜訊左右無關)。
+   取中間最大聲的 2 秒算頻譜(整首做 FFT 太慢) */
+let fastAudioHealth = "", fastVerifyNote = "";
+function pcmHealth(L, R, sr){
+  let bad = 0, e = 0;
+  for (let i = 0; i < L.length; i++) { const a = L[i], b = R[i]; if (!Number.isFinite(a) || !Number.isFinite(b)) { bad++; continue; } e += a * a + b * b; }
+  const rms = Math.sqrt(e / Math.max(1, 2 * L.length));
+  let w0 = 0, best = -1; const W2 = 2 * sr, step = sr >> 1;
+  for (let i = 0; i + W2 <= L.length; i += step) { let s = 0; for (let j = i; j < i + W2; j += 16) { const a = L[j]; if (Number.isFinite(a)) s += a * a; } if (s > best) { best = s; w0 = i; } }
+  const seg = L.slice(w0, Math.min(L.length, w0 + W2)).map(v => Number.isFinite(v) ? v : 0), segR = R.slice(w0, Math.min(R.length, w0 + W2)).map(v => Number.isFinite(v) ? v : 0);
+  const hf = bandFractions(seg, sr, 0, 0).hf;
+  let sxy = 0, sxx = 0, syy = 0; for (let i = 0; i < seg.length; i++) { sxy += seg[i] * segR[i]; sxx += seg[i] * seg[i]; syy += segR[i] * segR[i]; }
+  const corr = sxx && syy ? sxy / Math.sqrt(sxx * syy) : 0;
+  const ok = bad === 0 && rms > 1e-4 && hf < 0.35;
+  return { ok, rms, hf, corr, bad, txt: (bad ? "NaN×" + bad + " " : "") + "rms " + rms.toFixed(3) + " hf " + hf.toFixed(2) + " lr " + corr.toFixed(2) };
 }
 // 匯出中的說明文字:快速匯出不用等樂曲播完,切出去會中斷(不是「卡住」)
 function setExportOverlayMode(fast){
@@ -11134,6 +11164,7 @@ async function pickAudioInputFormat(fmtSel, sr){
 async function verifyEncodedAudio(chunks, codec, sr, asc, srcL){
   if (typeof AudioDecoder === "undefined" || !chunks.length) return { ok: true, why: "skip" };
   const src = bandFractions(srcL, sr, 0, 0), srcRms = Math.sqrt(srcL.reduce((t, v) => t + v * v, 0) / Math.max(1, srcL.length));
+  if (!Number.isFinite(srcRms)) return { ok: false, why: "source NaN" };
   if (!(srcRms > 1e-4)) return { ok: true, why: "quiet" };
   const d = await decodeAudioChunks(chunks, codec, sr, asc);
   if (d.err) return /timeout/.test(d.err.message || "") ? { ok: true, why: "timeout" } : { ok: false, why: String(d.err.message || d.err) };
@@ -11382,6 +11413,7 @@ async function fastExportVideo(cfg){
     closeAll();
     const va = await verifyEncodedAudio(vChunks, fmtSel.aCodec, sr, fmtSel.muxA === "aac" ? aacMuxAsc : null, srcSeg);
     console.info("快速匯出聲音檢查:" + (va.ok ? "OK" : "失敗") + " " + va.why + " · " + aacMuxInfo);
+    fastVerifyNote = "檢查 " + va.why + " · 格式 " + audioFmt;
     if (!va.ok) throw Object.assign(new Error(T("fastNoteNoSound", { msg: va.why })), { noSound: true });
     muxer.finalize();
     fastTimes.video = (performance.now() - tVideo0) / 1000;
@@ -11395,7 +11427,7 @@ async function fastExportVideo(cfg){
   const blob = out.toBlob(fmtSel.container === "mp4" ? "video/mp4" : "video/webm");
   const rangeTag = cfg.startSec != null ? "-" + fmt(rangeStart).replace(":","m") + "s-" + fmt(rangeEnd).replace(":","m") + "s" : "";
   const fileName = "scrollscore-" + cfg.W + "x" + cfg.H + rangeTag + "." + fmtSel.ext;
-  setStatus(T("exportComplete", { mb: (blob.size/1048576).toFixed(1), fmt: mimeLabel(fmtSel.mime) }) + exportTimeNote());
+  setStatus(T("exportComplete", { mb: (blob.size/1048576).toFixed(1), fmt: mimeLabel(fmtSel.mime) }) + exportTimeNote() + (fastAudioHealth ? " · " + fastAudioHealth + " · " + fastVerifyNote : ""));
   deliverExportedVideo(blob, fileName, fmtSel.mime);
   return true;
 }
@@ -11413,7 +11445,7 @@ async function exportVideo(cfg){
   document.body.classList.add("exporting-active");
   // 匯出畫面先打開:音色還在下載時按「開始匯出」,以前要等下載完才有畫面、也不能取消(審查發現)
   fastExportNote = ""; $("exportFastNote").textContent = "";
-  fastTimes = { t0: performance.now() };
+  fastTimes = { t0: performance.now() }; fastAudioHealth = ""; fastVerifyNote = "";
   $("exportOverlayTitle").textContent = T("exportPreparingPct", { pct: 0 });
   $("exportOverlaySub").textContent = ""; $("exportTime").textContent = ""; $("exportFill").style.width = "0%";
   setExportOverlayMode(EXPORT_MODE.fast);
@@ -11685,6 +11717,8 @@ function showShareOverlay(mode, file, canShare, fileName, kind){
   if (mode === "saving") setTimeout(() => { if (ov.dataset.mode === "saving") close.style.display = ""; }, 20000);
   close.textContent = T(mode === "saved" ? "doneBtn" : "closeBtn");
   close.onclick = () => ov.classList.remove("show");
+  // 匯出的完成訊息(用時、各段聲音檢查)也放在這裡:手機上完成時看到的是這個框,下方狀態列常常看不到(2026-10)
+  $("shareDiag").textContent = kind === "image" ? "" : ($("status").textContent || "");
   ov.classList.add("show");
 }
 async function deliverExportedVideo(blob, fileName, mime){
