@@ -9532,15 +9532,20 @@ async function renderCoverImage(cfg){
     size = Math.round(size);
     const subSize = Math.round(Math.max(ref * 0.035, size * 0.4));
     const lineH = Math.round(size * 1.18), gap = Math.round(size * 0.35);
-    const blockH = lines.length * lineH + (cfg.subtitle ? gap + subSize : 0);
-    // 有鍵盤/鼓組面板時,標題放在樂譜區(面板上面)的正中間,底帶才不會壓到面板;放不下才用整張的中間
-    const lay = computeExportLayout(base), padY0 = Math.round(size * 0.45);
-    const areaB = base.includeKeyboard && lay.kbY > blockH + padY0 * 2 ? lay.kbY : H;
-    let y = Math.round((areaB - blockH) / 2);
-    // 標題後面再墊一條較不透明的橫帶:譜線/音符不要穿過字(縮圖很小,背景越乾淨字越好讀)
-    const padY = padY0;
-    ctx.globalAlpha = 0.8;
-    ctx.fillRect(0, y - padY, W, blockH + padY * 2);
+    // 實際有字的高度:最後一行標題下面的行距(0.18 字高)、副標題往上提的 0.18 都不算,卡片上下內距才會一樣
+    const blockH = lines.length * lineH + (cfg.subtitle ? gap + subSize : 0) - Math.round(size * 0.18);
+    // 標題一律放在整張圖的正中間(使用者:放在樂譜區中間看起來「跑到上面」)
+    let y = Math.round((H - blockH) / 2);
+    // 標題後面墊一張圓角卡片(只包住文字):譜線/音符不要穿過字;壓到鍵盤/鼓組面板上也像刻意的設計(整條橫帶會像沒對齊)
+    ctx.font = fontOf(size);
+    let textW = Math.max(...lines.map(l => Math.min(maxW, ctx.measureText(l).width)));
+    if (cfg.subtitle) { ctx.font = "600 " + subSize + "px '" + EXPORT_FONT_FAMILY + "', 'Noto Serif TC', serif"; textW = Math.max(textW, Math.min(maxW, ctx.measureText(cfg.subtitle).width)); }
+    const padY = Math.round(size * 0.4), padX = Math.round(size * 0.5);
+    const cardW = Math.min(W - ref * 0.04, textW + padX * 2), cardH = blockH + padY * 2;
+    ctx.globalAlpha = 0.88;
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect((W - cardW) / 2, y - padY, cardW, cardH, Math.round(size * 0.25)); else ctx.rect((W - cardW) / 2, y - padY, cardW, cardH);
+    ctx.fill();
     ctx.globalAlpha = 1;
     ctx.textAlign = "center"; ctx.textBaseline = "top";
     ctx.fillStyle = exportInkColor(hlCursorColor());   // 跟影片標題同色
