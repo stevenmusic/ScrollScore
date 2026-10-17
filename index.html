@@ -11131,8 +11131,8 @@ function bandFractions(x, sr, lo, hi){
 }
 // 已編碼的聲音 → 解回來的左右聲道(解不開回傳 { err })
 async function decodeAudioChunks(chunks, codec, sr, asc){
-  const L = [], R = []; let err = null;
-  const dec = new AudioDecoder({ output: ad => { try { const c = audioDataToChannels(ad); L.push(c[0]); R.push(c[1] || c[0]); } catch (e) { err = err || e; } ad.close(); }, error: e => { err = err || e; } });
+  const L = [], R = []; let err = null, outSr = sr;
+  const dec = new AudioDecoder({ output: ad => { try { outSr = ad.sampleRate || outSr; const c = audioDataToChannels(ad); L.push(c[0]); R.push(c[1] || c[0]); } catch (e) { err = err || e; } ad.close(); }, error: e => { err = err || e; } });
   try {
     dec.configure({ codec, sampleRate: sr, numberOfChannels: 2, ...(asc ? { description: asc } : {}) });
     for (const c of chunks) dec.decode(new EncodedAudioChunk({ type: "key", timestamp: c.ts, duration: c.dur || undefined, data: c.raw }));
@@ -11142,7 +11142,7 @@ async function decodeAudioChunks(chunks, codec, sr, asc){
   try { dec.close(); } catch (e) {}
   if (err) return { err };
   const cat = a => { const n = a.reduce((t, x) => t + x.length, 0), o = new Float32Array(n); let p = 0; for (const x of a) { o.set(x, p); p += x.length; } return o; };
-  return { L: cat(L), R: cat(R) };
+  return { L: cat(L), R: cat(R), sr: outSr };   // 解碼器輸出的取樣率可能跟輸入不同(Opus 一律 48k),頻譜要用這個算
 }
 // 給編碼器的 AudioData:照選好的格式排(f32-planar 是規格標準;Safari 可能要別種)
 function makeAudioData(fmt, L, R, pos, n, sr){
@@ -11165,8 +11165,9 @@ async function pickAudioInputFormat(fmtSel, sr){
   if (audioInputFormatCache && audioInputFormatCache.key === key) return audioInputFormatCache.fmt;
   if (typeof AudioDecoder === "undefined") return "f32-planar";   // 沒辦法檢查就照規格
   const n = Math.round(sr * 0.5), L = new Float32Array(n), R = new Float32Array(n);
-  for (let i = 0; i < n; i++) { L[i] = 0.4 * Math.sin(2 * Math.PI * 1000 * i / sr); R[i] = 0.3 * Math.sin(2 * Math.PI * 1000 * i / sr + 0.5); }
-  const tried = [];
+  // 左 1000Hz、右 1500Hz:同時檢查聲音對不對、左右有沒有被混在一起(2026-10 iPhone 影片聲音正常了但幾乎變單聲道,左右相關 0.995)
+  for (let i = 0; i < n; i++) { L[i] = 0.4 * Math.sin(2 * Math.PI * 1000 * i / sr); R[i] = 0.3 * Math.sin(2 * Math.PI * 1500 * i / sr); }
+  const tried = []; let monoOk = null;
   for (const fmt of (window.FAST_EXPORT_AUDIO_FORMATS || AUDIO_INPUT_FORMATS)) {
     const chunks = []; let err = null;
     const fakeMuxer = { addAudioChunkRaw(){} };
@@ -11183,11 +11184,19 @@ async function pickAudioInputFormat(fmtSel, sr){
     if (!err) {
       const d = await decodeAudioChunks(chunks, fmtSel.aCodec, sr, fmtSel.muxA === "aac" ? aacMuxAsc : null);
       if (d.err) why = String(d.err.message || d.err);
-      else { const b = bandFractions(d.L.subarray(Math.min(d.L.length, 2048)), sr, 900, 1100); ok = b.band > 0.8; why = "1k " + b.band.toFixed(2) + " hf " + b.hf.toFixed(2); }
+      else {
+        const bL = bandFractions(d.L.subarray(Math.min(d.L.length, 2048)), d.sr, 900, 1100), bR = bandFractions(d.R.subarray(Math.min(d.R.length, 2048)), d.sr, 1400, 1600);
+        ok = bL.band > 0.8;   // 聲音是對的
+        const stereo = ok && bR.band > 0.8;   // 左右也分得開
+        why = "L1k " + bL.band.toFixed(2) + " R1.5k " + bR.band.toFixed(2) + " hf " + bL.hf.toFixed(2);
+        if (ok && !stereo) { if (!monoOk) monoOk = fmt; ok = false; }
+      }
     }
     tried.push(fmt + ": " + why);
-    if (ok) { console.info("聲音輸入格式:" + fmt + "(" + tried.join(";") + ")"); audioInputFormatCache = { key, fmt }; return fmt; }
+    if (ok) { console.info("聲音輸入格式:" + fmt + "(" + tried.join(";") + ")"); audioInputFormatCache = { key, fmt, info: tried.join("; ") }; return fmt; }
   }
+  // 每一種都會把左右混在一起時,用第一個聲音正確的(總比沒聲音好),記下來寫在完成訊息
+  if (monoOk) { console.warn("聲音輸入格式:左右分不開,用 " + monoOk + "(" + tried.join(";") + ")"); audioInputFormatCache = { key, fmt: monoOk, info: "mono " + tried.join("; ") }; return monoOk; }
   console.warn("聲音輸入格式都不對:" + tried.join(";"));
   throw new Error(T("fastNoteNoSound", { msg: tried.join("; ") }));
 }
@@ -11198,7 +11207,7 @@ async function verifyEncodedAudio(chunks, codec, sr, asc, srcL){
   if (!(srcRms > 1e-4)) return { ok: true, why: "quiet" };
   const d = await decodeAudioChunks(chunks, codec, sr, asc);
   if (d.err) return /timeout/.test(d.err.message || "") ? { ok: true, why: "timeout" } : { ok: false, why: String(d.err.message || d.err) };
-  const rms = Math.sqrt(d.L.reduce((t, v) => t + v * v, 0) / Math.max(1, d.L.length)), dec = bandFractions(d.L, sr, 0, 0);
+  const rms = Math.sqrt(d.L.reduce((t, v) => t + v * v, 0) / Math.max(1, d.L.length)), dec = bandFractions(d.L, d.sr, 0, 0);
   const ok = rms > srcRms * 0.25 && dec.hf <= src.hf * 2 + 0.05;
   return { ok, why: "rms " + rms.toFixed(3) + "/" + srcRms.toFixed(3) + " hf " + dec.hf.toFixed(2) + "/" + src.hf.toFixed(2) };
 }
@@ -11443,7 +11452,7 @@ async function fastExportVideo(cfg){
     closeAll();
     const va = await verifyEncodedAudio(vChunks, fmtSel.aCodec, sr, fmtSel.muxA === "aac" ? aacMuxAsc : null, srcSeg);
     console.info("快速匯出聲音檢查:" + (va.ok ? "OK" : "失敗") + " " + va.why + " · " + aacMuxInfo);
-    fastVerifyNote = "檢查 " + va.why + " · 格式 " + audioFmt;
+    fastVerifyNote = "檢查 " + va.why + " · 格式 " + audioFmt + (audioInputFormatCache && /^mono/.test(audioInputFormatCache.info || "") ? "(左右分不開)" : "");
     if (!va.ok) throw Object.assign(new Error(T("fastNoteNoSound", { msg: va.why })), { noSound: true });
     muxer.finalize();
     fastTimes.video = (performance.now() - tVideo0) / 1000;
