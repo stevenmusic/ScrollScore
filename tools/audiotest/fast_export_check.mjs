@@ -4,6 +4,7 @@
 //   --webmtest:強制快速匯出走 WebM(跳過「試編速度不夠就改即時錄影」的判斷;雲端沒有硬體編碼器,軟體編碼比即時慢)
 //   模擬 iPhone Safari 的狀況:--dropmeta 編碼器不給 decoderConfig/時長;--nosuspend OfflineAudioContext 不回報進度;
 //   --failmux 封裝收尾時出錯(要退回即時錄影);--cancel N 匯出開始 N 秒後按取消
+//   --twice:同一頁匯出兩次,印第二次(第二次用記住的試編結果,不再試編)
 //   每 0.3 秒記一次匯出畫面的標題/時間,印出「標題最久沒變」幾秒(看起來卡住)與時間有沒有超過樂曲長度
 import { chromium } from "playwright";
 import http from "node:http"; import fs from "node:fs"; import path from "node:path";
@@ -27,7 +28,7 @@ await page.setInputFiles("#fileInput", path.resolve(score));
 await page.waitForFunction(() => typeof events !== "undefined" && events.length > 0, null, { timeout: 120000 });
 await page.evaluate(async () => { const inst = currentInstrument(); if (inst === "drum") await loadDrumKit(); else await loadInstrumentSamples(inst); });
 await page.waitForTimeout(500);
-const res = await page.evaluate(async ({ format, s0, s1, realtime, mp4test, webmtest, dropmeta, nosuspend, failmux, cancelAt }) => {
+const res = await page.evaluate(async ({ format, s0, s1, realtime, mp4test, webmtest, dropmeta, nosuspend, failmux, cancelAt, twice }) => {
   if (dropmeta) window.FAST_EXPORT_DROP_META = true;
   if (nosuspend) OfflineAudioContext.prototype.suspend = function(){ return Promise.reject(new Error("no suspend")); };
   if (failmux) { const orig = loadMuxer; loadMuxer = async k => { const M = await orig(k); return { ...M, Muxer: class extends M.Muxer { finalize(){ throw new Error("simulated finalize failure"); } } }; }; }
@@ -44,18 +45,19 @@ const res = await page.evaluate(async ({ format, s0, s1, realtime, mp4test, webm
   if (mp4test) window.FAST_EXPORT_FORCE = { container: "mp4", vCodec: "vp09.00.40.08", aCodec: "opus", muxV: "vp9", muxA: "opus", mime: "video/mp4;codecs=vp9,opus", ext: "mp4" };
   if (webmtest) window.FAST_EXPORT_FORCE = { container: "webm", vCodec: "vp09.00.40.08", aCodec: "opus", muxV: "V_VP9", muxA: "A_OPUS", mime: "video/webm;codecs=vp9,opus", ext: "webm" };
   let delivered = null, done;
-  const got = new Promise(r => done = r);
+  let got = new Promise(r => done = r);
   deliverExportedVideo = async (blob, name, mime) => { delivered = { name, mime, size: blob.size, b64: await new Promise(r => { const fr = new FileReader(); fr.onload = () => r(String(fr.result).split("base64,")[1]); fr.readAsDataURL(blob); }) }; done(); };
   exportPrefs.format = format; exportPrefs.panel = true;
   const cfg = buildExportCfg();
   if (s0 != null) { cfg.startSec = +s0; cfg.endSec = +s1; }
-  var t0 = performance.now();
+  if (twice) { await exportVideo(cfg); await Promise.race([got, new Promise(r => setTimeout(r, 20000))]); log.length = 0; maxStall = 0; lastTitle = ""; delivered = null; got = new Promise(r => done = r); }
+  var t0 = performance.now(); lastChange = t0;
   await exportVideo(cfg);
   clearInterval(poll);
   const ms = performance.now() - t0;
   await Promise.race([got, new Promise(r => setTimeout(r, 20000))]);
-  return { ms: Math.round(ms), maxStall: Math.round(maxStall), stallTitle, overTime, log: log.length > 60 ? log.slice(0, 30).concat(["…"], log.slice(-30)) : log, note: fastExportNote, delivered, status: $("status") ? $("status").textContent : "", len: (cfg.endSec != null ? cfg.endSec - cfg.startSec : totalSec()) };
-}, { format, s0, s1, realtime: flags.has("--realtime"), mp4test: flags.has("--mp4test"), webmtest: flags.has("--webmtest"), dropmeta: flags.has("--dropmeta"), nosuspend: flags.has("--nosuspend"), failmux: flags.has("--failmux"), cancelAt: opt("cancel") != null ? +opt("cancel") : null });
+  return { ms: Math.round(ms), maxStall: Math.round(maxStall), stallTitle, overTime, log: log.length > 60 ? log.slice(0, 30).concat(["…"], log.slice(-30)) : log, note: fastExportNote, delivered, status: $("status") ? $("status").textContent : "", liveCtx: !(audioCtx instanceof OfflineAudioContext), len: (cfg.endSec != null ? cfg.endSec - cfg.startSec : totalSec()) };
+}, { format, s0, s1, realtime: flags.has("--realtime"), mp4test: flags.has("--mp4test"), webmtest: flags.has("--webmtest"), dropmeta: flags.has("--dropmeta"), nosuspend: flags.has("--nosuspend"), failmux: flags.has("--failmux"), cancelAt: opt("cancel") != null ? +opt("cancel") : null, twice: flags.has("--twice") });
 if (res.delivered) {
   const tag = flags.has("--realtime") ? "rt-" : flags.has("--mp4test") ? "mp4test-" : flags.has("--webmtest") ? "webmtest-" : "";
   const f = path.join(out, tag + res.delivered.name);
@@ -64,6 +66,6 @@ if (res.delivered) {
 }
 if (flags.has("--log")) console.log(res.log.join("\n"));
 console.log("longest unchanged title", (res.maxStall / 1000).toFixed(1) + "s", JSON.stringify(res.stallTitle), "| time past end:", res.overTime || "none", "| note:", res.note || "-");
-console.log("music", res.len.toFixed(1) + "s", "export took", (res.ms / 1000).toFixed(1) + "s", "status:", res.status);
+console.log("music", res.len.toFixed(1) + "s", "export took", (res.ms / 1000).toFixed(1) + "s", "status:", res.status, res.liveCtx ? "" : "| ✗ audioCtx 還是離線的");
 console.log(errs.filter(e => !/ERR_FAILED|wakeLock|Wake Lock/.test(e)).slice(0, 10).join("\n") || "no errors");
 await browser.close(); server.close();
