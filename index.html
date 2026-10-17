@@ -7083,7 +7083,10 @@ function getPianoBus(){
     const hp = audioCtx.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = PIANO_WIDTH.hp; hp.Q.value = 0.5;
     const lp = audioCtx.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = PIANO_WIDTH.lp; lp.Q.value = 0.5; hp.connect(lp);
     const kL = audioCtx.createGain(), kR = audioCtx.createGain(); kL.gain.value = PIANO_WIDTH.gain - 1; kR.gain.value = -(PIANO_WIDTH.gain - 1);
-    low.connect(split);
+    // 先強制成立體聲再分左右:Safari 的 ChannelSplitter 收到單聲道時右聲道是空的(iPhone 自檢 bus 段左右相關 −0.66;
+    // 記憶體不夠時鋼琴取樣是單聲道,沒有殘響同時進來就會這樣),Chrome 會先複製成左右一樣
+    const up = audioCtx.createGain(); up.channelCount = 2; up.channelCountMode = "explicit"; up.channelInterpretation = "speakers";
+    low.connect(up); up.connect(split);
     split.connect(merge, 0, 0); split.connect(merge, 1, 1);
     split.connect(sideL, 0); split.connect(sideR, 1); sideL.connect(side); sideR.connect(side); side.connect(hp);
     lp.connect(kL); lp.connect(kR); kL.connect(merge, 0, 0); kR.connect(merge, 0, 1);
@@ -10882,10 +10885,29 @@ async function pianoSelfTest(){
   const s = typeof pianoSampleFor === "function" && pianoMan ? pianoSampleFor(60, pianoLayerFor(80)) : null;
   if (!s || typeof OfflineAudioContext === "undefined" || typeof AudioWorkletNode === "undefined") return "";
   const sr = fastExportSampleRate(), len = Math.round(sr * 1.6), at = 0.05, tone = pianoToneFor(80);
+  // 2026-10-17 iPhone 第一次自檢:raw(單聲道取樣直接播)就已經 −42dB(雲端 −77)。取樣檔沒變,單聲道是程式自己把左右相加做的 →
+  // 同一個檔案用幾種方式做成 AudioBuffer 分別測:dec 解碼原樣(立體聲)/ copy 複製成新的立體聲 / mono 現在的左右相加 /
+  // mono0 只複製左聲道 / monoCT 先在 Float32Array 加好再 copyToChannel
+  const bufs = {};
+  try {
+    const res = await fetchSample(pianoBase + pianoFileFor(s.c, s.L) + ".flac");
+    const dec = await audioCtx.decodeAudioData(await res.arrayBuffer());
+    const n = dec.length, l = dec.getChannelData(0), r = dec.getChannelData(Math.min(1, dec.numberOfChannels - 1));
+    bufs.dec = dec;
+    const copy = audioCtx.createBuffer(dec.numberOfChannels, n, dec.sampleRate);
+    for (let c = 0; c < dec.numberOfChannels; c++) copy.getChannelData(c).set(dec.getChannelData(c));
+    bufs.copy = copy;
+    const mono = audioCtx.createBuffer(1, n, dec.sampleRate), md = mono.getChannelData(0);
+    for (let i = 0; i < n; i++) md[i] = 0.5 * (l[i] + r[i]);
+    bufs.mono = mono;
+    const mono0 = audioCtx.createBuffer(1, n, dec.sampleRate); mono0.getChannelData(0).set(l); bufs.mono0 = mono0;
+    const sum = new Float32Array(n); for (let i = 0; i < n; i++) sum[i] = 0.5 * (l[i] + r[i]);
+    const monoCT = audioCtx.createBuffer(1, n, dec.sampleRate); monoCT.copyToChannel(sum, 0); bufs.monoCT = monoCT;
+  } catch (e) { bufs.err = e && e.message || String(e); }
   const saved = {}; for (const k of EXPORT_AUDIO_KEEP) saved[k] = eval(k);
   const out = [];
   try {
-    for (const st of ["raw", "presAuto", "presFix", "bus", "comp", "note"]) {
+    for (const st of ["raw", ...["dec", "copy", "mono", "mono0", "monoCT"].filter(k => bufs[k]), "presAuto", "presFix", "bus", "comp", "note"]) {
       audioCtx = new OfflineAudioContext(2, len, sr);
       initAudioGraph();
       if (!await offlineStep("addModule", masterReady, 15000)) throw new Error("limiter");
@@ -10902,9 +10924,9 @@ async function pianoSelfTest(){
         masterGain.connect(tap);
         playPianoNote(261.63, at, 1.4, false, false, null, null, 80);
       } else {
-        const src = audioCtx.createBufferSource(); src.buffer = s.buf;
+        const src = audioCtx.createBufferSource(); src.buffer = bufs[st] || s.buf;
         let node = src;
-        if (st !== "raw") {
+        if (/^pres|^bus|^comp/.test(st)) {
           const pres = audioCtx.createBiquadFilter(); pres.type = "highshelf"; pres.frequency.value = PIANO_TONE.presFreq;
           if (st === "presAuto") { pres.gain.setValueAtTime(tone.pres + tone.attack, at); pres.gain.setTargetAtTime(tone.pres, at, PIANO_TONE.attackTau); }
           else pres.gain.value = tone.pres;
@@ -10924,7 +10946,7 @@ async function pianoSelfTest(){
     }
   } catch (e) { if (e && e.cancelled) throw e; out.push("err " + (e && e.message || e)); }
   finally { for (const k of EXPORT_AUDIO_KEEP) eval(k + " = saved['" + k + "']"); }
-  const txt = "自檢 ch" + s.buf.numberOfChannels + " " + out.join(" / ") + (pianoPlanInfo ? " · " + pianoPlanInfo : "");
+  const txt = "自檢 ch" + s.buf.numberOfChannels + " " + out.join(" / ") + (bufs.err ? " · 讀檔 err " + bufs.err : "") + (pianoPlanInfo ? " · " + pianoPlanInfo : "");
   console.info(txt);
   return txt;
 }
