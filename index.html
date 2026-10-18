@@ -8649,9 +8649,24 @@ let scoreFit = { s: 1, ty: 0 }, lastScrollX = 0;
    手機直式 9px 時就只看得到約 1.6 秒,不會再放大)。最小就是原本的大小(放不下時才縮小) */
 const SCREEN_SCORE = { maxSp: 13, maxSpWide: 16, wideFrom: 900, fill: 0.8, aheadSec: 2.5, drumAheadSec: 2 };
 // 大螢幕(樂譜區寬 ≥ wideFrom,iPad 橫放、筆電、桌機)上限放寬到 maxSpWide:以前 13px 時樂譜只用樂譜區四成高度(使用者同意,2026-10)
+/* 開頭的譜號不要被切掉(使用者截圖 2026-10:手機直式播放軸在 15%,第一個音對齊播放軸時,前面的譜號/調號/拍號約 150px
+   被推出畫面左邊)。第一個音對齊播放軸時樂譜左緣會跑出畫面的話:開頭時樂譜往右擺到左緣留 START_EDGE px,
+   播放軸對在第一個音上(比平常偏右);之後在「多出來距離 × 2」的樂譜長度內,播放軸平順滑回平常位置、樂譜跟著捲動,不會跳。
+   放得下的尺寸(平板、桌機多半)完全不變 */
+const START_EDGE = 8;
+function startShiftAt(x){
+  const s = scoreFit.s, P = playlineX(), x0 = events.length ? events[0].x : 0;
+  const need = START_EDGE - (P - x0 * s);
+  if (!(need > 0)) return 0;
+  const D = 2 * need / s;   // 樂譜座標:這段距離內滑回去
+  return need * Math.max(0, Math.min(1, 1 - (x - x0) / D));
+}
 function setScrollerX(x){
   lastScrollX = x;
-  $("scroller").style.transform = "translate(" + (playlineX() - x * scoreFit.s) + "px," + scoreFit.ty + "px) scale(" + scoreFit.s + ")";
+  const extra = startShiftAt(x);
+  $("scroller").style.transform = "translate(" + (playlineX() + extra - x * scoreFit.s) + "px," + scoreFit.ty + "px) scale(" + scoreFit.s + ")";
+  const pl = $("playline");
+  if (pl) pl.style.left = (playlineX() + extra) + "px";
 }
 /* 播放軸貼著樂譜:最上/最下的符頭(或譜線)再往外留 PLAYLINE_PAD_SPACES_WITH_PANEL 個譜線間距,跟匯出影片同一條規則 */
 function updatePlaylineExtent(){
