@@ -3612,9 +3612,12 @@ function extendLedgerLineStems(root){
       if (!stemPath) continue;
       const m = (stemPath.getAttribute("d") || "").match(/^M([\d.]+) ([\d.]+)L[\d.]+ ([\d.]+)$/);
       if (!m) continue;
-      const x = parseFloat(m[1]), noteheadY = parseFloat(m[2]);
+      const x = parseFloat(m[1]), noteheadY = parseFloat(m[2]), tipY = parseFloat(m[3]);
       const hasLedger = noteheadY < topY - halfGap || noteheadY > bottomY + halfGap;
       if (!hasLedger) continue;
+      // 只延長「往中線方向」而且還沒到中線的符桿。往譜表外的符桿(下加線的音符桿朝下、上加線的朝上)不動——
+      // 以前不分方向一律接到中線,朝下的符桿被翻成往上、接在符頭左側(使用者反映鼓譜踏板 hi-hat,2026-10)
+      if ((tipY - noteheadY) * (middleY - noteheadY) <= 0 || Math.abs(tipY - noteheadY) >= Math.abs(middleY - noteheadY)) continue;
       if (beamRanges.some(([lo, hi]) => x >= lo - 2 && x <= hi + 2)) continue; // 屬於符尾,跳過避免弄亂角度
       stemPath.setAttribute("d", `M${x} ${noteheadY}L${x} ${middleY}`);
     }
@@ -4490,7 +4493,7 @@ const DRUM_CHOKE_KEYS = new Set([49, 57, 55, 52, 51, 59, 53]);
 /* 止音的時間:記譜慣例(Weinberg/PAS)是「打完立刻抓住」,不是等到音符時值結束——等到時值結束的話,
    慢歌一個八分音符就要響 0.3~0.4 秒、殘響也被餵得很滿,聽起來還是一大片(使用者反映太長)。
    打下去 DRUM_CHOKE_DELAY 秒(手從鼓棒換到抓鈸的時間)就抓,音符比這還短就照時值;抓住後 DRUM_CHOKE_FADE 秒內收掉 */
-const DRUM_CHOKE_DELAY = 0.09, DRUM_CHOKE_FADE = 0.035;
+const DRUM_CHOKE_DELAY = 0.15, DRUM_CHOKE_FADE = 0.08;   // 使用者反映 0.09 / 35ms 太短(2026-10),拉長到約 0.2 秒聽得到鈸聲
 function drumChokeAt(when, durSec){ return when + Math.max(0.04, Math.min(DRUM_CHOKE_DELAY, durSec || DRUM_CHOKE_DELAY)); }   // crash、splash、china、ride(會一直響、可以用手抓住的鈸)
 /* 標出要止音的鈸(n.choke):
    1) 譜上的止音文字 → 那個位置(或之後一拍內最近一個)有打鈸的事件
