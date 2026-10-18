@@ -8340,8 +8340,8 @@ function drawHiHatTop(ctx, cx, cy, R, closedI, openI, ripples, sway){
   drawPieceLabel(ctx, cx - lift * 0.4, cy - lift * 0.6 + R * 0.55, R, openI > 0.3 ? "Open" : "Hi-Hat", "rgba(48,30,6,0.85)");
 }
 
-// labels:App 畫面上不寫鼓件名稱(2026-10 使用者決定:畫布是一般解析度,Retina 上小字會糊,又不想提高解析度吃效能),
-// 匯出影片(畫布夠大、字 10px 以上)照常寫
+// labelsOn:App 畫面只在一般解析度螢幕寫鼓件名稱(2026-10 使用者決定:畫布是 CSS 像素,高解析度螢幕上小字會糊,
+// 又不想提高解析度吃效能;不會糊的就寫),匯出影片(畫布夠大、字 10px 以上)照常寫
 function drawDrumKit(ctx, x, y, w, h, activeMap, labelsOn = true){
   const baseGrad = ctx.createLinearGradient(0, y, 0, y + h);
   baseGrad.addColorStop(0, "#050403");
@@ -8638,7 +8638,9 @@ function drawKeyboardLive(sec){
   ctx.clearRect(0, 0, cv.width, cv.height);
   if (currentInstrument() === "drum") {
     const active = events.length ? getActiveDrumHitsAt(sec + KB_LOOKAHEAD_SEC, useCalib()) : new Map();
-    drawDrumKit(ctx, 0, 0, cv.width, cv.height, active, false);   // App 畫面不寫名稱(見 drawDrumKit)
+    // App 畫面:畫布是 CSS 像素,高解析度螢幕(devicePixelRatio > 1,含瀏覽器放大)會被放大變糊 → 不寫名稱;
+    // 一般解析度螢幕不會糊就寫(使用者決定 2026-10)
+    drawDrumKit(ctx, 0, 0, cv.width, cv.height, active, (window.devicePixelRatio || 1) <= 1);
   } else {
     const active = events.length ? getActiveNotesAt(sec + KB_LOOKAHEAD_SEC, useCalib()) : new Map();
     drawKeyboard(ctx, 0, 0, cv.width, cv.height, active);
