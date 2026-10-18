@@ -7971,33 +7971,50 @@ const DRUM_KIT_PIECES = [
   { id: "tomFloor", type: "drum",   label: "Floor",  x: 676, y: 222, r: 70, lugs: 8 },
   { id: "hihat",    type: "hihat",  label: "Hi-Hat", x: 84,  y: 222, r: 66 },
   { id: "crash1",   type: "cymbal", label: "Crash",  x: 158, y: 88,  r: 84 },
+  // Splash、China 只在樂譜有用到時才畫(drumKitPieces),不然一般鼓譜的鼓組會因為多兩片而變小。
+  // Splash 架在 Crash 與 Tom 1 之間的上方;China 跟第二片 Crash 稍微疊在一起(實際鼓組常見的疊架)
+  { id: "splash",   type: "splash", label: "Splash", x: 298, y: 34,  r: 40, optional: [55] },
   { id: "crash2",   type: "cymbal", label: "Crash",  x: 692, y: 78,  r: 74 },
+  { id: "china",    type: "china",  label: "China",  x: 800, y: 36,  r: 52, optional: [52] },
   { id: "ride",     type: "ride",   label: "Ride",   x: 868, y: 184, r: 98 }
 ];
+// 目前樂譜要畫的鼓件(有用到 Splash/China 才加進來);events 換了才重算
+let _drumKitPiecesCache = { ev: null, n: -1, list: null, key: "" };
+function drumKitPieces(){
+  const evs = typeof events !== "undefined" ? events : [];
+  if (_drumKitPiecesCache.ev === evs && _drumKitPiecesCache.n === evs.length) return _drumKitPiecesCache.list;
+  const used = new Set();
+  for (const ev of evs) for (const n of ev.notes) if (n.drum) used.add(n.key);
+  const list = DRUM_KIT_PIECES.filter(p => !p.optional || p.optional.some(k => used.has(k)));
+  _drumKitPiecesCache = { ev: evs, n: evs.length, list, key: list.map(p => p.id).join(",") };
+  return list;
+}
 // 每個部位在設計座標裡實際佔到的範圍(大鼓含踏板),用來算縮放與置中
 function drumPieceExtent(p){
   if (p.type === "kick") return { hx: p.w / 2, top: p.h / 2, bottom: p.h / 2 + p.h * 0.16 };
   const e = p.r * (p.type === "drum" ? 1.06 : 1.02);
   return { hx: e, top: e, bottom: e };
 }
-const DRUM_KIT_BOUNDS = (() => {
+function drumKitBounds(){
+  const pieces = drumKitPieces();
   let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
-  for (const p of DRUM_KIT_PIECES) {
+  for (const p of pieces) {
     const e = drumPieceExtent(p);
     x0 = Math.min(x0, p.x - e.hx); x1 = Math.max(x1, p.x + e.hx);
     y0 = Math.min(y0, p.y - e.top); y1 = Math.max(y1, p.y + e.bottom);
   }
   return { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, w: x1 - x0, h: y1 - y0 };
-})();
-let _drumFitCache = { w: -1, h: -1 };
+}
+let _drumFitCache = { w: -1, h: -1, key: "" };
 function fitDrumLayout(w, h){
-  if (_drumFitCache.w === w && _drumFitCache.h === h) return _drumFitCache;
-  const B = DRUM_KIT_BOUNDS;
+  const pieces = drumKitPieces(), key = _drumKitPiecesCache.key;
+  if (_drumFitCache.w === w && _drumFitCache.h === h && _drumFitCache.key === key) return _drumFitCache;
+  const B = drumKitBounds();
   const pad = Math.min(w, h) * 0.06; // 留給打擊光暈的邊距,光暈才不會被面板邊緣切掉
   const s = Math.max(0.05, Math.min((w - pad * 2) / B.w, (h - pad * 2) / B.h));
   // 位置可以比尺寸多拉開一點,但每個部位(含自身半徑)都必須仍然完整落在面板內
   let sx = s * 1.3, sy = s * 1.3;
-  for (const p of DRUM_KIT_PIECES) {
+  for (const p of pieces) {
     const e = drumPieceExtent(p);
     const dx = Math.abs(p.x - B.cx);
     if (dx > 1) sx = Math.min(sx, (w / 2 - pad - e.hx * s) / dx);
@@ -8005,7 +8022,7 @@ function fitDrumLayout(w, h){
     if (dyTop > 1) sy = Math.min(sy, (h / 2 - pad - e.top * s) / dyTop);
     if (dyBot > 1) sy = Math.min(sy, (h / 2 - pad - e.bottom * s) / dyBot);
   }
-  _drumFitCache = { w, h, s, sx: Math.max(s, sx), sy: Math.max(s, sy) };
+  _drumFitCache = { w, h, key, B, s, sx: Math.max(s, sx), sy: Math.max(s, sy) };
   return _drumFitCache;
 }
 
@@ -8035,20 +8052,38 @@ function mixColor2(base, accent, t){ // 同 mixColor,但回傳 [r,g,b] 陣列,�
 // 銅鈸=偏亮的香檳金、鼓皮=深一點的琥珀金,同一個暖色家族(跟琴鍵發光同一套視覺語言)
 const DRUM_ACCENT = [242, 185, 75], CYMBAL_ACCENT = [255, 226, 150];
 
-/* 打擊光暈 + 往外擴散的一圈漣漪。用徑向漸層畫光暈,不用 shadowBlur:
-   匯出影片每幀都要整組重畫,shadowBlur 在大畫布上很吃效能 */
-function drawHitGlow(ctx, cx, cy, R, accent, intensity, noRipple){
-  if (intensity <= 0) return;
+/* 打擊光暈 + 往外擴散的漣漪。用徑向漸層畫光暈,不用 shadowBlur:
+   匯出影片每幀都要整組重畫,shadowBlur 在大畫布上很吃效能。
+   ripples:這個鼓件最近每一下各自一圈(p 擴散進度 0~1、v 力度強度),滾奏/裝飾音看得出一下一下;
+   光暈範圍跟著強度變大(重音的光暈比一般擊打大) */
+function drawHitGlow(ctx, cx, cy, R, accent, intensity, ripples){
   const c = accent[0] + "," + accent[1] + "," + accent[2];
-  const g = ctx.createRadialGradient(cx, cy, R * 0.7, cx, cy, R * 1.55);
-  g.addColorStop(0, "rgba(" + c + "," + (0.55 * intensity) + ")");
-  g.addColorStop(1, "rgba(" + c + ",0)");
+  if (intensity > 0) {
+    const outer = R * (1.3 + 0.3 * intensity);
+    const g = ctx.createRadialGradient(cx, cy, R * 0.7, cx, cy, outer);
+    g.addColorStop(0, "rgba(" + c + "," + (0.55 * intensity) + ")");
+    g.addColorStop(1, "rgba(" + c + ",0)");
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(cx, cy, outer, 0, Math.PI * 2); ctx.fill();
+  }
+  if (!ripples) return;
+  for (const r of ripples) {
+    const a = 0.75 * r.v * Math.pow(1 - r.p, 1.3);
+    if (a < 0.02) continue;
+    ctx.strokeStyle = "rgba(" + c + "," + a.toFixed(3) + ")";
+    ctx.lineWidth = Math.max(1, R * (0.018 + 0.026 * r.v) * (1 - 0.5 * r.p));
+    ctx.beginPath(); ctx.arc(cx, cy, R * (1.04 + r.p * (0.28 + 0.26 * r.v)), 0, Math.PI * 2); ctx.stroke();
+  }
+}
+/* 落地陰影:鼓件底下一片柔和的暗影,整組鼓才像放在地上(以前每個鼓件像浮在黑色背景上)。
+   銅鈸架得比較高,陰影離得遠、比較淡 */
+function drawPieceShadow(ctx, cx, cy, R, high){
+  const ox = R * (high ? 0.1 : 0.05), oy = R * (high ? 0.2 : 0.11), a = high ? 0.32 : 0.5;
+  const g = ctx.createRadialGradient(cx + ox, cy + oy, R * 0.6, cx + ox, cy + oy, R * 1.2);
+  g.addColorStop(0, "rgba(0,0,0," + a + ")");
+  g.addColorStop(1, "rgba(0,0,0,0)");
   ctx.fillStyle = g;
-  ctx.beginPath(); ctx.arc(cx, cy, R * 1.55, 0, Math.PI * 2); ctx.fill();
-  if (noRipple) return;
-  ctx.strokeStyle = "rgba(" + c + "," + (0.7 * intensity) + ")";
-  ctx.lineWidth = Math.max(1, R * 0.035);
-  ctx.beginPath(); ctx.arc(cx, cy, R * (1.04 + (1 - intensity) * 0.32), 0, Math.PI * 2); ctx.stroke();
+  ctx.beginPath(); ctx.arc(cx + ox, cy + oy, R * 1.2, 0, Math.PI * 2); ctx.fill();
 }
 
 /* 部位名稱:字級完全跟著部位實際畫出來的尺寸走(匯出畫布大,字才會跟著放大);
@@ -8065,9 +8100,10 @@ function drawPieceLabel(ctx, cx, cy, R, text, color){
 }
 
 /* 鼓(小鼓/中鼓/落地鼓)俯視:鉻色鼓框 + 一圈螺絲耳 + 霧面白鼓皮。
-   rimIntensity 是邊擊(cross stick)專用:棒子打在鼓框上,所以亮的是鼓框不是鼓皮 */
-function drawDrumTop(ctx, cx, cy, R, lugs, intensity, rimIntensity, label){
-  drawHitGlow(ctx, cx, cy, R, DRUM_ACCENT, Math.max(intensity, rimIntensity));
+   rimIntensity 是邊擊(cross stick)專用:棒子打在鼓框上,所以亮的是鼓框不是鼓皮。
+   打擊時鼓皮靠鼓手那側(下方)多一個鼓棒落點的亮點 */
+function drawDrumTop(ctx, cx, cy, R, lugs, intensity, rimIntensity, label, ripples){
+  drawHitGlow(ctx, cx, cy, R, DRUM_ACCENT, Math.max(intensity, rimIntensity), ripples);
   // 螺絲耳:沿鼓框外緣均勻分布,先畫,讓鼓框蓋住內側一半
   ctx.fillStyle = "#8d9197";
   for (let i = 0; i < lugs; i++) {
@@ -8094,6 +8130,15 @@ function drawDrumTop(ctx, cx, cy, R, lugs, intensity, rimIntensity, label){
   head.addColorStop(1, mixColor([188, 182, 170], DRUM_ACCENT, intensity * 0.6, 1));
   ctx.fillStyle = head;
   ctx.beginPath(); ctx.arc(cx, cy, R * 0.9, 0, Math.PI * 2); ctx.fill();
+  // 鼓棒落點:鼓手那側(下方)偏中間,打下去瞬間一個小亮點
+  if (intensity > 0.05) {
+    const hx = cx - R * 0.08, hy = cy + R * 0.22;
+    const hg = ctx.createRadialGradient(hx, hy, 0, hx, hy, R * 0.32);
+    hg.addColorStop(0, "rgba(255,246,222," + (0.85 * intensity).toFixed(3) + ")");
+    hg.addColorStop(1, "rgba(255,246,222,0)");
+    ctx.fillStyle = hg;
+    ctx.beginPath(); ctx.arc(hx, hy, R * 0.32, 0, Math.PI * 2); ctx.fill();
+  }
   // 鼓皮邊緣的 collar(鼓皮翻過鼓身邊緣形成的一圈微陰影)
   ctx.strokeStyle = "rgba(0,0,0,0.12)";
   ctx.lineWidth = Math.max(0.5, R * 0.03);
@@ -8106,11 +8151,12 @@ function drawDrumTop(ctx, cx, cy, R, lugs, intensity, rimIntensity, label){
 }
 
 /* 大鼓俯視:從上面看是一段橫躺的圓筒(前後兩個鼓框),鼓手那一側(下方)接著踏板。
-   中鼓架在大鼓上方,所以大鼓上半段會被中鼓蓋住,跟實體鼓組一樣 */
-function drawKickTop(ctx, cx, cy, W, H, intensity, label){
+   中鼓架在大鼓上方,所以大鼓上半段會被中鼓蓋住,跟實體鼓組一樣。
+   踏板(2026-10 改大):踏板底座 + 連桿 + 毛氈鼓槌,平常鼓槌離鼓皮一段距離,打下去往前貼上鼓皮,踏板被踩下(變短變暗) */
+function drawKickTop(ctx, cx, cy, W, H, intensity, label, ripples){
   const x0 = cx - W / 2, y0 = cy - H / 2, y1 = cy + H / 2;
-  // 大鼓是長方形,圓形漣漪套上去很怪:只留光暈,改成鼓身外框發亮
-  drawHitGlow(ctx, cx, cy + H * 0.1, W * 0.62, DRUM_ACCENT, intensity, true);
+  // 大鼓是長方形,圓形漣漪套上去很怪:光暈 + 鼓身外框一圈圈往外擴的方框
+  drawHitGlow(ctx, cx, cy + H * 0.1, W * 0.62, DRUM_ACCENT, intensity, null);
   // 鼓身:酒紅亮漆,橫向漸層做出圓筒的立體感
   const shell = ctx.createLinearGradient(x0, 0, x0 + W, 0);
   shell.addColorStop(0, mixColor([46, 14, 12], DRUM_ACCENT, intensity * 0.35, 1));
@@ -8119,6 +8165,13 @@ function drawKickTop(ctx, cx, cy, W, H, intensity, label){
   shell.addColorStop(0.7, mixColor([104, 28, 22], DRUM_ACCENT, intensity * 0.5, 1));
   shell.addColorStop(1, mixColor([36, 10, 9], DRUM_ACCENT, intensity * 0.3, 1));
   ctx.fillStyle = shell;
+  ctx.fillRect(x0, y0, W, H);
+  // 鼓身上的木紋/漆面反光(一條縱向亮帶)
+  const gloss = ctx.createLinearGradient(x0, 0, x0 + W, 0);
+  gloss.addColorStop(0.36, "rgba(255,220,200,0)");
+  gloss.addColorStop(0.44, "rgba(255,220,200,0.16)");
+  gloss.addColorStop(0.52, "rgba(255,220,200,0)");
+  ctx.fillStyle = gloss;
   ctx.fillRect(x0, y0, W, H);
   // 前後兩個鼓框
   const hoopH = H * 0.08;
@@ -8132,41 +8185,98 @@ function drawKickTop(ctx, cx, cy, W, H, intensity, label){
     ctx.lineWidth = Math.max(1, W * 0.025);
     ctx.strokeRect(x0 - W * 0.03, y0 - W * 0.01, W * 1.06, H + W * 0.02);
   }
-  // 踏板:踏板底座 + 鼓槌(打擊瞬間貼上鼓皮,平常離開一小段)
-  const pedalW = W * 0.24, pedalTop = y1 + H * 0.015, pedalH = H * 0.14;
-  ctx.fillStyle = "#2b2d31";
-  ctx.fillRect(cx - pedalW / 2, pedalTop, pedalW, pedalH);
-  ctx.fillStyle = "#4a4d53";
-  ctx.fillRect(cx - pedalW * 0.36, pedalTop + pedalH * 0.2, pedalW * 0.72, pedalH * 0.7);
-  const beaterR = W * 0.07;
-  const beaterY = y1 + beaterR * 0.2 + (1 - intensity) * H * 0.05;
-  ctx.fillStyle = mixColor([235, 232, 225], DRUM_ACCENT, intensity, 1);
-  ctx.beginPath(); ctx.arc(cx, beaterY, beaterR * 0.55, 0, Math.PI * 2); ctx.fill();
+  for (const r of ripples || []) {
+    const a = 0.7 * r.v * Math.pow(1 - r.p, 1.3);
+    if (a < 0.02) continue;
+    const g = W * (0.04 + r.p * (0.08 + 0.07 * r.v));
+    ctx.strokeStyle = "rgba(" + DRUM_ACCENT.join(",") + "," + a.toFixed(3) + ")";
+    ctx.lineWidth = Math.max(1, W * (0.012 + 0.014 * r.v) * (1 - 0.5 * r.p));
+    ctx.strokeRect(x0 - g, y0 - g, W + g * 2, H + g * 2);
+  }
+  // 踏板:底座(踏下去時變短、變暗,像腳往下踩) + 連桿 + 毛氈鼓槌
+  const pedalTop = y1 + H * 0.015, pedalH = H * 0.145 * (1 - 0.18 * intensity), pedalW = W * 0.26;
+  ctx.fillStyle = "#24262a";
+  ctx.beginPath();
+  ctx.moveTo(cx - pedalW * 0.42, pedalTop); ctx.lineTo(cx + pedalW * 0.42, pedalTop);
+  ctx.lineTo(cx + pedalW * 0.5, pedalTop + pedalH); ctx.lineTo(cx - pedalW * 0.5, pedalTop + pedalH);
+  ctx.closePath(); ctx.fill();
+  const plate = ctx.createLinearGradient(0, pedalTop, 0, pedalTop + pedalH);
+  plate.addColorStop(0, mixColor([96, 100, 108], DRUM_ACCENT, intensity * 0.3, 1));
+  plate.addColorStop(1, mixColor([58, 61, 67], DRUM_ACCENT, intensity * 0.2, 1));
+  ctx.fillStyle = plate;
+  ctx.fillRect(cx - pedalW * 0.3, pedalTop + pedalH * 0.12, pedalW * 0.6, pedalH * 0.76);
+  // 鼓槌:平常停在離鼓皮約 0.09H 的地方,打下去貼上鼓皮
+  const beaterR = W * 0.05;
+  const beaterY = y1 + beaterR * 0.35 + (1 - intensity) * H * 0.075;
+  ctx.strokeStyle = "#a7acb4";
+  ctx.lineWidth = Math.max(1, W * 0.014);
+  ctx.beginPath(); ctx.moveTo(cx, pedalTop + pedalH * 0.85); ctx.lineTo(cx, beaterY); ctx.stroke();
+  ctx.fillStyle = "rgba(0,0,0,0.35)";
+  ctx.beginPath(); ctx.arc(cx + beaterR * 0.15, beaterY + beaterR * 0.25, beaterR, 0, Math.PI * 2); ctx.fill();
+  const felt = ctx.createRadialGradient(cx - beaterR * 0.3, beaterY - beaterR * 0.3, beaterR * 0.1, cx, beaterY, beaterR);
+  felt.addColorStop(0, mixColor([250, 247, 240], DRUM_ACCENT, intensity * 0.6, 1));
+  felt.addColorStop(1, mixColor([196, 190, 178], DRUM_ACCENT, intensity * 0.5, 1));
+  ctx.fillStyle = felt;
+  ctx.beginPath(); ctx.arc(cx, beaterY, beaterR, 0, Math.PI * 2); ctx.fill();
   // 名稱寫在沒被中鼓蓋住的下半段
   drawPieceLabel(ctx, cx, cy + H * 0.2, W * 0.42, label, "rgba(255,238,220,0.9)");
 }
 
 /* 銅鈸俯視:青銅漸層 + 車床紋(同心細圈) + 金屬交叉反光 + 中央鈸碗 + 氈墊螺帽。
-   bellIntensity 只給 Ride 用:敲鈴心(ride bell)時只亮中間的鈸碗,一眼就能跟一般 ride 區分 */
-function drawCymbalTop(ctx, cx, cy, R, intensity, bellIntensity, bellRatio){
-  drawHitGlow(ctx, cx, cy, R, CYMBAL_ACCENT, intensity);
-  const body = ctx.createRadialGradient(cx - R * 0.2, cy - R * 0.25, R * 0.05, cx, cy, R);
-  body.addColorStop(0, mixColor([246, 222, 150], CYMBAL_ACCENT, intensity, 1));
-  body.addColorStop(0.4, mixColor([206, 164, 86], CYMBAL_ACCENT, intensity * 0.85, 1));
-  body.addColorStop(0.8, mixColor([150, 110, 50], CYMBAL_ACCENT, intensity * 0.6, 1));
-  body.addColorStop(1, mixColor([96, 68, 30], CYMBAL_ACCENT, intensity * 0.4, 1));
+   bellIntensity 只給 Ride 用:敲鈴心(ride bell)時只亮中間的鈸碗,一眼就能跟一般 ride 區分。
+   opts.sway(約 −1~1):打擊後的晃動——鈸面沿一條斜軸稍微傾斜(壓扁一點、往一邊偏)、反光帶跟著轉;
+   opts.style:"china"(深色、邊緣上翹的一圈)、"splash"(小而亮) */
+const CYMBAL_PALETTE = {
+  normal: [[246, 222, 150], [206, 164, 86], [150, 110, 50], [96, 68, 30]],
+  splash: [[250, 232, 170], [222, 184, 104], [166, 124, 58], [108, 78, 34]],
+  china:  [[226, 176, 112], [178, 116, 58], [122, 70, 30], [74, 40, 16]]
+};
+function drawCymbalTop(ctx, cx, cy, R, intensity, bellIntensity, bellRatio, opts){
+  const sway = (opts && opts.sway) || 0, style = (opts && opts.style) || "normal";
+  drawHitGlow(ctx, cx, cy, R, CYMBAL_ACCENT, intensity, opts && opts.ripples);
+  ctx.save();
+  if (sway) {
+    // 晃動:沿 −35° 的軸傾斜(垂直於軸的方向壓扁最多 9%),整片往傾斜那側偏一點
+    const axis = -0.6;
+    ctx.translate(cx, cy);
+    ctx.rotate(axis);
+    ctx.translate(R * 0.035 * sway, 0);
+    ctx.scale(1, 1 - 0.09 * Math.min(1, Math.abs(sway)));
+    ctx.rotate(-axis);
+    ctx.translate(-cx, -cy);
+  }
+  const pal = CYMBAL_PALETTE[style] || CYMBAL_PALETTE.normal;
+  const fx = cx - R * 0.2 + R * 0.18 * sway, fy = cy - R * 0.25;
+  const body = ctx.createRadialGradient(fx, fy, R * 0.05, cx, cy, R);
+  body.addColorStop(0, mixColor(pal[0], CYMBAL_ACCENT, intensity, 1));
+  body.addColorStop(0.4, mixColor(pal[1], CYMBAL_ACCENT, intensity * 0.85, 1));
+  body.addColorStop(0.8, mixColor(pal[2], CYMBAL_ACCENT, intensity * 0.6, 1));
+  body.addColorStop(1, mixColor(pal[3], CYMBAL_ACCENT, intensity * 0.4, 1));
   ctx.fillStyle = body;
   ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.fill();
   // 車床紋:一圈圈明暗交錯的細紋
   ctx.lineWidth = Math.max(0.5, R * 0.012);
-  for (let k = 0, n = 14; k < n; k++) {
-    const t = bellRatio + (1 - bellRatio) * (k + 0.5) / n;
+  const lathe = style === "china" ? 9 : 14, edge = style === "china" ? 0.8 : 1;
+  for (let k = 0; k < lathe; k++) {
+    const t = bellRatio + (edge - bellRatio) * (k + 0.5) / lathe;
     ctx.strokeStyle = k % 2 ? "rgba(255,245,210,0.13)" : "rgba(60,38,10,0.13)";
     ctx.beginPath(); ctx.arc(cx, cy, R * t, 0, Math.PI * 2); ctx.stroke();
   }
-  // 金屬鈸面特有的交叉反光(兩道對角亮帶);舊版瀏覽器沒有 createConicGradient 就略過
+  // China:最外圈往上翹的一圈(較亮的外緣 + 內側一條摺線陰影)
+  if (style === "china") {
+    ctx.lineWidth = R * 0.17;
+    ctx.strokeStyle = mixColor([196, 138, 76], CYMBAL_ACCENT, intensity * 0.6, 0.85);
+    ctx.beginPath(); ctx.arc(cx, cy, R * 0.905, 0, Math.PI * 2); ctx.stroke();
+    ctx.lineWidth = Math.max(1, R * 0.025);
+    ctx.strokeStyle = "rgba(40,18,4,0.55)";
+    ctx.beginPath(); ctx.arc(cx, cy, R * 0.815, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = "rgba(255,232,190,0.35)";
+    ctx.lineWidth = Math.max(0.5, R * 0.015);
+    ctx.beginPath(); ctx.arc(cx, cy, R * 0.975, Math.PI * 1.05, Math.PI * 1.5); ctx.stroke();
+  }
+  // 金屬鈸面特有的交叉反光(兩道對角亮帶),晃動時跟著轉;舊版瀏覽器沒有 createConicGradient 就略過
   if (ctx.createConicGradient) {
-    const sheen = ctx.createConicGradient(-Math.PI / 4, cx, cy);
+    const sheen = ctx.createConicGradient(-Math.PI / 4 + sway * 0.7, cx, cy);
     sheen.addColorStop(0, "rgba(255,255,255,0.28)");
     sheen.addColorStop(0.1, "rgba(255,255,255,0)");
     sheen.addColorStop(0.4, "rgba(255,255,255,0)");
@@ -8182,12 +8292,13 @@ function drawCymbalTop(ctx, cx, cy, R, intensity, bellIntensity, bellRatio){
   ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.stroke();
   // 鈸碗
   const bR = R * bellRatio;
-  if (bellIntensity > 0) drawHitGlow(ctx, cx, cy, bR * 1.9, CYMBAL_ACCENT, Math.min(1, bellIntensity * 1.3));
+  if (bellIntensity > 0) drawHitGlow(ctx, cx, cy, bR * 1.9, CYMBAL_ACCENT, Math.min(1, bellIntensity * 1.3), null);
   const bell = ctx.createRadialGradient(cx - bR * 0.35, cy - bR * 0.4, bR * 0.1, cx, cy, bR);
   // 鈸碗本來就是亮金色,混入同色系的 accent 幾乎看不出變化,鈴心打擊改成閃近白色
   const BELL_FLASH = [255, 252, 236];
-  bell.addColorStop(0, mixColor(mixColor2([255, 238, 180], CYMBAL_ACCENT, intensity), BELL_FLASH, bellIntensity, 1));
-  bell.addColorStop(1, mixColor(mixColor2([168, 124, 58], CYMBAL_ACCENT, intensity * 0.7), BELL_FLASH, bellIntensity * 0.85, 1));
+  const bellBase = style === "china" ? [[236, 196, 140], [140, 88, 40]] : [[255, 238, 180], [168, 124, 58]];
+  bell.addColorStop(0, mixColor(mixColor2(bellBase[0], CYMBAL_ACCENT, intensity), BELL_FLASH, bellIntensity, 1));
+  bell.addColorStop(1, mixColor(mixColor2(bellBase[1], CYMBAL_ACCENT, intensity * 0.7), BELL_FLASH, bellIntensity * 0.85, 1));
   ctx.fillStyle = bell;
   ctx.beginPath(); ctx.arc(cx, cy, bR, 0, Math.PI * 2); ctx.fill();
   ctx.strokeStyle = "rgba(60,38,10,0.35)";
@@ -8198,11 +8309,12 @@ function drawCymbalTop(ctx, cx, cy, R, intensity, bellIntensity, bellRatio){
   ctx.beginPath(); ctx.arc(cx, cy, Math.max(1.5, R * 0.055), 0, Math.PI * 2); ctx.fill();
   ctx.fillStyle = "#b9bcc2";
   ctx.beginPath(); ctx.arc(cx, cy, Math.max(0.8, R * 0.025), 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
 }
 
 /* Hi-Hat:上下兩片。閉合時下片只露出一圈細邊;開放打擊時上片往上抬、兩片錯開,
-   露出較大的下片邊緣和中間的陰影縫隙,名稱也換成「Open」,開/閉一眼就分得出來 */
-function drawHiHatTop(ctx, cx, cy, R, closedI, openI){
+   露出較大的下片邊緣和中間的陰影縫隙,名稱也換成「Open」,開/閉一眼就分得出來。開放時上片會晃 */
+function drawHiHatTop(ctx, cx, cy, R, closedI, openI, ripples, sway){
   const lift = R * 0.13 * openI;
   const I = Math.max(closedI, openI);
   drawCymbalTop(ctx, cx + R * 0.05 + lift * 0.3, cy + R * 0.06 + lift * 0.4, R * 0.98, I * 0.6, 0, 0.26);
@@ -8210,7 +8322,7 @@ function drawHiHatTop(ctx, cx, cy, R, closedI, openI){
     ctx.fillStyle = "rgba(0,0,0," + (0.35 * openI) + ")";
     ctx.beginPath(); ctx.arc(cx - lift * 0.1, cy - lift * 0.1, R * 1.01, 0, Math.PI * 2); ctx.fill();
   }
-  drawCymbalTop(ctx, cx - lift * 0.4, cy - lift * 0.6, R, I, 0, 0.26);
+  drawCymbalTop(ctx, cx - lift * 0.4, cy - lift * 0.6, R, I, 0, 0.26, { ripples, sway });
   drawPieceLabel(ctx, cx - lift * 0.4, cy - lift * 0.6 + R * 0.55, R, openI > 0.3 ? "Open" : "Hi-Hat", "rgba(48,30,6,0.85)");
 }
 
@@ -8222,7 +8334,7 @@ function drawDrumKit(ctx, x, y, w, h, activeMap){
   ctx.fillRect(x, y, w, h);
 
   const fit = fitDrumLayout(w, h);
-  const B = DRUM_KIT_BOUNDS;
+  const B = fit.B;
   const px = v => x + w / 2 + (v - B.cx) * fit.sx;
   const py = v => y + h / 2 + (v - B.cy) * fit.sy;
   // 鼓底下的地毯:一片很淡的暖色橢圓,讓整組鼓有「放在同一塊地上」的整體感,而不是零件浮在黑色背景上
@@ -8238,19 +8350,34 @@ function drawDrumKit(ctx, x, y, w, h, activeMap){
 
   const s = fit.s;
   const act = id => activeMap.get(id) || 0;
-  for (const p of DRUM_KIT_PIECES) {
+  const rip = id => (activeMap.ripples && activeMap.ripples.get(id)) || null;
+  const sw = id => (activeMap.sway && activeMap.sway.get(id)) || 0;
+  for (const p of drumKitPieces()) {
     const cx = px(p.x), cy = py(p.y);
+    // 陰影跟著繪製順序畫:後畫的鼓件(例如中鼓)的陰影會落在先畫的(大鼓)上面
+    if (p.type === "kick") {
+      const W = p.w * s, H = p.h * s;
+      ctx.fillStyle = "rgba(0,0,0,0.45)";
+      ctx.fillRect(cx - W / 2 + W * 0.04, cy - H / 2 + H * 0.06, W * 1.02, H * 1.0);
+    } else drawPieceShadow(ctx, cx, cy, p.r * s, p.type !== "drum");
     switch (p.type) {
-      case "kick":   drawKickTop(ctx, cx, cy, p.w * s, p.h * s, act("kick"), p.label); break;
-      case "drum":   drawDrumTop(ctx, cx, cy, p.r * s, p.lugs, act(p.id), p.id === "snare" ? act("snareRim") : 0, p.label); break;
-      case "hihat":  drawHiHatTop(ctx, cx, cy, p.r * s, act("hihat"), act("hihatOpen")); break;
+      case "kick":   drawKickTop(ctx, cx, cy, p.w * s, p.h * s, act("kick"), p.label, rip("kick")); break;
+      case "drum": {
+        const rips = p.id === "snare" ? (rip("snare") || []).concat(rip("snareRim") || []) : rip(p.id);
+        drawDrumTop(ctx, cx, cy, p.r * s, p.lugs, act(p.id), p.id === "snare" ? act("snareRim") : 0, p.label, rips);
+        break;
+      }
+      case "hihat":  drawHiHatTop(ctx, cx, cy, p.r * s, act("hihat"), act("hihatOpen"), (rip("hihat") || []).concat(rip("hihatOpen") || []), sw("hihatOpen")); break;
       case "ride":
-        drawCymbalTop(ctx, cx, cy, p.r * s, act("ride"), act("rideBell"), 0.24);
+        drawCymbalTop(ctx, cx, cy, p.r * s, act("ride"), act("rideBell"), 0.24, { ripples: (rip("ride") || []).concat(rip("rideBell") || []), sway: sw("ride") });
         drawPieceLabel(ctx, cx, cy + p.r * s * 0.55, p.r * s * 0.85, p.label, "rgba(48,30,6,0.85)");
         break;
-      default:
-        drawCymbalTop(ctx, cx, cy, p.r * s, act(p.id), 0, 0.2);
-        drawPieceLabel(ctx, cx, cy + p.r * s * 0.55, p.r * s * 0.9, p.label, "rgba(48,30,6,0.85)");
+      default: {
+        const style = p.type === "china" ? "china" : p.type === "splash" ? "splash" : "normal";
+        drawCymbalTop(ctx, cx, cy, p.r * s, act(p.id), 0, style === "china" ? 0.17 : 0.2, { ripples: rip(p.id), sway: sw(p.id), style });
+        // 小片的 Splash 字放大一點才讀得到
+        drawPieceLabel(ctx, cx, cy + p.r * s * 0.55, p.r * s * (p.type === "splash" ? 1.15 : 0.9), p.label, style === "china" ? "rgba(255,236,206,0.92)" : "rgba(48,30,6,0.85)");
+      }
     }
   }
 }
@@ -8305,7 +8432,11 @@ function getActiveNotesAt(sec, calib){
 }
 
 /* 找出某個時間點正在發聲的鼓件,供鼓組面板高亮使用。鼓聲是瞬間的打擊,不像琴鍵可以按住延音,
-   所以不用音符寫的時值,而是固定給一段短暫的視覺餘光(閃光後快速衰減),比較符合真實打點的感覺 */
+   所以不用音符寫的時值,而是固定給一段短暫的視覺餘光(閃光後快速衰減),比較符合真實打點的感覺。
+   2026-10 鼓組美術改進(使用者選的):
+   - 亮度/漣漪大小照這一下的實際力度(humanizeDrumHit 的 s,跟聲音同一個值):重音更亮、鬼音更淡(以前只有鬼音一半、其他一樣亮)
+   - 每一下各自一圈漣漪(map.ripples),滾奏、裝飾音看得出一下一下(以前同一鼓件只取最亮的那一下,連打像一直亮著)
+   - 銅鈸被打後會晃(map.sway)、餘光跟著聲音慢慢消失(map.ring);止音(n.choke)時立刻停住 */
 const DRUM_PIECES = {
   35: "kick", 36: "kick",
   38: "snare", 40: "snare", 39: "snare",
@@ -8315,21 +8446,43 @@ const DRUM_PIECES = {
   48: "tomHi", 50: "tomHi",
   45: "tomMid", 47: "tomMid",
   41: "tomFloor", 43: "tomFloor",
-  49: "crash1", 55: "crash1",
-  57: "crash2", 52: "crash2",
+  49: "crash1", 55: "splash",
+  57: "crash2", 52: "china",
   51: "ride", 59: "ride",
   53: "rideBell" // 鈴心:只亮中間的鈸碗
 };
-const DRUM_FLASH_SEC = 0.22; // 打擊後視覺餘光衰減時間
-let drumScanCursor = 0, drumScanLastSec = -1;
+const DRUM_FLASH_SEC = 0.22;   // 打擊後視覺餘光衰減時間
+const DRUM_RIPPLE_SEC = 0.36;  // 每一下的漣漪擴散時間
+/* 銅鈸晃動:每一下 = 一段衰減的正弦(擺幅 amp、衰減 tau 秒、每秒 freq 次),同一片鈸的每一下疊加;
+   ring = 打擊後跟著聲音慢慢消失的微弱餘光(相對亮度)。閉合 hi-hat 不晃 */
+const DRUM_SWAY = {
+  crash1:    { amp: 1,    tau: 1.3, freq: 1.5, ring: 0.28 },
+  crash2:    { amp: 1,    tau: 1.3, freq: 1.6, ring: 0.28 },
+  splash:    { amp: 0.9,  tau: 0.6, freq: 2.4, ring: 0.22 },
+  china:     { amp: 0.9,  tau: 1.0, freq: 1.4, ring: 0.26 },
+  ride:      { amp: 0.4,  tau: 1.8, freq: 1.1, ring: 0.16 },
+  rideBell:  { amp: 0.3,  tau: 1.8, freq: 1.1, ring: 0.16, as: "ride" },
+  hihatOpen: { amp: 0.35, tau: 0.35, freq: 3.0, ring: 0 }
+};
+const DRUM_SWAY_SEC = 4;       // 超過這麼久的打擊不再算晃動
+const DRUM_CHOKE_VIS_TAU = 0.05;   // 止音後晃動/餘光收掉的時間常數
+// 力度 → 視覺強度:鬼音(s≈0.3)約 0.5、一般(≈0.72)約 0.83、重音(≈0.95)1
+function drumVisStrength(ev, n){
+  const v = humanizeDrumHit(ev, n).s;
+  return 0.25 + 0.75 * Math.pow(Math.max(0, Math.min(1, (v - 0.1) / 0.85)), 0.8);
+}
+let drumScanCursor = 0, drumScanLastSec = -1, drumSwayCursor = 0;
 function getActiveDrumHitsAt(sec, calib){
-  if (sec < drumScanLastSec - 0.5) drumScanCursor = 0; // 倒退播放(重新開始/跳轉),重置游標
+  if (sec < drumScanLastSec - 0.5) { drumScanCursor = 0; drumSwayCursor = 0; } // 倒退播放(重新開始/跳轉),重置游標
   drumScanLastSec = sec;
-  const map = new Map(); // piece -> 0~1 的餘光強度,剛打下去是 1,隨時間衰減到 0
+  const map = new Map(); // piece -> 0~1 的餘光強度,剛打下去最亮,隨時間衰減到 0
+  map.ripples = new Map();   // piece -> [{ p: 0~1 擴散進度, v: 強度 }]
+  map.sway = new Map();      // piece -> 晃動量(約 −1~1)
+  const winSec = Math.max(DRUM_FLASH_SEC, DRUM_RIPPLE_SEC);
   while (drumScanCursor < events.length) {
     const ev = events[drumScanCursor];
     const t0 = posToSec(ev.tWhole, calib);
-    if (t0 + DRUM_FLASH_SEC >= sec) break;
+    if (t0 + winSec >= sec) break;
     drumScanCursor++;
   }
   for (let i = drumScanCursor; i < events.length; i++) {
@@ -8339,12 +8492,52 @@ function getActiveDrumHitsAt(sec, calib){
     for (const n of ev.notes) {
       if (!n.drum) continue;
       const dt = sec - t0;
-      if (dt < 0 || dt > DRUM_FLASH_SEC) continue;
+      if (dt < 0 || dt > winSec) continue;
       const piece = DRUM_PIECES[n.key] || "snare";
-      const intensity = (1 - dt / DRUM_FLASH_SEC) * (n.ghost ? 0.5 : 1); // 鬼音只亮一半
-      const existing = map.get(piece) || 0;
-      if (intensity > existing) map.set(piece, intensity);
+      const v = drumVisStrength(ev, n);
+      if (dt <= DRUM_FLASH_SEC) {
+        const intensity = (1 - dt / DRUM_FLASH_SEC) * v;
+        if (intensity > (map.get(piece) || 0)) map.set(piece, intensity);
+      }
+      if (dt <= DRUM_RIPPLE_SEC) {
+        const list = map.ripples.get(piece) || [];
+        list.push({ p: dt / DRUM_RIPPLE_SEC, v });
+        map.ripples.set(piece, list);
+      }
     }
+  }
+  // 銅鈸晃動與餘光:看最近 DRUM_SWAY_SEC 秒內打過的鈸
+  while (drumSwayCursor < events.length && posToSec(events[drumSwayCursor].tWhole, calib) + DRUM_SWAY_SEC < sec) drumSwayCursor++;
+  const hits = {}, chokes = {};
+  for (let i = drumSwayCursor; i < events.length; i++) {
+    const ev = events[i];
+    const t0 = posToSec(ev.tWhole, calib);
+    if (t0 > sec) break;
+    for (const n of ev.notes) {
+      if (!n.drum) continue;
+      const piece = DRUM_PIECES[n.key];
+      const cfg = DRUM_SWAY[piece];
+      if (!cfg) continue;
+      const tgt = cfg.as || piece;
+      (hits[tgt] = hits[tgt] || []).push({ t: t0, v: drumVisStrength(ev, n), cfg });
+      if (n.choke) {
+        const tc = drumChokeAt(t0, posToSec(ev.tWhole + (n.durWhole || 0), calib) - t0);
+        (chokes[tgt] = chokes[tgt] || []).push(tc);
+      }
+    }
+  }
+  for (const piece of Object.keys(hits)) {
+    let sway = 0, ring = 0;
+    for (const h of hits[piece]) {
+      const age = sec - h.t;
+      let damp = Math.exp(-age / h.cfg.tau);
+      // 止音:這一下之後(含這一下)有抓住的,從抓住那一刻起很快收掉
+      for (const tc of chokes[piece] || []) if (tc >= h.t - 1e-6 && tc <= sec) { damp *= Math.exp(-(sec - tc) / DRUM_CHOKE_VIS_TAU); break; }
+      sway += h.cfg.amp * h.v * damp * Math.sin(2 * Math.PI * h.cfg.freq * age);
+      ring = Math.max(ring, h.cfg.ring * h.v * damp);
+    }
+    map.sway.set(piece, Math.max(-1.2, Math.min(1.2, sway)));
+    if (ring > (map.get(piece) || 0)) map.set(piece, ring);
   }
   return map;
 }
