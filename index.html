@@ -873,6 +873,8 @@ body.exporting-active .empty-card{
 .exp-switch{justify-content:space-between;width:100%}
 .exp-field{display:flex;align-items:center;gap:10px}
 .exp-field > span{width:4.2em;flex:none;font-size:var(--fs-xs);color:var(--muted);white-space:nowrap}
+/* 英文標籤比較長(Background、Watermark、BG Opacity),4.2em 放不下會被右邊的輸入框/按鈕蓋住(使用者截圖,2026-10) */
+html[lang="en"] .exp-field > span{width:6.4em}
 .exp-field input{text-align:left;min-width:0}
 .exp-adv{border-top:1px solid var(--line);padding-top:8px}
 .exp-adv summary{list-style:none;cursor:pointer;display:flex;justify-content:space-between;align-items:center;font-size:var(--fs-sm);color:var(--gold-bright);min-height:32px}
