@@ -8086,20 +8086,27 @@ function drawPieceShadow(ctx, cx, cy, R, high){
   ctx.beginPath(); ctx.arc(cx + ox, cy + oy, R * 1.2, 0, Math.PI * 2); ctx.fill();
 }
 
-/* 部位名稱:字級跟著部位實際畫出來的尺寸走(匯出畫布大,字才會跟著放大)。
-   2026-10 使用者反映有些名字不見了:① 以前字小於 7px 就不畫(手機直式的 Tom 1/Tom 2),現在最小 7.5px、
-   寬度不超過部位的 1.7 倍半徑,只有部位本身小到 9px 以下才不寫 ② 以前名字跟著部位一起畫,
-   後面部位的光暈/陰影/漣漪會蓋上去;鼓組面板裡先收集起來(_kitLabelQueue),全部部位畫完才一起畫在最上層 */
+/* 部位名稱:字級跟著部位實際畫出來的尺寸走(匯出畫布大,字才會跟著放大),但不小於 KIT_LABEL_MIN_PX、
+   寬度不超過部位的 1.7 倍半徑。鼓組面板裡先收集起來(_kitLabelQueue),全部部位畫完才一起畫在最上層
+   (以前跟著部位一起畫,後面部位的光暈/陰影/漣漪會蓋上去)。
+   全有或全無(2026-10,使用者反映「有的名字不見了」後請 Claude 評估):每個名字都能用 ≥ 7px 而且放得進自己的部位才寫,
+   只要有一個做不到,整個面板都不寫。實測照比例的字級:手機直式 5.3~8.8px(放大到 7px 放得下 → 寫)、
+   手機橫放(面板 64px 高)3.1~5.1px(放大會比鼓還寬 → 不寫)、平板/桌機 7.2~11.9px、匯出影片 10px 以上 */
+const KIT_LABEL_MIN_PX = 7;
 let _kitLabelQueue = null;
-function drawPieceLabel(ctx, cx, cy, R, text, color){
-  if (_kitLabelQueue) { _kitLabelQueue.push([cx, cy, R, text, color]); return; }
-  if (R < 9) return;
-  // 跟 ScrollScore 標題同一套字型(Noto Serif TC),不要用 UI 控制項那套無襯線字
-  const font = fs => "700 " + fs.toFixed(1) + "px 'Noto Serif TC', serif";
-  let fontSize = Math.min(Math.max(R * 0.32, 7.5), 42);
-  ctx.font = font(fontSize);
+const kitLabelFont = fs => "700 " + fs.toFixed(1) + "px 'Noto Serif TC', serif";   // 跟 ScrollScore 標題同一套字型(Noto Serif TC)
+function kitLabelSize(ctx, R, text){
+  let fontSize = Math.min(Math.max(R * 0.32, KIT_LABEL_MIN_PX), 42);
+  ctx.font = kitLabelFont(fontSize);
   const tw = ctx.measureText(text).width, maxW = R * 1.7;
-  if (tw > maxW) { fontSize = Math.max(6.5, fontSize * maxW / tw); ctx.font = font(fontSize); }
+  if (tw > maxW) fontSize *= maxW / tw;
+  return fontSize;
+}
+function drawPieceLabel(ctx, cx, cy, R, text, color, fontSize){
+  if (_kitLabelQueue) { _kitLabelQueue.push([cx, cy, R, text, color]); return; }
+  if (fontSize == null) fontSize = kitLabelSize(ctx, R, text);
+  if (fontSize < KIT_LABEL_MIN_PX - 0.05) return;
+  ctx.font = kitLabelFont(fontSize);
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillStyle = color;
@@ -8388,9 +8395,10 @@ function drawDrumKit(ctx, x, y, w, h, activeMap){
       }
     }
   }
-  // 名稱最後一起畫(不會被其他部位的光暈、陰影、漣漪蓋住)
+  // 名稱最後一起畫(不會被其他部位的光暈、陰影、漣漪蓋住);有任何一個太小或放不下就全部不寫
   const labels = _kitLabelQueue; _kitLabelQueue = null;
-  for (const l of labels) drawPieceLabel(ctx, ...l);
+  const sizes = labels.map(l => kitLabelSize(ctx, l[2], l[3]));
+  if (sizes.every(fs => fs >= KIT_LABEL_MIN_PX - 0.05)) labels.forEach((l, i) => drawPieceLabel(ctx, ...l, sizes[i]));
 }
 
 /* 找出某個時間點正在發聲的音符(midi -> staff),供鍵盤高亮使用 */
