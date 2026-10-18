@@ -8086,13 +8086,20 @@ function drawPieceShadow(ctx, cx, cy, R, high){
   ctx.beginPath(); ctx.arc(cx + ox, cy + oy, R * 1.2, 0, Math.PI * 2); ctx.fill();
 }
 
-/* 部位名稱:字級完全跟著部位實際畫出來的尺寸走(匯出畫布大,字才會跟著放大);
-   太小的面板(手機直向鍵盤區只有 64px 高)就乾脆不寫字,硬塞只會糊成一團 */
+/* 部位名稱:字級跟著部位實際畫出來的尺寸走(匯出畫布大,字才會跟著放大)。
+   2026-10 使用者反映有些名字不見了:① 以前字小於 7px 就不畫(手機直式的 Tom 1/Tom 2),現在最小 7.5px、
+   寬度不超過部位的 1.7 倍半徑,只有部位本身小到 9px 以下才不寫 ② 以前名字跟著部位一起畫,
+   後面部位的光暈/陰影/漣漪會蓋上去;鼓組面板裡先收集起來(_kitLabelQueue),全部部位畫完才一起畫在最上層 */
+let _kitLabelQueue = null;
 function drawPieceLabel(ctx, cx, cy, R, text, color){
-  const fontSize = R * 0.32;
-  if (fontSize < 7) return;
+  if (_kitLabelQueue) { _kitLabelQueue.push([cx, cy, R, text, color]); return; }
+  if (R < 9) return;
   // 跟 ScrollScore 標題同一套字型(Noto Serif TC),不要用 UI 控制項那套無襯線字
-  ctx.font = "700 " + Math.min(fontSize, 42).toFixed(1) + "px 'Noto Serif TC', serif";
+  const font = fs => "700 " + fs.toFixed(1) + "px 'Noto Serif TC', serif";
+  let fontSize = Math.min(Math.max(R * 0.32, 7.5), 42);
+  ctx.font = font(fontSize);
+  const tw = ctx.measureText(text).width, maxW = R * 1.7;
+  if (tw > maxW) { fontSize = Math.max(6.5, fontSize * maxW / tw); ctx.font = font(fontSize); }
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillStyle = color;
@@ -8349,6 +8356,7 @@ function drawDrumKit(ctx, x, y, w, h, activeMap){
   ctx.restore();
 
   const s = fit.s;
+  _kitLabelQueue = [];
   const act = id => activeMap.get(id) || 0;
   const rip = id => (activeMap.ripples && activeMap.ripples.get(id)) || null;
   const sw = id => (activeMap.sway && activeMap.sway.get(id)) || 0;
@@ -8380,6 +8388,9 @@ function drawDrumKit(ctx, x, y, w, h, activeMap){
       }
     }
   }
+  // 名稱最後一起畫(不會被其他部位的光暈、陰影、漣漪蓋住)
+  const labels = _kitLabelQueue; _kitLabelQueue = null;
+  for (const l of labels) drawPieceLabel(ctx, ...l);
 }
 
 /* 找出某個時間點正在發聲的音符(midi -> staff),供鍵盤高亮使用 */
