@@ -9768,9 +9768,17 @@ function exportAutoScoreH(cfg, kind){
   const maxH = cfg.H - panel - cfg.H * 0.16 - exportChannelBand(cfg).h;   // 標題區 + 上下留白 + 頻道名稱那一條
   let h = Math.round(Math.max(120, Math.min(srcH * sc, maxH)));
   // 用實際版面驗算:標題區(minTopY)與面板高度(跟樂譜高度互相影響)算完,樂譜底部不能伸進頻道名稱那一條/面板
-  for (let k = 0; k < 4; k++) {
+  // 播放軸與小節色塊(最高到最低的音符再上下各留 PLAYLINE_PAD_SPACES_* 格)也要放得進 L.cursorTop ~ L.cursorBottom
+  // (副標題下方 ~ 頻道名稱/鍵盤上方),不然播放軸只能貼著音符、離副標題與鍵盤很近(使用者截圖 2026-10)
+  const e = measureStaffExtent(svg);
+  const pad = e ? e.sp * (cfg.includeKeyboard ? PLAYLINE_PAD_SPACES_WITH_PANEL : PLAYLINE_PAD_SPACES_SCORE_ONLY) : 0;
+  for (let k = 0; k < 6; k++) {
     const L = computeExportLayout({ ...cfg, scoreH: h });
-    const over = Math.round(L.contentBottom - ((cfg.includeKeyboard ? L.kbY : cfg.H) - L.channelBand));
+    let over = Math.round(L.contentBottom - ((cfg.includeKeyboard ? L.kbY : cfg.H) - L.channelBand));
+    if (e) {
+      const span = h * (e.bottom - e.top + 2 * pad), avail = L.cursorBottom - L.cursorTop;
+      if (span > avail + 1) over = Math.max(over, Math.ceil(h - h * avail / span));
+    }
     if (over <= 0 || h <= 120) break;
     h = Math.max(120, h - over);
   }
@@ -10321,7 +10329,12 @@ function computeExportLayout(cfg){
   const plX = W * PLAYLINE_RATIO;
   // 翻頁式:一頁樂譜可以用的上下範圍(標題下面 ~ 樂器面板上面)
   const pageTop = Math.max(minTopY, margin * 0.8), pageBottom = (cfg.includeKeyboard ? kbY : H) - Math.max(margin * 0.6, band);
-  return { W, H, SCORE_H, margin, kbH, kbY, scoreAreaH, topY, plX, minTopY, pageTop, pageBottom, channelBand: band, contentTop: topY + cTop, contentBottom: topY + cBot };
+  // 播放軸與小節色塊可以畫的上下範圍(使用者反映 2026-10:太靠近副標題與下方鍵盤):
+  // 副標題下方 5%H ~ 頻道名稱那一條上方 4.5%H(沒有那一條就是面板/畫面底部上方 4.5%H)。
+  // 以前只避開標題本身(2%H)與鍵盤(1%H),而且色塊上緣用的是樂譜內容上緣,1080p 只離副標題十幾 px
+  const cursorTop = titleBlockBottom > 0 ? titleBlockBottom + Math.round(H * 0.05) : margin * 0.6;
+  const cursorBottom = freeH - Math.round(H * 0.045);
+  return { W, H, SCORE_H, margin, kbH, kbY, scoreAreaH, topY, plX, minTopY, pageTop, pageBottom, channelBand: band, contentTop: topY + cTop, contentBottom: topY + cBot, cursorTop, cursorBottom };
 }
 /* 匯出畫面的樂譜底色是亮米色(#FFFDF6),使用者挑的游標顏色如果偏亮(預設的淡金色就是),
    直接畫上去會幾乎看不見。這裡在亮度過高時等比壓暗到安全範圍,色相維持不變 */
@@ -10415,13 +10428,17 @@ function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
     // 可以超出樂譜圖的上下邊(上下才會一樣多),但不碰到標題、不壓到下方的樂器面板
     plTop = Math.max(layout.minTopY || 0, topY + SCORE_H * (e.top - pad));
     plBottom = Math.min(cfg.includeKeyboard ? layout.kbY - H * 0.01 : H, topY + SCORE_H * (e.bottom + pad));
+    // 不要靠近副標題、頻道名稱與鍵盤(layout.cursorTop/cursorBottom);空間不夠時只縮留白,不切到音符
+    const nTop = topY + SCORE_H * e.top, nBot = topY + SCORE_H * e.bottom;
+    if (layout.cursorTop != null) plTop = Math.max(plTop, Math.min(layout.cursorTop, nTop));
+    if (layout.cursorBottom != null) plBottom = Math.min(plBottom, Math.max(layout.cursorBottom, nBot));
   }
   // 小節高亮畫在樂譜「之前」,才會在音符底下當底色而不是蓋住音符(跟現場畫面的 z-index 一致)。
-  // 上下範圍:樂譜內容的上緣(含速度記號)~ 播放軸下端,不包住樂譜圖下方的空白(2026-10)
+  // 上下範圍 = 播放軸的範圍(2026-10 使用者反映太靠近副標題:以前上緣是樂譜內容上緣〔含小節號、速度記號〕,比播放軸高出一截)
   if (!cfg.noCursor && measureHlOn()) {   // noCursor:封面圖不畫小節色塊與播放軸
     const mb = measureBoundsAt(songSec);
     if (mb) {
-      const hlTop = Math.max(layout.minTopY || 0, Math.min(plTop, layout.contentTop != null ? layout.contentTop : topY));
+      const hlTop = plTop;
       ctx.save();
       ctx.globalAlpha = hlMeasureOpacity();
       ctx.fillStyle = exportInkColor(hlMeasureColor()); // 跟游標套用同一條換算規則,兩者在匯出畫面才會同色
