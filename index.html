@@ -903,6 +903,12 @@ html[lang="en"] .exp-field > span{width:6.4em}
 .exp-actions #coverBtn{white-space:nowrap}
 .share-diag{margin:10px 0 0;font-size:var(--fs-2xs);color:var(--muted);line-height:1.45;word-break:break-word;user-select:text;-webkit-user-select:text}
 .share-diag:empty{display:none}
+/* 匯出明細(2026-10):平常收起來,點「用時」那行才展開(完成訊息仍只寫大小、格式、用時) */
+.share-diag.has-detail{cursor:pointer}
+.share-diag.has-detail::after{content:" ›";opacity:.7}
+.share-diag.has-detail.open::after{content:" ⌄"}
+#shareDetail[hidden]{display:none}
+.share-detail{margin-top:4px;text-align:left;font-variant-numeric:tabular-nums}
 .exp-bg{display:flex;align-items:center;gap:8px;flex:1;min-width:0}
 #expBgRow .exp-bg .btn{height:34px;min-height:34px;min-width:0;padding:0 12px;font-size:var(--fs-xs);white-space:nowrap}   /* 次要按鈕,不要跟主要按鈕一樣 44px 大 */
 #bgOpacityRow{min-height:34px}
@@ -1122,6 +1128,7 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
       <button class="btn primary" id="shareSaveBtn" data-i18n="shareSaveBtn">儲存影片</button>
       <button class="btn" id="shareCloseBtn" data-i18n="closeBtn">關閉</button>
       <p class="share-diag" id="shareDiag"></p>
+      <p class="share-diag share-detail" id="shareDetail" hidden></p>
     </div>
   </div>
   <div id="trackOverlay" role="dialog" aria-modal="true" aria-labelledby="trackTitle">
@@ -11504,7 +11511,7 @@ async function renderExportAudioFast(rangeStart, rangeEnd, onProgress){
 }
 /* 一段聲音正不正常:有沒有 NaN/無限大、音量、8kHz 以上的比例、左右相關(音樂左右高度相關,雜訊左右無關)。
    取中間最大聲的 2 秒算頻譜(整首做 FFT 太慢) */
-let fastAudioHealth = "", fastVerifyNote = "", fastAudioRetry = "", fastFrameNote = "";
+let fastAudioHealth = "", fastVerifyNote = "", fastAudioRetry = "", fastFrameNote = "", lastExportDetail = "";
 function pcmHealth(L, R, sr){
   let bad = 0, e = 0;
   for (let i = 0; i < L.length; i++) { const a = L[i], b = R[i]; if (!Number.isFinite(a) || !Number.isFinite(b)) { bad++; continue; } e += a * a + b * b; }
@@ -12430,7 +12437,8 @@ async function fastExportVideo(cfg){
   const rangeTag = cfg.startSec != null ? "-" + fmt(rangeStart).replace(":","m") + "s-" + fmt(rangeEnd).replace(":","m") + "s" : "";
   const fileName = "scrollscore-" + cfg.W + "x" + cfg.H + rangeTag + "." + fmtSel.ext;
   // 完成訊息只寫大小、格式、用時(2026-10-17 使用者:檢查數值拿掉);各段數值照樣印在 console,出問題時看得到
-  console.info("快速匯出完成:" + [exportTimeDetail(), fastFrameNote, fastAudioRetry, fastAudioHealth, fastVerifyNote].map(x => (x || "").replace(/^ · /, "")).filter(Boolean).join(" · "));
+  lastExportDetail = [exportTimeDetail(), fps + "fps " + cfg.W + "×" + cfg.H, fastFrameNote, fastAudioRetry, fastAudioHealth, fastVerifyNote].map(x => (x || "").replace(/^ · /, "")).filter(Boolean).join(" · ");
+  console.info("快速匯出完成:" + lastExportDetail);
   setStatus(T("exportComplete", { mb: (blob.size/1048576).toFixed(1), fmt: mimeLabel(fmtSel.mime) }) + exportTimeNote());
   deliverExportedVideo(blob, fileName, fmtSel.mime);
   return true;
@@ -12449,7 +12457,7 @@ async function exportVideo(cfg){
   document.body.classList.add("exporting-active");
   // 匯出畫面先打開:音色還在下載時按「開始匯出」,以前要等下載完才有畫面、也不能取消(審查發現)
   fastExportNote = ""; $("exportFastNote").textContent = "";
-  fastTimes = { t0: performance.now() }; fastAudioHealth = ""; fastVerifyNote = ""; fastAudioRetry = ""; fastFrameNote = "";
+  fastTimes = { t0: performance.now() }; fastAudioHealth = ""; fastVerifyNote = ""; fastAudioRetry = ""; fastFrameNote = ""; lastExportDetail = "";
   $("exportOverlayTitle").textContent = T("exportPreparingPct", { pct: 0 });
   $("exportOverlaySub").textContent = ""; $("exportTime").textContent = ""; $("exportFill").style.width = "0%";
   setExportOverlayMode(EXPORT_MODE.fast);
@@ -12723,6 +12731,11 @@ function showShareOverlay(mode, file, canShare, fileName, kind){
   close.onclick = () => ov.classList.remove("show");
   // 匯出的完成訊息(用時、各段聲音檢查)也放在這裡:手機上完成時看到的是這個框,下方狀態列常常看不到(2026-10)
   $("shareDiag").textContent = kind === "image" ? "" : ($("status").textContent || "");
+  // 點「用時」那行展開各段明細(準備/聲音/畫面、fps、每格 ms…),使用者回報匯出變慢時截圖就看得出原因
+  const diag = $("shareDiag"), det = $("shareDetail"), hasDet = kind !== "image" && !!lastExportDetail;
+  det.textContent = hasDet ? lastExportDetail : ""; det.hidden = true;
+  diag.classList.toggle("has-detail", hasDet); diag.classList.remove("open");
+  diag.onclick = hasDet ? () => { det.hidden = !det.hidden; diag.classList.toggle("open", !det.hidden); } : null;
   ov.classList.add("show");
 }
 async function deliverExportedVideo(blob, fileName, mime){
