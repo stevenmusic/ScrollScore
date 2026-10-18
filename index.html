@@ -8563,9 +8563,31 @@ function getActiveDrumHitsAt(sec, calib){
   return map;
 }
 
+/* 鼓組面板高解析度(使用者要求 2026-10:「網頁畫面的鼓組美術維持高清,可以吃效能,只要跑得動」):
+   以前畫布是 CSS 像素,Retina 螢幕上被放大會糊。鼓組畫布改成 CSS 尺寸 × min(devicePixelRatio, 2)(3 倍螢幕用 2 倍
+   看起來幾乎一樣銳利,代價少一半);播放中量每格畫鼓組的時間,連續 1 秒平均超過 KIT_HIDPI.slowMs 就降一級
+   (2 → 1.5 → 1,這次開啟不再升回去),確保跑得動。鋼琴鍵盤維持 CSS 像素(沒改)。
+   雲端(沒有 GPU)量到手機直式 390×110:1 倍 1.3ms、2 倍 3.7ms、3 倍 6.6ms;桌機 1440×150:2.2 / 6.3 / 13.2ms */
+const KIT_HIDPI = { maxScale: 2, steps: [2, 1.5, 1], slowMs: 6 };
+let kitScaleCap = KIT_HIDPI.maxScale, kitPerf = { ema: 0, n: 0 };
+function kitCanvasScale(){
+  if (currentInstrument() !== "drum") return 1;
+  return Math.max(1, Math.min(kitScaleCap, window.devicePixelRatio || 1));
+}
+function noteKitDrawTime(ms){
+  kitPerf.ema = kitPerf.n ? kitPerf.ema * 0.95 + ms * 0.05 : ms;
+  if (++kitPerf.n < 60 || kitPerf.ema <= KIT_HIDPI.slowMs) return;
+  const cur = kitCanvasScale();
+  const next = KIT_HIDPI.steps.find(v => v < cur - 0.01);
+  if (next == null) return;
+  kitScaleCap = next; kitPerf = { ema: 0, n: 0 };
+  console.info("鼓組畫面太慢(每格約 " + ms.toFixed(1) + "ms),解析度降到 " + next + " 倍");
+  resizeKeyboardCanvas();
+}
 function resizeKeyboardCanvas(){
   const cv = $("keyboardCanvas");
   if (!cv) return;
+  cv._k = 1;
   // 手機橫放(高度不到 KB_HIDE_BELOW_H)時鋼琴不顯示鍵盤、只顯示譜面(使用者要求,2026-10):樂譜區只剩約 200px,
   // 有鍵盤時蕭邦敘事曲譜線間距 4px、莫札特 5.8px;鼓譜只有一行,有鼓組面板也放得下(約 11px),照常顯示
   const hideKb = currentInstrument() !== "drum" && window.innerWidth > window.innerHeight && window.innerHeight < KB_HIDE_BELOW_H;
@@ -8581,8 +8603,10 @@ function resizeKeyboardCanvas(){
     cv.style.height = computeKeyboardHeight(w, KB_MIN_H, Math.max(KB_MIN_H, Math.min(KB_MAX_H, window.innerHeight * KB_MAX_VH))) + "px";
   }
   const rect = cv.getBoundingClientRect();
-  cv.width = Math.round(rect.width);
-  cv.height = Math.round(rect.height);
+  const k = kitCanvasScale();
+  cv._k = k;
+  cv.width = Math.round(rect.width * k);
+  cv.height = Math.round(rect.height * k);
 }
 /* 播放軸原本用固定的「#stage高度的6%~94%」,樂譜實際渲染高度(#scroller)通常遠小於
    #stage(尤其手機直向、樂譜置中時上下留白很多),導致播放軸看起來又長又突兀,跟匯出影片
@@ -8638,9 +8662,14 @@ function drawKeyboardLive(sec){
   ctx.clearRect(0, 0, cv.width, cv.height);
   if (currentInstrument() === "drum") {
     const active = events.length ? getActiveDrumHitsAt(sec + KB_LOOKAHEAD_SEC, useCalib()) : new Map();
-    // App 畫面:畫布是 CSS 像素,高解析度螢幕(devicePixelRatio > 1,含瀏覽器放大)會被放大變糊 → 不寫名稱;
-    // 一般解析度螢幕不會糊就寫(使用者決定 2026-10)
-    drawDrumKit(ctx, 0, 0, cv.width, cv.height, active, (window.devicePixelRatio || 1) <= 1);
+    // 高解析度畫布(kitCanvasScale):用 CSS 尺寸畫、ctx 放大 k 倍。名稱只在不會糊時寫(使用者決定 2026-10):
+    // 畫布倍數夠(≥ min(螢幕倍數, 2))才寫;被自動降解析度、字會被放大變糊時不寫
+    const k = cv._k || 1, dpr = window.devicePixelRatio || 1;
+    const t0 = performance.now();
+    ctx.setTransform(k, 0, 0, k, 0, 0);
+    drawDrumKit(ctx, 0, 0, cv.width / k, cv.height / k, active, k >= Math.min(dpr, KIT_HIDPI.maxScale) - 0.01);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    if (playing) noteKitDrawTime(performance.now() - t0);
   } else {
     const active = events.length ? getActiveNotesAt(sec + KB_LOOKAHEAD_SEC, useCalib()) : new Map();
     drawKeyboard(ctx, 0, 0, cv.width, cv.height, active);
