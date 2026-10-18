@@ -203,6 +203,13 @@ body.header-brand-hidden header .brand{display:none}
   #tempoRow #tempoSlider{order:3;flex:1 1 100%;min-width:0;margin:2px 0 12px}   /* 跟下面的游標色票拉開(使用者反映太靠近) */
 }
 #bgOpacityRow[hidden]{display:none}
+#transReset[hidden]{display:none}   /* .btn 的 display 會蓋掉 hidden 屬性(以前 ↺ 一直顯示、320 寬超出面板) */
+/* 窄螢幕(< 360)有移調、↺ 出現時「選單 + − 數值 ＋ ↺」一列放不下(320 寬超出 13px):選單自己一列,移調那組在下一列 */
+@media (max-width:359px){
+  .settings-group .combo-row:has(#transReset:not([hidden])){flex-wrap:wrap}
+  .combo-row:has(#transReset:not([hidden])) #instrument{flex:1 1 100%;max-width:none}
+  .combo-row:has(#transReset:not([hidden])) .trans-group{margin-left:0}
+}
 #tempoRow input[type=range]{flex:1 1 auto;width:auto;min-width:60px}
 #tempoRow #tempo[hidden]{display:none}
 .tempo-box b{color:var(--gold-bright);font-size:var(--fs-lg);min-width:34px;text-align:right;font-variant-numeric:tabular-nums}
@@ -903,7 +910,8 @@ html[lang="en"] .exp-field > span{width:6.4em}
 #bgOpacityRow b{color:var(--gold-bright);min-width:2em;text-align:right;font-variant-numeric:tabular-nums}
 @media (min-width:760px) and (min-height:520px){
   .exp-body{flex-direction:row;align-items:flex-start;gap:20px}
-  .exp-preview{flex:1 1 55%;position:sticky;top:0}
+  /* 預覽在左欄垂直置中(2026-10:以前靠上,下面空一塊);選項很長(打開進階)捲動時照樣黏在上方 */
+  .exp-preview{flex:1 1 55%;position:sticky;top:0;align-self:center}
   #previewImg{max-height:60vh;max-height:60dvh}
   .exp-opts{flex:1 1 45%}
 }
@@ -7739,6 +7747,7 @@ let KB_WHITE_KEYS = [], KB_WHITE_IDX = {};
    每個鍵就會被擠得又窄又長、比例完全跑掉。改成依「目前實際畫面寬度 ÷ 可見白鍵數」反推出
    符合真實比例的高度,畫布高度動態跟著調,而不是每個裝置寬度都套同一個寫死的高度 */
 const WHITE_KEY_ASPECT = 5.2;
+const DRUM_PANEL = { from: 150, vh: 0.22, max: 260 };   // 桌機/平板鼓組面板:畫面高度 22%,150~260px
 const KB_MIN_H = 54, KB_MAX_H = 170, KB_MAX_VH = 0.24, KB_HIDE_BELOW_H = 500; // 給現場畫面用的預設上下限(校準過的螢幕實際尺寸);匯出影片畫布大很多,呼叫時會另外傳入合適的上下限
 function computeKeyboardHeight(containerWidth, minH = KB_MIN_H, maxH = KB_MAX_H){
   const n = Math.max(KB_WHITE_KEYS.length, 1);
@@ -7780,13 +7789,15 @@ const KB_SPRITE = { on: true, margin: 40 };
 let kbSpriteCache = null;
 function drawKeyboard(ctx, x, y, w, h, activeMap){
   if (KB_SPRITE.on && !window.KB_SPRITE_OFF && ctx.getTransform) {
+    // 沒有變形或只有等比例放大(畫面上的高解析度鍵盤,見 kbCanvasScale)時用小圖;小圖照放大倍數產生,不會糊
     const m = ctx.getTransform();
-    if (m.a === 1 && m.b === 0 && m.c === 0 && m.d === 1 && m.e === 0 && m.f === 0) return drawKeyboardSprites(ctx, x, y, w, h, activeMap);
+    if (m.b === 0 && m.c === 0 && m.e === 0 && m.f === 0 && m.a === m.d && m.a >= 1) return drawKeyboardSprites(ctx, x, y, w, h, activeMap, m.a);
   }
   drawKeyboardDirect(ctx, x, y, w, h, activeMap);
 }
-function drawKeyboardSprites(ctx, x, y, w, h, activeMap){
-  const geo = [x, y, w, h, KB_LOW, KB_HIGH].join("|");
+let kbShadowScale = 1;   // shadowBlur 不跟著 ctx 的縮放走:在放大 s 倍的小圖上畫光暈時要自己乘 s
+function drawKeyboardSprites(ctx, x, y, w, h, activeMap, s = 1){
+  const geo = [x, y, w, h, KB_LOW, KB_HIGH, s].join("|");
   if (!kbSpriteCache || kbSpriteCache.geo !== geo) kbSpriteCache = { geo, map: new Map(), base: null, full: null };
   const C = kbSpriteCache, M = KB_SPRITE.margin;
   const whiteW = w / KB_WHITE_KEYS.length, blackH = h * 0.6, blackW = whiteW * 0.62;
@@ -7807,26 +7818,29 @@ function drawKeyboardSprites(ctx, x, y, w, h, activeMap){
     const key = k.kind + k.idx + "|" + stateOf(info);
     let sp = C.map.get(key);
     if (!sp) {
-      const cv = document.createElement("canvas"); cv.width = k.sw; cv.height = k.sh;
-      const c2 = cv.getContext("2d"); c2.translate(-k.ox, -k.oy);
+      const cv = document.createElement("canvas"); cv.width = Math.ceil(k.sw * s); cv.height = Math.ceil(k.sh * s);
+      const c2 = cv.getContext("2d"); c2.scale(s, s); c2.translate(-k.ox, -k.oy);
+      kbShadowScale = s;
       (k.kind === "w" ? drawWhiteKey : drawBlackKey)(c2, k.kx, y, k.kw, k.kh, info);
+      kbShadowScale = 1;
       sp = cv; C.map.set(key, sp);
     }
-    tc.drawImage(sp, k.ox, k.oy);
+    tc.drawImage(sp, k.ox, k.oy, sp.width / s, sp.height / s);
   };
   if (!C.base) {
     // 多留 2px:鍵的外框線(線寬 1)會畫到鍵盤上緣外半個像素
     const fx = Math.floor(x) - 2, fy = Math.floor(y) - 2, bw = Math.ceil(x + w) - fx + 2, bh = Math.ceil(y + h) - fy + 2;
-    const mk = () => { const c = document.createElement("canvas"); c.width = bw; c.height = bh; const g = c.getContext("2d"); g.translate(-fx, -fy); return [c, g]; };
+    const mk = () => { const c = document.createElement("canvas"); c.width = Math.ceil(bw * s); c.height = Math.ceil(bh * s); const g = c.getContext("2d"); g.scale(s, s); g.translate(-fx, -fy); return [c, g]; };
     const [b, bc] = mk();
     const g = bc.createLinearGradient(0, y, 0, y + h); g.addColorStop(0, "#050403"); g.addColorStop(1, "#0C0A07");
     bc.fillStyle = g; bc.fillRect(x, y, w, h);
     const [f, fc] = mk();   // 整組沒按下的鍵盤
-    fc.drawImage(b, fx, fy);
+    fc.drawImage(b, fx, fy, b.width / s, b.height / s);
     for (const k of C.keys) sprite(fc, k, null);
     C.base = { cv: b, x: fx, y: fy }; C.full = f;
   }
-  ctx.drawImage(C.full, C.base.x, C.base.y);
+  const bdraw = (c, cv) => c.drawImage(cv, C.base.x, C.base.y, cv.width / s, cv.height / s);
+  bdraw(ctx, C.full);
   // 有按下的鍵:只在它們(含光暈)的範圍內,照原本的順序把底板、白鍵、黑鍵重畫一遍
   const dirty = [];
   for (const k of C.keys) if (activeMap.get(k.midi)) dirty.push(k);
@@ -7834,7 +7848,7 @@ function drawKeyboardSprites(ctx, x, y, w, h, activeMap){
   const hit = k => dirty.some(d => k.ox < d.ox + d.sw && d.ox < k.ox + k.sw);
   ctx.save();
   ctx.beginPath(); for (const d of dirty) ctx.rect(d.ox, d.oy, d.sw, d.sh); ctx.clip();
-  ctx.drawImage(C.base.cv, C.base.x, C.base.y);
+  bdraw(ctx, C.base.cv);
   for (const k of C.keys) if (hit(k)) sprite(ctx, k, activeMap.get(k.midi));
   ctx.restore();
 }
@@ -7849,7 +7863,7 @@ function drawWhiteKey(ctx, kx, y, kw, h, info){
   if (attack) baseColor = staff === 2 ? ["#B6FFF4", "#3FBFAE"] : ["#FFF3CC", "#F2B94B"];
   const g = ctx.createLinearGradient(kx, y, kx, y + h);
   g.addColorStop(0, baseColor[0]); g.addColorStop(0.85, baseColor[1]); g.addColorStop(1, baseColor[1]);
-  if (staff) { ctx.save(); ctx.shadowColor = staff === 2 ? "rgba(63,191,174,0.85)" : "rgba(242,185,75,0.85)"; ctx.shadowBlur = attack ? 24 : 14; }
+  if (staff) { ctx.save(); ctx.shadowColor = staff === 2 ? "rgba(63,191,174,0.85)" : "rgba(242,185,75,0.85)"; ctx.shadowBlur = (attack ? 24 : 14) * kbShadowScale; }
   kbRoundRect(ctx, kx, y, kw, h, [3, 3, 6, 6]); ctx.fillStyle = g; ctx.fill();
   if (staff) ctx.restore();
   ctx.strokeStyle = "rgba(0,0,0,0.35)"; ctx.lineWidth = 1;
@@ -7865,7 +7879,7 @@ function drawBlackKey(ctx, kx, y, blackW, blackH, info){
   ctx.fillRect(kx - 1, y + blackH, blackW + 2, 6);
   const g = ctx.createLinearGradient(kx, y, kx, y + blackH);
   g.addColorStop(0, baseColor[0]); g.addColorStop(1, baseColor[1]);
-  if (staff) { ctx.save(); ctx.shadowColor = staff === 2 ? "rgba(63,191,174,0.9)" : "rgba(242,185,75,0.9)"; ctx.shadowBlur = 12; }
+  if (staff) { ctx.save(); ctx.shadowColor = staff === 2 ? "rgba(63,191,174,0.9)" : "rgba(242,185,75,0.9)"; ctx.shadowBlur = 12 * kbShadowScale; }
   kbRoundRect(ctx, kx, y, blackW, blackH, [2, 2, 4, 4]); ctx.fillStyle = g; ctx.fill();
   if (staff) ctx.restore();
   ctx.fillStyle = "rgba(255,255,255,0.18)";
@@ -8566,12 +8580,12 @@ function getActiveDrumHitsAt(sec, calib){
 /* 鼓組面板高解析度(使用者要求 2026-10:「網頁畫面的鼓組美術維持高清,可以吃效能,只要跑得動」):
    以前畫布是 CSS 像素,Retina 螢幕上被放大會糊。鼓組畫布改成 CSS 尺寸 × min(devicePixelRatio, 2)(3 倍螢幕用 2 倍
    看起來幾乎一樣銳利,代價少一半);播放中量每格畫鼓組的時間,連續 1 秒平均超過 KIT_HIDPI.slowMs 就降一級
-   (2 → 1.5 → 1,這次開啟不再升回去),確保跑得動。鋼琴鍵盤維持 CSS 像素(沒改)。
+   (2 → 1.5 → 1,這次開啟不再升回去),確保跑得動。鋼琴鍵盤也用同一套(2026-10 使用者同意;琴鍵小圖照倍數產生,
+   2 倍時每格仍約 1ms,見 drawKeyboardSprites)。
    雲端(沒有 GPU)量到手機直式 390×110:1 倍 1.3ms、2 倍 3.7ms、3 倍 6.6ms;桌機 1440×150:2.2 / 6.3 / 13.2ms */
 const KIT_HIDPI = { maxScale: 2, steps: [2, 1.5, 1], slowMs: 6 };
 let kitScaleCap = KIT_HIDPI.maxScale, kitPerf = { ema: 0, n: 0 };
 function kitCanvasScale(){
-  if (currentInstrument() !== "drum") return 1;
   return Math.max(1, Math.min(kitScaleCap, window.devicePixelRatio || 1));
 }
 function noteKitDrawTime(ms){
@@ -8596,7 +8610,15 @@ function resizeKeyboardCanvas(){
   if (currentInstrument() === "drum") {
     cv.style.height = ""; // 鼓組面板不是白鍵排列,交回 CSS 斷點控制高度,但不超過鼓組實際需要的高度(不然上下都是黑邊)
     const r0 = cv.getBoundingClientRect();
-    if (r0.width > 0) { const nat = drumKitNaturalH(r0.width); if (r0.height > nat) cv.style.height = nat + "px"; }
+    if (r0.width > 0) {
+      const nat = drumKitNaturalH(r0.width);
+      // 桌機、平板(CSS 斷點給 150px 的尺寸)面板加高到畫面高度的 DRUM_PANEL.vh(使用者同意 2026-10):
+      // 鼓譜只有一行,樂譜區上下常空 250px 以上,150px 時鼓組縮在中間很小、兩側一大片黑。手機尺寸照 CSS 斷點不變
+      let want = r0.height;
+      if (r0.height >= DRUM_PANEL.from) want = Math.max(r0.height, Math.min(DRUM_PANEL.max, window.innerHeight * DRUM_PANEL.vh));
+      want = Math.min(want, nat);
+      if (Math.abs(want - r0.height) > 0.5) cv.style.height = Math.round(want) + "px";
+    }
   } else {
     const w = cv.getBoundingClientRect().width;
     // 手機橫放時鍵盤最多占畫面高度的 KB_MAX_VH(以前 844×390 鍵盤 150px、樂譜區只剩 144px,樂譜被縮到 5px)
@@ -8659,21 +8681,22 @@ function drawKeyboardLive(sec){
   const cv = $("keyboardCanvas");
   if (!cv || !cv.width) return;
   const ctx = cv.getContext("2d");
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, cv.width, cv.height);
+  // 高解析度畫布(kitCanvasScale,鼓組與鋼琴鍵盤都用):照 CSS 尺寸畫、ctx 放大 k 倍
+  const k = cv._k || 1, dpr = window.devicePixelRatio || 1, W = cv.width / k, H = cv.height / k;
+  const t0 = performance.now();
+  ctx.setTransform(k, 0, 0, k, 0, 0);
   if (currentInstrument() === "drum") {
     const active = events.length ? getActiveDrumHitsAt(sec + KB_LOOKAHEAD_SEC, useCalib()) : new Map();
-    // 高解析度畫布(kitCanvasScale):用 CSS 尺寸畫、ctx 放大 k 倍。名稱只在不會糊時寫(使用者決定 2026-10):
-    // 畫布倍數夠(≥ min(螢幕倍數, 2))才寫;被自動降解析度、字會被放大變糊時不寫
-    const k = cv._k || 1, dpr = window.devicePixelRatio || 1;
-    const t0 = performance.now();
-    ctx.setTransform(k, 0, 0, k, 0, 0);
-    drawDrumKit(ctx, 0, 0, cv.width / k, cv.height / k, active, k >= Math.min(dpr, KIT_HIDPI.maxScale) - 0.01);
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    if (playing) noteKitDrawTime(performance.now() - t0);
+    // 名稱只在不會糊時寫(使用者決定 2026-10):畫布倍數夠(≥ min(螢幕倍數, 2))才寫;被自動降解析度、字會被放大變糊時不寫
+    drawDrumKit(ctx, 0, 0, W, H, active, k >= Math.min(dpr, KIT_HIDPI.maxScale) - 0.01);
   } else {
     const active = events.length ? getActiveNotesAt(sec + KB_LOOKAHEAD_SEC, useCalib()) : new Map();
-    drawKeyboard(ctx, 0, 0, cv.width, cv.height, active);
+    drawKeyboard(ctx, 0, 0, W, H, active);
   }
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  if (playing) noteKitDrawTime(performance.now() - t0);
 }
 window.addEventListener("resize", () => { resizeKeyboardCanvas(); drawKeyboardLive(playing ? currentSec() : pausedAtSec); updatePlaylineExtent(); });
 // 舞台高度不只視窗大小會改(標頭換行、狀態列、鍵盤高度跟著曲子音域變…),樂譜會跟著重新置中,播放軸要一起重算
