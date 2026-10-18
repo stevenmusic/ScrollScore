@@ -8340,7 +8340,9 @@ function drawHiHatTop(ctx, cx, cy, R, closedI, openI, ripples, sway){
   drawPieceLabel(ctx, cx - lift * 0.4, cy - lift * 0.6 + R * 0.55, R, openI > 0.3 ? "Open" : "Hi-Hat", "rgba(48,30,6,0.85)");
 }
 
-function drawDrumKit(ctx, x, y, w, h, activeMap){
+// labels:App 畫面上不寫鼓件名稱(2026-10 使用者決定:畫布是一般解析度,Retina 上小字會糊,又不想提高解析度吃效能),
+// 匯出影片(畫布夠大、字 10px 以上)照常寫
+function drawDrumKit(ctx, x, y, w, h, activeMap, labelsOn = true){
   const baseGrad = ctx.createLinearGradient(0, y, 0, y + h);
   baseGrad.addColorStop(0, "#050403");
   baseGrad.addColorStop(1, "#0C0A07");
@@ -8396,9 +8398,9 @@ function drawDrumKit(ctx, x, y, w, h, activeMap){
     }
   }
   // 名稱最後一起畫(不會被其他部位的光暈、陰影、漣漪蓋住);有任何一個太小或放不下就全部不寫
-  const labels = _kitLabelQueue; _kitLabelQueue = null;
+  const showLabels = labelsOn; const labels = _kitLabelQueue; _kitLabelQueue = null;
   const sizes = labels.map(l => kitLabelSize(ctx, l[2], l[3]));
-  if (sizes.every(fs => fs >= KIT_LABEL_MIN_PX - 0.05)) labels.forEach((l, i) => drawPieceLabel(ctx, ...l, sizes[i]));
+  if (showLabels && sizes.every(fs => fs >= KIT_LABEL_MIN_PX - 0.05)) labels.forEach((l, i) => drawPieceLabel(ctx, ...l, sizes[i]));
 }
 
 /* 找出某個時間點正在發聲的音符(midi -> staff),供鍵盤高亮使用 */
@@ -8636,7 +8638,7 @@ function drawKeyboardLive(sec){
   ctx.clearRect(0, 0, cv.width, cv.height);
   if (currentInstrument() === "drum") {
     const active = events.length ? getActiveDrumHitsAt(sec + KB_LOOKAHEAD_SEC, useCalib()) : new Map();
-    drawDrumKit(ctx, 0, 0, cv.width, cv.height, active);
+    drawDrumKit(ctx, 0, 0, cv.width, cv.height, active, false);   // App 畫面不寫名稱(見 drawDrumKit)
   } else {
     const active = events.length ? getActiveNotesAt(sec + KB_LOOKAHEAD_SEC, useCalib()) : new Map();
     drawKeyboard(ctx, 0, 0, cv.width, cv.height, active);
