@@ -9768,10 +9768,11 @@ function exportAutoScoreH(cfg, kind){
   const maxH = cfg.H - panel - cfg.H * 0.16 - exportChannelBand(cfg).h;   // 標題區 + 上下留白 + 頻道名稱那一條
   let h = Math.round(Math.max(120, Math.min(srcH * sc, maxH)));
   // 用實際版面驗算:標題區(minTopY)與面板高度(跟樂譜高度互相影響)算完,樂譜底部不能伸進頻道名稱那一條/面板
-  // 播放軸與小節色塊(最高到最低的音符再上下各留 PLAYLINE_PAD_SPACES_* 格)也要放得進 L.cursorTop ~ L.cursorBottom
-  // (副標題下方 ~ 頻道名稱/鍵盤上方),不然播放軸只能貼著音符、離副標題與鍵盤很近(使用者截圖 2026-10)
+  // 播放軸與小節色塊要放得進 L.cursorTop ~ L.cursorBottom(副標題下方 ~ 頻道名稱/鍵盤上方,使用者截圖 2026-10)。
+  // 折衷(使用者選的):放不下時先縮短播放軸上下的留白(畫的時候 1.8/1.2 格會被 cursorTop/Bottom 截短),
+  // 最高到最低的音符上下各留 EXPORT_CURSOR_MIN_PAD 格都放不下才縮小樂譜。以前用完整 1.8 格驗算,搖滾鼓橫式 454 → 401
   const e = measureStaffExtent(svg);
-  const pad = e ? e.sp * (cfg.includeKeyboard ? PLAYLINE_PAD_SPACES_WITH_PANEL : PLAYLINE_PAD_SPACES_SCORE_ONLY) : 0;
+  const pad = e ? e.sp * EXPORT_CURSOR_MIN_PAD : 0;
   for (let k = 0; k < 6; k++) {
     const L = computeExportLayout({ ...cfg, scoreH: h });
     let over = Math.round(L.contentBottom - ((cfg.includeKeyboard ? L.kbY : cfg.H) - L.channelBand));
@@ -9784,6 +9785,7 @@ function exportAutoScoreH(cfg, kind){
   }
   return h;
 }
+const EXPORT_CURSOR_MIN_PAD = 0.6;   // 譜線間距
 // 鼓組面板高度上限(相對畫面寬):直式時以前面板會吃掉半個畫面(957px),樂譜被擠到最上面
 const EXPORT_KIT_MAX_W = 0.72;
 // 直式/方形的鋼琴譜原本的固定高度(現在由 exportAutoScoreH 依音符大小決定,這兩個值只當初始值)
