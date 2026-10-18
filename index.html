@@ -8654,9 +8654,26 @@ const SCREEN_SCORE = { maxSp: 13, maxSpWide: 16, wideFrom: 900, fill: 0.8, ahead
    播放軸對在第一個音上(比平常偏右);之後在「多出來距離 × 2」的樂譜長度內,播放軸平順滑回平常位置、樂譜跟著捲動,不會跳。
    放得下的尺寸(平板、桌機多半)完全不變 */
 const START_EDGE = 8;
+/* 樂譜實際內容(大括號/譜號)的左緣,樂譜座標(未縮放)。SVG 左邊本身有一段空白(使用者截圖:大括號前空約 37px),
+   開頭要對齊的是內容不是整張圖。同一份 SVG 只量一次 */
+let _contentLeftCache = { svg: null, x: 0 };
+function scoreContentLeftX(){
+  const svg = $("scroller") && $("scroller").querySelector("svg");
+  if (!svg) return 0;
+  if (_contentLeftCache.svg === svg) return _contentLeftCache.x;
+  let x = 0;
+  try {
+    const bb = svg.getBBox(), vb = svg.viewBox && svg.viewBox.baseVal;
+    const w = parseFloat(svg.getAttribute("width")) || svg.clientWidth;
+    const ratio = vb && vb.width ? w / vb.width : 1;
+    if (bb && isFinite(bb.x)) x = Math.max(0, (bb.x - (vb ? vb.x : 0)) * ratio);
+  } catch (e) {}
+  _contentLeftCache = { svg, x };
+  return x;
+}
 function startShiftAt(x){
   const s = scoreFit.s, P = playlineX(), x0 = events.length ? events[0].x : 0;
-  const need = START_EDGE - (P - x0 * s);
+  const need = START_EDGE - (P - (x0 - scoreContentLeftX()) * s);
   if (!(need > 0)) return 0;
   const D = 2 * need / s;   // 樂譜座標:這段距離內滑回去
   return need * Math.max(0, Math.min(1, 1 - (x - x0) / D));
