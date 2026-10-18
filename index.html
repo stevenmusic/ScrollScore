@@ -6882,9 +6882,12 @@ function pianoAutoMacro(hasMarks){
 }
 /* 曲尾的力度照旋律線條(使用者要求,2026-10:「整首最後的力度變化應該由旋律線條決定,往上走漸強,往下走漸弱」;
    以前固定最後兩小節漸弱 6 力度)。旋律 = 右手(單譜表就是整個)每個時間點最高的音,前後平滑後跟兩小節前的旋律高度比:
-   每高一個半音 +0.7 力度,上下各最多 PIANO_END.max(高八度 ≈ +8);兩小節開頭剛好是 0,跟前面接得上。
+   每高一個半音 +0.7 力度;音域大到會超過 PIANO_END.max 時整段等比例縮小(最高/最低的那個音剛好 ±12),
+   不會走到一半就碰到上限變平(使用者反映 2026-10:音階往上到最後一小節反而變弱——以前 ±8 截斷,高 11 個半音後就平了,
+   拍子輕重〔第一拍 +3、反拍 −3〕與隨機起伏〔±3~5〕蓋過漸強,段落力度在最後一小節開頭就整個跳上去)。
+   曲尾兩小節:拍子輕重與隨機起伏逐漸減到 35%、段落力度固定在這兩小節開頭的值。兩小節開頭剛好是 0,跟前面接得上。
    跟其他段落起伏一樣,譜上有力度記號時只用四成,以譜為主(例如曲尾寫了 dim./pp 照樣變小聲) */
-const PIANO_END = { bars: 2, perSemi: 0.7, max: 8 };
+const PIANO_END = { bars: 2, perSemi: 0.7, max: 12 };
 function pianoEndContour(nb, multiStaff){
   const pts = [];
   for (const ev of events) {
@@ -6902,11 +6905,13 @@ function pianoEndContour(nb, multiStaff){
   // 起點:兩小節開頭那一刻的旋律高度(之前最後一個音;都在之後就用第一個)
   let i0 = 0; for (let i = 0; i < pts.length; i++) if (pts[i].x <= x0 + 1e-6) i0 = i;
   const p0 = sm[i0];
+  let range = 0; for (let i = 0; i < pts.length; i++) if (pts[i].x >= x0 - 1e-6) range = Math.max(range, Math.abs(sm[i] - p0));
+  const k = Math.min(PIANO_END.perSemi, range > 0 ? PIANO_END.max / range : PIANO_END.perSemi);
   return x => {
     if (x < x0) return 0;
     let i = 0; for (let j = 0; j < pts.length; j++) if (pts[j].x <= x + 1e-6) i = j;
     const w = Math.min(1, (x - x0) / 0.25);   // 前四分之一小節淡入,不要一進入就跳
-    return w * Math.max(-PIANO_END.max, Math.min(PIANO_END.max, (sm[i] - p0) * PIANO_END.perSemi));
+    return w * Math.max(-PIANO_END.max, Math.min(PIANO_END.max, (sm[i] - p0) * k));
   };
 }
 function computePianoDynamics(){
@@ -6927,18 +6932,23 @@ function computePianoDynamics(){
     const mom = ev.srcT != null && scoreDynMarks.find(d => d.mark in PIANO_MOMENTARY && Math.abs(d.t - ev.srcT) < 1e-4);
     let momDb = 0;
     if (mom) { if (mom.mark in PIANO_MOMENTARY_DB) momDb = PIANO_MOMENTARY_DB[mom.mark]; else base += PIANO_MOMENTARY[mom.mark]; }
+    let beatW = 1;   // 曲尾兩小節的拍子輕重與隨機起伏逐漸減到 35%(見 PIANO_END)
     if (ev.barPos != null && ev.beatLen > 0) {
-      const bf = ev.barPos / ev.beatLen, frac = Math.abs(bf - Math.round(bf));
-      if (ev.barPos < 1e-4) base += 3;
-      else if (frac < 0.02) base += Math.round(bf) % 2 === 0 ? 1.5 : 0.5;
-      else if (Math.abs(frac - 0.5) < 0.02) base -= 1.5;
-      else base -= 3;
       const pos = ev.barLen > 0 ? Math.min(1, ev.barPos / ev.barLen) : 0;
-      const arch = (n, amp) => amp * (Math.sin(Math.PI * (((bar % n) + pos) / n)) - 2 / Math.PI);   // 平均為 0 的弧線
       const fromEnd = auto.nb - (bar + pos);
+      // 拍子輕重:曲尾兩小節逐漸減半,不要蓋過旋律線條的漸強/漸弱
+      beatW = fromEnd < PIANO_END.bars ? 0.35 + 0.65 * fromEnd / PIANO_END.bars : 1;
+      const bf = ev.barPos / ev.beatLen, frac = Math.abs(bf - Math.round(bf));
+      if (ev.barPos < 1e-4) base += 3 * beatW;
+      else if (frac < 0.02) base += (Math.round(bf) % 2 === 0 ? 1.5 : 0.5) * beatW;
+      else if (Math.abs(frac - 0.5) < 0.02) base -= 1.5 * beatW;
+      else base -= 3 * beatW;
+      const arch = (n, amp) => amp * (Math.sin(Math.PI * (((bar % n) + pos) / n)) - 2 / Math.PI);   // 平均為 0 的弧線
       // 曲尾兩小節:樂句弧線逐漸退出,改由旋律線條決定(往上漸強、往下漸弱)
       const archW = fromEnd < PIANO_END.bars ? fromEnd / PIANO_END.bars : 1;
-      let m = (auto.macro[bar] || 0) + archW * (arch(4, 4) + arch(8, 5));
+      // 段落力度(每小節一個值,換小節會整個跳)在這兩小節固定成開頭那小節的值,大小聲變化全交給旋律線條
+      const macroBar = fromEnd < PIANO_END.bars ? Math.max(0, Math.min(bar, auto.nb - PIANO_END.bars)) : bar;
+      let m = (auto.macro[macroBar] || 0) + archW * (arch(4, 4) + arch(8, 5));
       if (fromEnd < PIANO_END.bars) m += endContour(bar + pos);
       base += m * auto.scale;
     }
@@ -6952,7 +6962,7 @@ function computePianoDynamics(){
       const rh = st === 1 || !multiStaff;
       for (const n of ns) {
         const m = freqToMidi(n.freq);
-        let v = base + drift[rh ? 1 : 2];
+        let v = base + drift[rh ? 1 : 2] * beatW;
         // 重音只加在有標記的那一手(n.artic),用 dB 換算(PIANO_ACCENT_DB);sf 類兩手都加
         const na = n.artic || ev.artic;
         const accDb = (na ? (na.strongAccent ? PIANO_ACCENT_DB.strong : na.accent ? PIANO_ACCENT_DB.accent : na.softAccent ? PIANO_ACCENT_DB.soft : 0) : 0) + momDb;
