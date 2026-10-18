@@ -9,7 +9,7 @@
 //   --afmt f32,s16:只試這幾種聲音輸入格式(模擬 Safari 只吃某種格式;第一種故意弄成雜訊用 --noisefmt)
 //   --breakbuffer:模擬 iPhone Safari 的 OfflineAudioContext 成品是壞的(要改用 tap 送回來的聲音)
 //   --twice:同一頁匯出兩次,印第二次(第二次用記住的試編結果,不再試編)
-//   每 0.3 秒記一次匯出畫面的標題/時間,印出「標題最久沒變」幾秒(看起來卡住)與時間有沒有超過樂曲長度
+//   每 0.3 秒記一次匯出畫面的標題/時間(快速匯出是剩餘時間),印出「標題與時間最久沒變」幾秒(看起來卡住)與時間有沒有超過樂曲長度
 import { chromium } from "playwright";
 import http from "node:http"; import fs from "node:fs"; import path from "node:path";
 const args = process.argv.slice(2);
@@ -47,7 +47,7 @@ const res = await page.evaluate(async ({ format, s0, s1, realtime, mp4test, webm
   const log = []; let lastTitle = "", lastChange = performance.now(), maxStall = 0, stallTitle = "", overTime = null;
   const poll = setInterval(() => {
     const ti = $("exportOverlayTitle").textContent, tm = $("exportTime").textContent, now = performance.now();
-    if (ti !== lastTitle) { lastTitle = ti; lastChange = now; log.push(((now - t0) / 1000).toFixed(1) + "s " + ti + " " + tm); }
+    if (ti + "|" + tm !== lastTitle) { lastTitle = ti + "|" + tm; lastChange = now; log.push(((now - t0) / 1000).toFixed(1) + "s " + ti + " " + tm); }   // 快速匯出標題固定「匯出中」,剩餘時間在 exportTime
     else if (now - lastChange > maxStall) { maxStall = now - lastChange; stallTitle = ti; }
     const m = tm.match(/^(\d+):(\d+) \/ (\d+):(\d+)$/);
     if (m && (+m[1] * 60 + +m[2]) > (+m[3] * 60 + +m[4])) overTime = tm;

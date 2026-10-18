@@ -732,6 +732,12 @@ body.exporting-active .empty-card{
 #exportOverlay .title{text-wrap:balance}
 .ph{display:inline-block}
 #exportTime{font-size:var(--fs-2xl);color:var(--gold-bright);font-variant-numeric:tabular-nums;margin-bottom:10px}
+/* 快速匯出顯示剩餘時間:「剩餘約」小字、數字大字、單位中字,同一行置中 */
+#exportTime .eta-pre,#exportTime .eta-unit{font-size:var(--fs-sm);color:var(--muted);letter-spacing:.05em}
+#exportTime .eta-pre{margin-right:.4em}
+#exportTime .eta-unit{margin:0 .35em 0 .2em}
+#exportTime .eta-num{font-weight:600}
+#exportTime .eta-calc{font-size:var(--fs-sm);color:var(--muted);letter-spacing:.05em}
 #exportBar{height:4px;background:var(--line);border-radius:2px;overflow:hidden;margin-bottom:14px}
 #exportFill{height:100%;width:0%;background:var(--gold)}
 #exportOverlay p{font-size:var(--fs-xs);color:var(--muted);line-height:1.8;margin-bottom:16px}
@@ -1417,7 +1423,11 @@ const I18N = {
     exportCancelling: "取消中…",
     exportAnalyzingSub: "YouTube 標準音量 −14 LUFS",
     exportRecordingAudioSub: "錄製聲音中(需要樂曲長度的時間)",
-    exportFastPct: "匯出中 {pct}%",
+    exportFastPct: "匯出中",
+    exportEtaPre: "剩餘約",
+    exportEtaCalc: "估算剩餘時間…",
+    exportEtaSec: "{s} 秒",
+    exportEtaMin: "{m} 分|{s} 秒",
     exportWarnTitle: "⚠ 請讓這個畫面保持在最前面",
     exportWarnBody: "切到其他 App 或螢幕熄滅時|會自動暫停,|回到這個畫面|就繼續錄。",
     exportFpsNote: "畫面 {fps} 格/秒(畫 {draw}ms · 送出 {push}ms · 排音 {sched}ms/秒)",
@@ -1677,7 +1687,11 @@ const I18N = {
     exportCancelling: "Cancelling…",
     exportAnalyzingSub: "YouTube standard: −14 LUFS",
     exportRecordingAudioSub: "Recording audio (takes as long as the piece)",
-    exportFastPct: "Exporting {pct}%",
+    exportFastPct: "Exporting",
+    exportEtaPre: "About",
+    exportEtaCalc: "Estimating time left…",
+    exportEtaSec: "{s} s left",
+    exportEtaMin: "{m} min|{s} s left",
     exportWarnTitle: "⚠ Keep this window in the foreground",
     exportWarnBody: "Switching apps or letting the screen sleep pauses the export; it continues when you come back.",
     exportFpsNote: "{fps} fps (draw {draw}ms · push {push}ms · scheduling {sched}ms/s)",
@@ -11677,6 +11691,36 @@ function fastProbeCacheSet(key, e){
 /* 試編多快才用快速匯出:一般 FAST_EXPORT.minSpeed(不比即時錄影慢);iPhone/iPad(含 App)的即時錄影只錄得到每秒約 6.5 格
    (2026-10 使用者影片:Safari 的 canvas 錄影器瓶頸,網頁本身每秒畫 45 格以上),所以只要不是慢到離譜都用快速匯出 */
 function fastMinSpeed(){ return (isIOSDevice() || window.IN_NATIVE_APP) ? 0.05 : FAST_EXPORT.minSpeed; }
+/* 快速匯出的剩餘時間(使用者要求,2026-10:「匯出中 %」改成剩餘秒數)。原始估計每次更新會跳,
+   所以在兩次更新之間照真實時間倒數,再往新的估計靠近 15%;超過一分鐘取到 5 秒,數字不會一直閃 */
+function makeExportEta(){
+  let sm = null, tLast = 0;
+  return {
+    update(raw){
+      const now = performance.now();
+      if (raw == null || !isFinite(raw)) { if (sm != null) { sm = Math.max(0, sm - (now - tLast) / 1000); tLast = now; } return sm; }
+      if (sm == null) sm = raw;
+      else { const pred = Math.max(0, sm - (now - tLast) / 1000); sm = pred + 0.15 * (raw - pred); }
+      tLast = now;
+      return sm;
+    }
+  };
+}
+function showExportEta(sec){
+  const el = $("exportTime");
+  if (sec == null) { if (el.dataset.eta !== "calc" || !el.firstChild) { el.dataset.eta = "calc"; el.innerHTML = '<span class="eta-calc"></span>'; el.firstChild.textContent = T("exportEtaCalc"); } return; }
+  let s = Math.max(1, Math.ceil(sec));
+  if (s > 60) s = Math.ceil(s / 5) * 5;
+  const key = s >= 60 ? "exportEtaMin" : "exportEtaSec";
+  const text = T(key, { m: Math.floor(s / 60), s: s >= 60 ? s % 60 : s });
+  if (el.dataset.eta === text && el.firstChild) return;
+  el.dataset.eta = text;
+  // 「{m} 分|{s} 秒」:每段 = 數字(大字)+ 單位(小字)
+  el.textContent = "";
+  const add = (cls, t) => { const sp = document.createElement("span"); sp.className = cls; sp.textContent = t; el.appendChild(sp); };
+  add("eta-pre", T("exportEtaPre"));
+  text.split("|").forEach(seg => { const m = seg.match(/^(\d+)\s*(.*)$/); if (m) { add("eta-num", m[1]); if (m[2]) add("eta-unit", m[2]); } else add("eta-unit", seg); });
+}
 async function fastExportVideo(cfg){
   // 準備(格式檢查、樂譜點陣化、試編)要幾秒,標題不能停在 0%(使用者會以為壞了):照時間往前推
   stopFastPrepTick();
@@ -11868,14 +11912,20 @@ async function fastExportVideo(cfg){
   if (!audioJob) { tAudio0 = performance.now(); audioJob = startAudio(); }
   const waitAudio = () => audioJob;
   let shown = 0;
+  const eta = makeExportEta();
   const showProgress = videoFrac => {
     shown = Math.max(shown, Math.min(videoFrac, audioFrac));
     setPct("exportFastPct", shown);
+    // 剩餘時間:畫面與聲音同時做,各自照目前速度推算還要多久,取較久的那個
+    const now = performance.now();
+    const left = (frac, t0) => { const el = (now - t0) / 1000; return frac >= 1 ? 0 : (frac > 0.02 && el > 1.5 ? el * (1 - frac) / frac : null); };
+    const lv = left(videoFrac, tVideo0), la = audioDone ? 0 : left(audioFrac, tAudio0);
+    showExportEta(eta.update(lv == null || la == null ? null : Math.max(lv, la)));
     // 錄音器錄聲音時(iOS 26 以前)提醒要樂曲長度的時間
     $("exportOverlaySub").textContent = audioDone ? "" : T(viaRec && L ? "exportRecordingAudioSub" : "exportAnalyzingSub");
   };
-  showProgress(0);
   const tVideo0 = performance.now();
+  showProgress(0);
   kbScanCursor = 0; kbScanLastSec = -1;
   // 3) 編碼器與封裝。輸出邊做邊收(StreamTarget 分塊,收尾時回頭改的地方直接蓋上),
   //    不要整個影片留在一塊不斷加倍的記憶體裡再複製兩次(審查估算:5 分鐘 1080p 原本尖峰約 650MB,iPhone 可能被系統關掉)
@@ -11919,7 +11969,6 @@ async function fastExportVideo(cfg){
       if (now - lastUi > 100) {
         lastUi = now;
         showProgress((f + 1) / nFrames);
-        $("exportTime").textContent = fmt(Math.min(total, Math.max(0, t - lead))) + " / " + fmt(total);
       }
       // 讓主執行緒喘口氣:取消按鈕要按得到;聲音還在算時更常讓(離線合成每 1 秒要回主執行緒補排音、Safari 的抄本也在主執行緒)
       if (now - lastYield > (audioDone ? 100 : 25)) { lastYield = now; await new Promise(r => setTimeout(r, 0)); }
