@@ -990,6 +990,7 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
         <button class="btn" id="transDown" disabled title="降半音(請先載入樂譜)" data-i18n-attr="aria-label:transDownAria">−</button>
         <b id="transVal" data-i18n="transposeOriginal">原調</b>
         <button class="btn" id="transUp" disabled title="升半音(請先載入樂譜)" data-i18n-attr="aria-label:transUpAria">＋</button>
+        <button class="btn" id="transReset" hidden data-i18n-attr="aria-label:transResetAria,title:transResetAria">↺</button>
       </span>
     </div>
   </div>
@@ -1323,6 +1324,7 @@ const I18N = {
     tempoDownAria: "慢一點(按住連續)",
     tempoUpAria: "快一點(按住連續)",
     transUpAria: "升半音",
+    transResetAria: "回到原調",
     transposeOriginal: "原調",
     transposeSemitone: "{sign}{n} 半音",
     transDisabledLoadFirst: "請先載入樂譜",
@@ -1587,6 +1589,7 @@ const I18N = {
     tempoDownAria: "Slower (hold to repeat)",
     tempoUpAria: "Faster (hold to repeat)",
     transUpAria: "Semitone up",
+    transResetAria: "Back to original key",
     transposeOriginal: "Original",
     transposeSemitone: "{sign}{n} st",
     transDisabledLoadFirst: "Load a score first",
@@ -3085,73 +3088,101 @@ const FLAT_ORDER  = ["B","E","A","D","G","C","F"]; // 降記號依序出現的�
 function transposeMusicXML(xmlText, semitones){
   if (!semitones) return xmlText;
   const doc = new DOMParser().parseFromString(xmlText, "text/xml");
-
-  // 讀取原調(用第一個 key/fifths,找不到就當C大調/A小調)
-  let origFifths = 0;
-  const keyEls = doc.getElementsByTagName("key");
-  if (keyEls.length) {
-    const f = keyEls[0].getElementsByTagName("fifths")[0];
-    if (f) origFifths = parseInt(f.textContent, 10) || 0;
-  }
+  const kids = (el, name) => Array.from(el.children).filter(c => c.nodeName === name);
+  const kid = (el, name) => kids(el, name)[0] || null;
 
   // 半音移調 -> 五度圈位移量(標準換算:每個半音對應到五度圈上的固定位置,7為五度的半音數,取最接近0的等音選擇)
   const rawShift = (((7 * semitones) % 12) + 12) % 12;
-  const fifthsShift = rawShift > 6 ? rawShift - 12 : rawShift;
-  let newFifths = origFifths + fifthsShift;
-  while (newFifths > 7) newFifths -= 12;  // 等音代換,避免超過7個升降記號的極端調
-  while (newFifths < -7) newFifths += 12;
-
+  const baseShift = rawShift > 6 ? rawShift - 12 : rawShift;
+  // 新調號超過 7 個升降記號時換成等音調(五度圈 ±12)。音符的拼法要跟著同一個位移量走:
+  // 以前調號換成等音調、音符卻照原本的位移量拼,5 升的調降半音變成 2 降的調號配上 E##、F### 這種音(2026-10 使用者回報移調後升記號錯)
+  const effShiftFor = f => { let n = f + baseShift; while (n > 7) n -= 12; while (n < -7) n += 12; return n - f; };
   // 音程移調(generic interval):連同音名字母一起移調,而不是移調後在新調裡重找拼法。
   // 這樣「這個音相對自己音名字母是升還是降」的關係會被保留下來——
-  // 例如和聲小調升高的導音(F升高成F#),移調後還是「升高」的狀態,
-  // 不會因為新調是降記號調就被誤判成該用降記號拼寫。
-  const letterShift = (((fifthsShift * 4) % 7) + 7) % 7;
-
-  // 重新拼寫每一個音符
-  for (const p of Array.from(doc.getElementsByTagName("pitch"))) {
-    const stepEl = p.getElementsByTagName("step")[0];
-    const octaveEl = p.getElementsByTagName("octave")[0];
-    if (!stepEl || !octaveEl) continue;
-    const alterEl = p.getElementsByTagName("alter")[0];
-    const origStep = stepEl.textContent.trim();
-    const origOctave = parseInt(octaveEl.textContent, 10);
-    const origAlter = alterEl ? parseFloat(alterEl.textContent) : 0;
-    const origLetterIdx = LETTERS.indexOf(origStep);
-    if (origLetterIdx < 0 || isNaN(origOctave)) continue;
-
-    const origMidi = (origOctave + 1) * 12 + LETTER_BASE[origStep] + origAlter;
-    const targetMidi = origMidi + semitones;
-
-    const totalLetterSteps = origLetterIdx + letterShift;
-    const newLetterIdx = totalLetterSteps % 7;
-    const letterOctaveCarry = Math.floor(totalLetterSteps / 7);
-    const newLetter = LETTERS[newLetterIdx];
-    const octaveBase = Math.floor(semitones / 12); // 整個八度的位移量,跟字母進位是兩件事,要分開算
-    const newOctaveGuess = origOctave + letterOctaveCarry + octaveBase;
-    const naturalNewMidi = (newOctaveGuess + 1) * 12 + LETTER_BASE[newLetter];
-    let newAlter = targetMidi - naturalNewMidi;
-    let newOctave = newOctaveGuess;
-    // 正常情況下 newAlter 應該落在小範圍內(單升降或重升降);
-    // 萬一超出合理範圍,代表八度算錯了,用八度校正(理論上不會發生,保險而已)
-    while (newAlter > 6) { newAlter -= 12; newOctave += 1; }
+  // 例如和聲小調升高的導音(F升高成F#),移調後還是「升高」的狀態,不會因為新調是降記號調就被誤判成該用降記號拼寫。
+  const respell = (step, octave, alter, shift) => {
+    const letterShift = (((shift * 4) % 7) + 7) % 7;
+    const origLetterIdx = LETTERS.indexOf(step);
+    const targetMidi = (octave + 1) * 12 + LETTER_BASE[step] + alter + semitones;
+    const total = origLetterIdx + letterShift;
+    const newLetter = LETTERS[total % 7];
+    let newOctave = octave + Math.floor(total / 7) + Math.floor(semitones / 12);   // 整個八度的位移量,跟字母進位是兩件事,要分開算
+    let newAlter = targetMidi - ((newOctave + 1) * 12 + LETTER_BASE[newLetter]);
+    while (newAlter > 6) { newAlter -= 12; newOctave += 1; }   // 保險:八度算錯時校正
     while (newAlter < -6) { newAlter += 12; newOctave -= 1; }
+    // 重升/重降再移一次可能變成三升/三降(例如 F## 往上移到某些調):改寫成相鄰字母的等音(F### → G#)
+    let li = LETTERS.indexOf(newLetter), letter = newLetter;
+    while (newAlter > 2) { const nx = (li + 1) % 7; if (nx === 0) newOctave++; newAlter -= ((LETTER_BASE[LETTERS[nx]] - LETTER_BASE[letter]) + 12) % 12; li = nx; letter = LETTERS[nx]; }
+    while (newAlter < -2) { const pv = (li + 6) % 7; if (li === 0) newOctave--; newAlter += ((LETTER_BASE[letter] - LETTER_BASE[LETTERS[pv]]) + 12) % 12; li = pv; letter = LETTERS[pv]; }
+    return { step: letter, octave: newOctave, alter: newAlter };
+  };
+  // 調號裡每個字母的升降
+  const SHARP_ORDER = "FCGDAEB";
+  const keyAlter = (fifths, L) => fifths > 0 ? (SHARP_ORDER.indexOf(L) < fifths ? 1 : 0) : fifths < 0 ? (SHARP_ORDER.length - 1 - SHARP_ORDER.indexOf(L) < -fifths ? -1 : 0) : 0;
+  const ACC_NAME = { "-2": "flat-flat", "-1": "flat", "0": "natural", "1": "sharp", "2": "double-sharp" };
+  const ACC_AFTER = ["type", "dot"];
+  const ACC_BEFORE = ["time-modification", "stem", "notehead", "notehead-text", "staff", "beam", "notations", "lyric", "play", "listen"];
 
-    stepEl.textContent = newLetter;
-    octaveEl.textContent = String(newOctave);
-    if (newAlter === 0) {
-      if (alterEl) alterEl.parentNode.removeChild(alterEl);
-    } else if (alterEl) {
-      alterEl.textContent = String(newAlter);
-    } else {
-      const newAlterEl = doc.createElement("alter");
-      newAlterEl.textContent = String(newAlter);
-      p.insertBefore(newAlterEl, stepEl.nextSibling);
+  for (const part of Array.from(doc.getElementsByTagName("part"))) {
+    let origFifths = 0, shift = effShiftFor(0);
+    for (const meas of kids(part, "measure")) {
+      // 臨時記號每小節重算(OSMD 的臨時記號計算在移調後的拼法常常出錯:F## 之後的 F# 不顯示升記號、G# 之後的 G 不顯示還原記號;
+      // 原檔的 <accidental> 是照原調寫的,移調後不對)。照記譜慣例:同一小節同一譜表同一個八度同一個字母,
+      // 跟調號/前一個音不同才要寫;跨小節延音線接過來的音不寫。原檔「不需要卻有寫」的(提醒用臨時記號)照樣保留,換成新的符號
+      const stOrig = {}, stNew = {};
+      let newFifths = origFifths + shift;
+      for (const el of Array.from(meas.children)) {
+        if (el.nodeName === "attributes") {
+          for (const k of kids(el, "key")) {
+            const f = kid(k, "fifths");
+            if (!f) continue;
+            origFifths = parseInt(f.textContent, 10) || 0;
+            shift = effShiftFor(origFifths);
+            newFifths = origFifths + shift;
+            f.textContent = String(newFifths);
+          }
+          continue;
+        }
+        if (el.nodeName !== "note") continue;
+        const p = kid(el, "pitch");
+        if (!p) continue;
+        const stepEl = kid(p, "step"), octaveEl = kid(p, "octave");
+        if (!stepEl || !octaveEl) continue;
+        let alterEl = kid(p, "alter");
+        const step = stepEl.textContent.trim(), octave = parseInt(octaveEl.textContent, 10);
+        const alter = alterEl ? Math.round(parseFloat(alterEl.textContent)) || 0 : 0;
+        if (LETTERS.indexOf(step) < 0 || isNaN(octave)) continue;
+        const np = respell(step, octave, alter, shift);
+        stepEl.textContent = np.step;
+        octaveEl.textContent = String(np.octave);
+        if (np.alter === 0) { if (alterEl) alterEl.remove(); }
+        else {
+          if (!alterEl) { alterEl = doc.createElement("alter"); p.insertBefore(alterEl, stepEl.nextSibling); }
+          alterEl.textContent = String(np.alter);
+        }
+        // 臨時記號
+        const staff = (kid(el, "staff") || { textContent: "1" }).textContent.trim();
+        const tieStop = kids(el, "tie").some(t => t.getAttribute("type") === "stop");
+        const kO = staff + step + octave, kN = staff + np.step + np.octave;
+        const curO = kO in stOrig ? stOrig[kO] : keyAlter(origFifths, step);
+        const curN = kN in stNew ? stNew[kN] : keyAlter(newFifths, np.step);
+        const firstInMeas = !(kN in stNew);
+        stOrig[kO] = alter; stNew[kN] = np.alter;
+        let accEl = kid(el, "accidental");
+        const neededOrig = alter !== curO, neededNew = np.alter !== curN && !(tieStop && firstInMeas);
+        const courtesy = accEl && (!neededOrig || accEl.getAttribute("cautionary") === "yes" || accEl.getAttribute("parentheses") === "yes");
+        const name = ACC_NAME[String(np.alter)];
+        if ((neededNew || courtesy) && name) {
+          if (!accEl) {
+            accEl = doc.createElement("accidental");
+            const after = ACC_AFTER.map(t => kids(el, t)).flat().pop();
+            const before = ACC_BEFORE.map(t => kid(el, t)).find(Boolean);
+            if (after) el.insertBefore(accEl, after.nextSibling); else el.insertBefore(accEl, before || null);
+          }
+          accEl.textContent = name;
+        } else if (accEl) accEl.remove();
+      }
     }
-  }
-  // 更新調號標記
-  for (const k of Array.from(keyEls)) {
-    const f = k.getElementsByTagName("fifths")[0];
-    if (f) f.textContent = String(newFifths);
   }
   return new XMLSerializer().serializeToString(doc);
 }
@@ -5955,6 +5986,7 @@ document.addEventListener("keydown", e => {
 
 /* ── 移調 ─────────────────────────────────── */
 function updateTransposeLabel(){
+  $("transReset").hidden = transposeSemitones === 0;
   $("transVal").textContent = transposeSemitones === 0
     ? T("transposeOriginal")
     : T("transposeSemitone", {
@@ -5982,6 +6014,8 @@ async function applyTranspose(delta){
 }
 $("transUp").addEventListener("click", () => applyTranspose(1));
 $("transDown").addEventListener("click", () => applyTranspose(-1));
+// 一鍵回到原調(使用者要求,2026-10):有移調時才出現在「＋」右邊
+$("transReset").addEventListener("click", () => { if (transposeSemitones) applyTranspose(-transposeSemitones); });
 
 $("scoreBgOpacity").addEventListener("input", () => {
   $("scoreBgOpacityVal").textContent = $("scoreBgOpacity").value;
@@ -6632,6 +6666,7 @@ function updateTransposeAvailability(){
   const disabled = isDrum || !scoreLoaded;
   $("transUp").disabled = disabled;
   $("transDown").disabled = disabled;
+  $("transReset").disabled = disabled;
   const title = !scoreLoaded ? T("transDisabledLoadFirst") : isDrum ? T("drumNotTransposable") : "";
   if (title) { $("transUp").title = title; $("transDown").title = title; }
   else { $("transUp").removeAttribute("title"); $("transDown").removeAttribute("title"); }
@@ -6810,7 +6845,7 @@ function pianoLevelAt(t){
    整首的力度只在 62~78 之間(約 4dB),聽起來從頭平到尾。這裡套用演奏研究常用的規則(KTH performance rules):
    - 織度:每小節音符越密、和弦越厚、旋律越高 → 越用力(跟前後小節比,平滑過)
    - 樂句弧線:4 小節與 8 小節兩層「漸強再漸弱」
-   - 曲尾兩小節漸弱收尾
+   - 曲尾兩小節照旋律線條(pianoEndContour):往上走漸強、往下走漸弱
    譜上有力度記號時只用四成,以譜為主 */
 function pianoAutoMacro(hasMarks){
   const bars = []; let bar = -1, lastM = null, lastPos = -1;
@@ -6845,10 +6880,40 @@ function pianoAutoMacro(hasMarks){
   const macro = inten.map(v => 5 * Math.max(-2, Math.min(2, (v - im) / isd)));
   return { macro, nb, scale: hasMarks ? 0.4 : 1 };
 }
+/* 曲尾的力度照旋律線條(使用者要求,2026-10:「整首最後的力度變化應該由旋律線條決定,往上走漸強,往下走漸弱」;
+   以前固定最後兩小節漸弱 6 力度)。旋律 = 右手(單譜表就是整個)每個時間點最高的音,前後平滑後跟兩小節前的旋律高度比:
+   每高一個半音 +0.7 力度,上下各最多 PIANO_END.max(高八度 ≈ +8);兩小節開頭剛好是 0,跟前面接得上。
+   跟其他段落起伏一樣,譜上有力度記號時只用四成,以譜為主(例如曲尾寫了 dim./pp 照樣變小聲) */
+const PIANO_END = { bars: 2, perSemi: 0.7, max: 8 };
+function pianoEndContour(nb, multiStaff){
+  const pts = [];
+  for (const ev of events) {
+    if (ev.pBar == null) continue;
+    const pos = ev.barLen > 0 && ev.barPos != null ? Math.min(1, ev.barPos / ev.barLen) : 0;
+    const x = ev.pBar + pos;
+    if (nb - x > PIANO_END.bars + 0.5) continue;   // 多抓半小節當起點的參考
+    const ps = ev.notes.filter(n => !n.drum && n.freq && (!multiStaff || (n.staff || 1) === 1));
+    if (!ps.length) continue;
+    pts.push({ x, p: Math.max(...ps.map(n => freqToMidi(n.freq))) });
+  }
+  if (pts.length < 2) return () => 0;
+  const sm = pts.map((q, i) => { let s = 0, w = 0; for (let j = Math.max(0, i - 1); j <= Math.min(pts.length - 1, i + 1); j++) { const k = j === i ? 2 : 1; s += pts[j].p * k; w += k; } return s / w; });
+  const x0 = nb - PIANO_END.bars;
+  // 起點:兩小節開頭那一刻的旋律高度(之前最後一個音;都在之後就用第一個)
+  let i0 = 0; for (let i = 0; i < pts.length; i++) if (pts[i].x <= x0 + 1e-6) i0 = i;
+  const p0 = sm[i0];
+  return x => {
+    if (x < x0) return 0;
+    let i = 0; for (let j = 0; j < pts.length; j++) if (pts[j].x <= x + 1e-6) i = j;
+    const w = Math.min(1, (x - x0) / 0.25);   // 前四分之一小節淡入,不要一進入就跳
+    return w * Math.max(-PIANO_END.max, Math.min(PIANO_END.max, (sm[i] - p0) * PIANO_END.perSemi));
+  };
+}
 function computePianoDynamics(){
   const multiStaff = events.some(ev => ev.notes.some(n => !n.drum && n.freq && (n.staff || 1) > 1));
   const hasMarks = scoreDynMarks.length > 0;
   const auto = pianoAutoMacro(hasMarks);
+  const endContour = pianoEndContour(auto.nb, multiStaff);
   const drift = { 1: 0, 2: 0 };
   const melodyHist = [];
   let k = 0, bar = -1, lastM = null, lastPos = -1;
@@ -6870,9 +6935,11 @@ function computePianoDynamics(){
       else base -= 3;
       const pos = ev.barLen > 0 ? Math.min(1, ev.barPos / ev.barLen) : 0;
       const arch = (n, amp) => amp * (Math.sin(Math.PI * (((bar % n) + pos) / n)) - 2 / Math.PI);   // 平均為 0 的弧線
-      let m = (auto.macro[bar] || 0) + arch(4, 4) + arch(8, 5);
       const fromEnd = auto.nb - (bar + pos);
-      if (fromEnd < 2) m -= 6 * (1 - fromEnd / 2);                                                  // 曲尾漸弱
+      // 曲尾兩小節:樂句弧線逐漸退出,改由旋律線條決定(往上漸強、往下漸弱)
+      const archW = fromEnd < PIANO_END.bars ? fromEnd / PIANO_END.bars : 1;
+      let m = (auto.macro[bar] || 0) + archW * (arch(4, 4) + arch(8, 5));
+      if (fromEnd < PIANO_END.bars) m += endContour(bar + pos);
       base += m * auto.scale;
     }
     for (const h of [1, 2]) drift[h] = 0.8 * drift[h] + 0.6 * (seededRand01(k * 3.17 + h * 11.3) - 0.5) * 10;
