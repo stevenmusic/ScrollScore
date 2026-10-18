@@ -6465,6 +6465,7 @@ function setPlayBtnState(isPlaying){
 function startPlayback(fromSec){
   ensureAudio();
   playing = true;
+  startGlideF = null;
   setPlayBtnState(true);
   acquireWakeLock(); // 播放中避免螢幕自動熄滅(練習/放在譜架上看譜時尤其需要)
   startAudioFrom(fromSec || 0);
@@ -6548,14 +6549,18 @@ function playCountIn(){
 let countInCancelled = false, countingIn = false;
 async function beginPlayback(fromSec){
   if (countingIn) return; // 已經在倒數中,避免重複點擊疊加倒數
-  if ($("countIn").checked) {
+  // 從頭播放、開頭樂譜往右擺(露出譜號)時:先把樂譜滑到第一個音對齊播放軸再出聲(有預備拍時一起進行)
+  const glide = !(fromSec > 0.01) && startShiftNeed() > 0;
+  if ($("countIn").checked || glide) {
     countInCancelled = false;
     countingIn = true;
-    setPlayBtnState(true); // 倒數期間先顯示「暫停」圖示,表示已經進入播放流程
-    setStatus(T("statusCountIn"));
-    await playCountIn();
+    setPlayBtnState(true); // 倒數/滑動期間先顯示「暫停」圖示,表示已經進入播放流程
+    const jobs = [];
+    if ($("countIn").checked) { setStatus(T("statusCountIn")); jobs.push(playCountIn()); }
+    if (glide) jobs.push(glideToStart(() => countInCancelled));
+    await Promise.all(jobs);
     countingIn = false;
-    if (countInCancelled) { setPlayBtnState(false); return; }
+    if (countInCancelled) { startGlideF = null; setScrollerX(lastScrollX); setPlayBtnState(false); return; }
   }
   // 母帶限幅器(AudioWorklet)還在載入的話先等它(最多 0.5 秒),不要播到一半才從備援換過去、音量跳一下
   ensureAudio();
@@ -8650,10 +8655,10 @@ let scoreFit = { s: 1, ty: 0 }, lastScrollX = 0;
 const SCREEN_SCORE = { maxSp: 13, maxSpWide: 16, wideFrom: 900, fill: 0.8, aheadSec: 2.5, drumAheadSec: 2 };
 // 大螢幕(樂譜區寬 ≥ wideFrom,iPad 橫放、筆電、桌機)上限放寬到 maxSpWide:以前 13px 時樂譜只用樂譜區四成高度(使用者同意,2026-10)
 /* 開頭的譜號不要被切掉(使用者截圖 2026-10:手機直式播放軸在 15%,第一個音對齊播放軸時,前面的譜號/調號/拍號約 150px
-   被推出畫面左邊)。第一個音對齊播放軸時樂譜左緣會跑出畫面的話:開頭時樂譜往右擺到左緣留 START_EDGE px,
-   播放軸對在第一個音上(比平常偏右);之後在「多出來距離 × 2」的樂譜長度內,播放軸平順滑回平常位置、樂譜跟著捲動,不會跳。
-   放得下的尺寸(平板、桌機多半)完全不變 */
-const START_EDGE = 8;
+   被推出畫面左邊)。播放軸永遠固定不動(使用者:播放軸滑動很怪,「直接把譜往左移」):
+   停在開頭時樂譜往右擺,實際內容(大括號/譜號)左緣留 START_EDGE px;按播放時先用 START_GLIDE_MS 把樂譜滑到
+   第一個音對齊播放軸,再開始出聲(有預備拍時在預備拍期間滑)。放得下的尺寸(平板、桌機多半)不變 */
+const START_EDGE = 8, START_GLIDE_MS = 450;
 /* 樂譜實際內容(大括號/譜號)的左緣,樂譜座標(未縮放)。SVG 左邊本身有一段空白(使用者截圖:大括號前空約 37px),
    開頭要對齊的是內容不是整張圖。同一份 SVG 只量一次 */
 let _contentLeftCache = { svg: null, x: 0 };
@@ -8671,19 +8676,32 @@ function scoreContentLeftX(){
   _contentLeftCache = { svg, x };
   return x;
 }
-function startShiftAt(x){
-  const s = scoreFit.s, P = playlineX(), x0 = events.length ? events[0].x : 0;
-  const need = START_EDGE - (P - (x0 - scoreContentLeftX()) * s);
-  if (!(need > 0)) return 0;
-  const D = 2 * need / s;   // 樂譜座標:這段距離內滑回去
-  return need * Math.max(0, Math.min(1, 1 - (x - x0) / D));
+// 開頭要往右擺多少 px 才看得到譜號(0 = 不用)
+function startShiftNeed(){
+  if (!events.length) return 0;
+  return Math.max(0, START_EDGE - (playlineX() - (events[0].x - scoreContentLeftX()) * scoreFit.s));
 }
+let startGlideF = null;   // 按播放時的滑動進度(1 = 往右擺 → 0 = 對齊播放軸);null = 沒在滑
 function setScrollerX(x){
   lastScrollX = x;
-  const extra = startShiftAt(x);
+  const x0 = events.length ? events[0].x : 0;
+  const f = startGlideF != null ? startGlideF : (!playing && !countingIn && x <= x0 + 0.5 ? 1 : 0);
+  const extra = f > 0 ? startShiftNeed() * f : 0;
   $("scroller").style.transform = "translate(" + (playlineX() + extra - x * scoreFit.s) + "px," + scoreFit.ty + "px) scale(" + scoreFit.s + ")";
-  const pl = $("playline");
-  if (pl) pl.style.left = (playlineX() + extra) + "px";
+}
+// 按播放時把樂譜從「看得到譜號」滑到「第一個音對齊播放軸」;cancelled() 回傳 true 時停下、放回原位
+function glideToStart(cancelled){
+  return new Promise(resolve => {
+    const t0 = performance.now(), x0 = events[0].x;
+    const step = now => {
+      if (cancelled()) { startGlideF = null; setScrollerX(x0); return resolve(false); }
+      const p = Math.min(1, (now - t0) / START_GLIDE_MS);
+      startGlideF = 1 - (p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2);   // 先加速再減速
+      setScrollerX(x0);
+      if (p < 1) requestAnimationFrame(step); else resolve(true);
+    };
+    requestAnimationFrame(step);
+  });
 }
 /* 播放軸貼著樂譜:最上/最下的符頭(或譜線)再往外留 PLAYLINE_PAD_SPACES_WITH_PANEL 個譜線間距,跟匯出影片同一條規則 */
 function updatePlaylineExtent(){
