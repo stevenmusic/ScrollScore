@@ -11333,6 +11333,20 @@ async function scheduleOfflineInSlices(onFrac){
    3) 封裝:mp4-muxer(H.264 + AAC,iPhone「照片」、QuickTime 都能播)或 webm-muxer(VP9 + Opus,沒有 AAC 編碼器的瀏覽器)
    瀏覽器不支援、或中途任何一步失敗(還沒產生影片前),自動退回原本的即時錄影,使用者不會拿不到影片。
    影片開頭留 FAST_EXPORT.lead 秒、結尾留 tail 秒讓殘響收尾(即時匯出是 0.4 / 0.6 秒) */
+/* 片尾淡出變黑(使用者同意 2026-10):樂曲結束後的結尾留白(快速匯出 1.2 秒、即時錄影 0.6 秒)裡,整個畫面淡到黑,
+   聲音不動、影片長度不變。結束後 END_FADE.delay 秒開始,到結尾前 END_FADE.hold 秒全黑;前段慢後段快(p^1.6),
+   不會像突然關燈。afterEnd = 已經超過樂曲結尾幾秒(負的 = 還沒結束,不畫) */
+const END_FADE = { delay: 0.1, hold: 0.1, maxSec: 1.0, curve: 1.6 };
+function drawEndFade(ctx, cfg, afterEnd, tailSec){
+  const span = Math.min(END_FADE.maxSec, tailSec - END_FADE.delay - END_FADE.hold);
+  if (!(afterEnd > END_FADE.delay) || !(span > 0)) return;
+  const p = Math.min(1, (afterEnd - END_FADE.delay) / span);
+  ctx.save();
+  ctx.globalAlpha = Math.pow(p, END_FADE.curve);
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, cfg.W, cfg.H);
+  ctx.restore();
+}
 const FAST_EXPORT = { lead: 0.4, tail: 1.2, audioBitrate: 192000, keyEverySec: 2, minSpeed: 1.0 };   // minSpeed:試編至少要幾倍速才用快速匯出。2026-10 從 1.2 改 1.0:聲音處理兩邊都要做,影片編碼不比樂曲長就不吃虧,而且每一格都完整、不會掉格
 // 取樣率跟著播放用的 AudioContext(殘響等 ConvolverNode 的 IR 是照它解碼的,離線 context 取樣率不同會出錯);通常 48000 或 44100
 function fastExportSampleRate(){ return (audioCtx && audioCtx.sampleRate) || 48000; }
@@ -12415,6 +12429,7 @@ async function fastExportVideo(cfg){
       const t = f / fps, songSec = Math.min(Math.max(t - lead, 0), total) + rangeStart;
       let t0 = performance.now();
       await drawAt(songSec);
+      drawEndFade(ctx, cfg, t - lead - total, FAST_EXPORT.tail);
       let t1 = performance.now(); ft.draw += t1 - t0;
       await feeder.push(Math.round(t * 1e6), f % keyEvery === 0);
       t0 = performance.now(); ft.push += t0 - t1;
@@ -12685,6 +12700,7 @@ async function exportVideo(cfg){
           const tA = performance.now();
           if (pg) drawExportPageFrame(ctx, layout, cfg, pg, songSec, calib);
           else drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib);
+          drawEndFade(ctx, cfg, el - LEAD - total, TAIL);
           const tB = performance.now();
           pushFrame();
           recStats.drawMs += tB - tA; recStats.pushMs += performance.now() - tB; recStats.n++;
