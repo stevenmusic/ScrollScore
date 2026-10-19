@@ -28,6 +28,7 @@ pip install numpy scipy soundfile pyloudnorm
 | `fast_export_check.mjs` | 匯出影片(快速匯出 / 即時錄影):實際跑一次「開始匯出」,存下影片、印出花的時間(`<樂譜> <輸出目錄> [landscape\|portrait\|square] [開始秒] [結束秒] [--realtime] [--webmtest] [--mp4test] [--inst drum]`)。雲端沒有硬體編碼器,快速匯出會因為試編太慢自動改即時錄影;--webmtest / --mp4test 強制走快速匯出檢查輸出。模擬 iPhone Safari:--dropmeta(編碼器不給 decoderConfig)、--nosuspend(離線合成不回報進度)、--failmux(封裝出錯要退回即時錄影)、--cancel N;--twice 同一頁匯出兩次(第二次用記住的試編結果);匯出後檢查 audioCtx 有換回即時的;印出標題最久幾秒沒變(看起來卡住)、時間有沒有超過樂曲長度,--log 列出每次變化。用 ffprobe / ffmpeg ebur128 看長度與響度 |
 | `mux_check.mjs` | MP4 封裝:ffmpeg 做真的 H.264 + AAC,模擬 Safari/Chrome 四種編碼器輸出餵給 muxVideoChunkFn / muxAudioChunkFn,解碼要跟原始串流逐位元相同 |
 | `rotate_check.mjs` | 旋轉螢幕:手機尺寸 × 載入前後 × 設定/匯出/主畫面 × 直橫來回(連轉、轉的時候切語言主題、快速轉),轉回來每個元素的字級與高度要跟直接打開一樣;--nofix 拿掉 text-size-adjust 對照 |
+| `cover_sheet_check.mjs` | 封面樣式選擇框:17 種尺寸 × 橫/直/方,量縮圖大小與佔畫面比例,檢查縮圖不超出框/畫面、取消鈕看得到、不用捲動 |
 | `feature_check.mjs` | 功能總檢查:範例載入、頂欄、播放/暫停/從頭、跳轉、速度、移調、所有開關、色票、背景圖、深淺模式、語言、重新整理後記住設定、鼓譜、匯出頁三種格式預覽、Guitar Pro 匯入(用 alphaTab 把歡樂頌轉成 .gp)、全程沒有錯誤訊息 |
 | `shot.mjs` | 樂譜畫面截圖,`--eval '<js>'` 印出頁面裡的變數(events、perfMeasures、tempoMap…) |
 
