@@ -54,6 +54,7 @@ if (!window.IN_NATIVE_APP) document.write('<link rel="preconnect" href="https://
   --surface-glass:rgba(32,26,15,.88);  /* 浮在頁面上的卡片/彈出層(搭配 blur) */
   --surface-sheet:rgba(22,18,9,.9);    /* 底部抽屜 */
   --surface-inset:rgba(22,18,9,.55);   /* 凹陷的輸入區塊 */
+  --seg-track:rgba(255,255,255,.07);--seg-sep:rgba(201,162,75,.3);   /* iOS 原生分段鈕的軌道、沒選的格子之間的分隔線 */
   --surface-inset-hi:rgba(22,18,9,.75);/* 凹陷區塊 focus 時 */
   --scrim:rgba(12,10,7,.88);           /* 對話框後的遮罩 */
   --scrim-soft:rgba(8,6,3,.55);        /* 抽屜後的遮罩 */
@@ -85,6 +86,7 @@ body.light{
   --surface-glass:rgba(252,249,241,.92);
   --surface-sheet:rgba(251,247,238,.97);
   --surface-inset:rgba(255,255,255,.7);
+  --seg-track:rgba(60,45,10,.08);--seg-sep:rgba(122,92,22,.3);
   --surface-inset-hi:rgba(255,255,255,.95);
   --scrim:rgba(60,48,22,.42);
   --scrim-soft:rgba(60,48,22,.28);
@@ -207,7 +209,7 @@ body.header-brand-hidden header .brand{display:none}
 /* 窄螢幕(< 360)有移調、↺ 出現時「選單 + − 數值 ＋ ↺」一列放不下(320 寬超出 13px):選單自己一列,移調那組在下一列 */
 @media (max-width:359px){
   .settings-group .combo-row:has(#transReset:not([hidden])){flex-wrap:wrap}
-  .combo-row:has(#transReset:not([hidden])) #instrument{flex:1 1 100%;max-width:none}
+  .combo-row:has(#transReset:not([hidden])) #instSeg{flex:1 1 100%;max-width:none}
   .combo-row:has(#transReset:not([hidden])) .trans-group{margin-left:0}
 }
 #tempoRow input[type=range]{flex:1 1 auto;width:auto;min-width:60px}
@@ -304,6 +306,7 @@ input[type=range]::-webkit-slider-thumb{
    而手機橫向時 .btn 只有 36px——最小高度會變成地板,stretch 就縮不下去,又差 2px。
    把地板拿掉,高度完全交給這一列最高的元素決定 */
 .combo-row #instrument{flex:0 1 auto;min-width:92px;max-width:200px;align-self:stretch;min-height:0}
+.combo-row #instSeg{flex:0 1 auto;min-width:112px;max-width:200px;align-self:stretch}   /* 要寫在下面的 @media 前面,窄畫面才蓋得過 */
 .combo-row .trans-group{display:inline-flex;align-items:center;gap:6px;flex:none;margin-left:auto}
 .combo-row .trans-group .btn{padding:4px 10px}
 .combo-row #transVal{min-width:4.6em;text-align:center}
@@ -418,7 +421,7 @@ body.kb-hidden #keyboardCanvas{display:none}
 /* 折疊機外螢幕(280px):樂器選單與移調放不下同一列,換行、選單占滿整列 */
 @media (max-width:300px){
   .settings-group .combo-row{flex-wrap:wrap}
-  .combo-row #instrument{flex:1 1 100%;max-width:none}
+  .combo-row #instSeg{flex:1 1 100%;max-width:none}
   .combo-row .trans-group{margin-left:0}
 }
 /* 最舊款極窄機型(320px):再壓縮一輪按鈕內距與滑桿/數字框寬度 */
@@ -889,6 +892,15 @@ body.exporting-active .empty-card{
 .seg button[aria-checked="true"]{border-color:var(--gold);background:rgba(201,162,75,.12)}
 .seg button[aria-checked="true"] b{color:var(--gold-bright)}
 .seg-sm button{min-height:36px;padding:6px 4px}
+/* iOS 原生分段鈕(2026-10-21 使用者選定,跟 PianoDrill / DrumDrill / HarmonyMap 一樣):灰底軌道 + 浮起來的選中塊;
+   用在單純的幾選一(樂器、樂譜位置)。匯出格式那排有比例小圖與兩行字,維持卡片(.seg) */
+.ios-seg{display:flex;gap:2px;padding:3px;border-radius:10px;background:var(--seg-track)}
+.ios-seg button{flex:1 1 0;min-width:0;min-height:36px;padding:4px 8px;border:0;border-radius:8px;background:transparent;
+  color:var(--muted-bright);font-family:inherit;font-size:var(--fs-sm);cursor:pointer;white-space:nowrap;transition:background .15s,color .15s}
+.ios-seg button + button:not([aria-checked="true"]){background:linear-gradient(var(--seg-sep),var(--seg-sep)) no-repeat left center / 1px 50%}
+.ios-seg button[aria-checked="true"] + button{background:transparent}
+.ios-seg button[aria-checked="true"]{background:var(--gold);color:var(--bg);font-weight:700;box-shadow:0 1px 3px rgba(0,0,0,.35),0 0 0 .5px rgba(0,0,0,.08)}
+.ios-seg button b{font-weight:inherit;color:inherit}
 .exp-switch{justify-content:space-between;width:100%}
 .exp-field{display:flex;align-items:center;gap:10px}
 .exp-field > span{width:4.2em;flex:none;font-size:var(--fs-xs);color:var(--muted);white-space:nowrap}
@@ -1006,7 +1018,12 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
          左邊那兩個「樂器」「移調」標籤等於把同一件事講兩次,拿掉之後剛好騰出並排的寬度。
          aria-label 保留,螢幕報讀器還是聽得到欄位名稱 -->
     <div class="tempo-box combo-row">
-      <select id="instrument" data-i18n-attr="aria-label:instrumentAria">
+      <!-- 樂器 = iOS 原生分段鈕(#instSeg);<select> 留著藏起來,存設定、程式讀值都照舊(value 一改分段鈕自動跟著) -->
+      <div class="ios-seg" id="instSeg" role="radiogroup" data-i18n-attr="aria-label:instrumentAria">
+        <button type="button" data-v="piano" role="radio" data-i18n="instPiano">鋼琴</button>
+        <button type="button" data-v="drum" role="radio" data-i18n="instDrum">鼓組</button>
+      </div>
+      <select id="instrument" hidden data-i18n-attr="aria-label:instrumentAria">
         <option value="piano" data-i18n="instPiano">鋼琴</option>
         <!-- 吉他不在選單裡(2026-10):找得到的吉他取樣授權不能上架(GPL / 不可商用)或品質、音域不夠,
              上架版不能出現未完成的功能。程式保留,要恢復就加回 <option value="guitar"> / <option value="guitarnylon"> -->
@@ -1189,7 +1206,7 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
             <summary><span data-i18n="expAdvanced">進階</span><span class="chev">›</span></summary>
             <div class="exp-row">
               <span class="exp-label" data-i18n="expAlignLabel">樂譜位置</span>
-              <div class="seg seg-sm" id="expAlignSeg" role="radiogroup">
+              <div class="ios-seg" id="expAlignSeg" role="radiogroup">
                 <button type="button" data-v="top" role="radio"><b data-i18n="expAlignTop">靠上</b></button>
                 <button type="button" data-v="center" role="radio"><b data-i18n="expAlignCenter">置中</b></button>
                 <button type="button" data-v="bottom" role="radio"><b data-i18n="expAlignBottom">靠下</b></button>
@@ -8971,6 +8988,18 @@ function scheduleNote(freq, when, dur, legato, pedal, chordAnchors, harmonyEndSe
   }
 }
 
+/* 樂器分段鈕跟藏起來的 <select> 同步:程式各處直接寫 $("instrument").value(載入鼓譜、讀設定),
+   在這個元素上包一層 value,寫入時順便更新分段鈕 */
+(() => {
+  const sel = $("instrument"), d = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value");
+  const sync = () => { for (const b of $("instSeg").querySelectorAll("button")) b.setAttribute("aria-checked", b.dataset.v === d.get.call(sel) ? "true" : "false"); };
+  Object.defineProperty(sel, "value", { configurable: true, get(){ return d.get.call(this); }, set(v){ d.set.call(this, v); sync(); } });
+  $("instSeg").addEventListener("click", e => {
+    const b = e.target.closest("button[data-v]"); if (!b || b.dataset.v === sel.value) return;
+    sel.value = b.dataset.v; sel.dispatchEvent(new Event("change"));
+  });
+  sync();
+})();
 $("instrument").addEventListener("change", () => {
   ensureAudio();
   if (currentInstrument() === "drum") { loadDrumKit(); }
