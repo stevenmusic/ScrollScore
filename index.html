@@ -41,6 +41,7 @@ if (!window.IN_NATIVE_APP) document.write('<link rel="preconnect" href="https://
   --radius-md:14px;
   --radius-lg:18px;
   --radius-pill:999px;
+  --radius-btn:12px;   /* 按鈕一律圓角方形(2026-10-22 使用者選定,PianoDrill / DrumDrill / HarmonyMap 同一套);只有圖示的按鈕維持圓形 */
   /* 字級量表:從最小的輔助標籤到最大的顯示數字,固定7階比例,不再各處零散決定字級大小 */
   --fs-2xs:11px;
   --fs-xs:12px;
@@ -164,7 +165,7 @@ header h1 span{color:var(--ivory);font-weight:600}
   display:inline-flex;align-items:center;justify-content:center;gap:6px;line-height:1;
   border:1px solid var(--gold);background:transparent;color:var(--gold);
   font-family:inherit;font-size:var(--fs-md);font-weight:500;
-  padding:8px 16px;height:38px;border-radius:var(--radius-pill);cursor:pointer;
+  padding:8px 16px;height:38px;border-radius:var(--radius-btn);cursor:pointer;
   transition:background .2s,color .2s;
   white-space:nowrap;
 }
@@ -179,6 +180,9 @@ header h1 span{color:var(--ivory);font-weight:600}
    高度走(不同斷點高度不一樣,不用每個斷點各寫一次),「EN」/「中」都只有一兩個字,
    圓形裝得下,視覺上也跟其他圖示按鈕一致,不會忽圓忽橢圓 */
 #langToggle{aspect-ratio:1;padding:0;font-weight:700;letter-spacing:.02em}
+/* 只有圖示的按鈕維持圓形:主題、語言,以及頂欄收成只剩圖示時(header-icons-only)、桌機上本來就沒有文字的頂欄按鈕 */
+#themeToggle,#langToggle,body.header-icons-only header .btn,header .btn:not(:has(.btn-label)){border-radius:var(--radius-pill)}
+#themeToggle{aspect-ratio:1;padding:0}   /* 主題鈕只有圖示:正圓(以前桌機上是橢圓)*/
 .btn:disabled{opacity:.35;cursor:not-allowed}
 /* 樂譜載入前,播放/停止先整個隱藏(而不只是變淡);整個第二排(#transportBar)本身
    也是載入後才出現,這裡是雙重保險,避免兩者的顯示時機萬一沒對齊 */
@@ -268,7 +272,7 @@ input[type=range]::-webkit-slider-thumb{
 }
 #settingsPanel select{
   background:var(--bg);color:var(--ivory);border:1px solid var(--gold);
-  border-radius:var(--radius-pill);padding:6px 12px;font-family:inherit;font-size:var(--fs-sm);
+  border-radius:var(--radius-btn);padding:6px 12px;font-family:inherit;font-size:var(--fs-sm);
   min-height:34px;max-width:150px;
 }
 /* 三大分組:音色與調性 / 播放與顯示 / 進階(收合),用淡淡卡片底色隔開,降低整片選單的資訊密度。
