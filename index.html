@@ -2538,11 +2538,10 @@ $("fileInput").addEventListener("change", async e => {
 /* ── 拖放檔案到樂譜區直接載入(桌面版方便) ─────────────────── */
 const SCORE_FILE_RE = /\.(xml|musicxml|mxl|gp|gpx|gp5|gp4|gp3)$/i;
 const GP_FILE_RE = /\.(gp|gpx|gp5|gp4|gp3)$/i;
-/* 樂譜裡的作曲者(<creator type="composer">,沒有就第一個 <creator>),給匯出影片的副標題當預設值 */
 /* 副標題的預設值(使用者反映,2026-10:樂譜的副標題沒帶過來,反而放了「Composed by …」):依序找
    ① MuseScore 4 的 <miscellaneous-field name="subtitle"> ② <credit-type>subtitle</credit-type> 的 credit-words
    ③ 有 work-title 時的 movement-title(MuseScore 3 等把副標題寫在這裡;跟標題一樣就跳過)
-   都沒有才用作曲者(沒有就第一個 creator),拿掉「Composed by / Music by / 作曲:」之類的前綴 */
+   都沒有就留空(不用作曲者) */
 function scoreCreatorFromXml(xml){
   const head = String(xml || "").slice(0, 40000);   // 只看檔頭,不用整份解析
   const dec = v => { const t = document.createElement("textarea"); t.innerHTML = v; return t.value.replace(/\s+/g, " ").trim().slice(0, 80); };
@@ -2551,9 +2550,7 @@ function scoreCreatorFromXml(xml){
   let sub = pick(/<miscellaneous-field[^>]*name="subtitle"[^>]*>([^<]+)<\/miscellaneous-field>/);
   if (!sub) { const m = head.match(/<credit\b[^>]*>(?:(?!<\/credit>)[\s\S])*?<credit-type>\s*subtitle\s*<\/credit-type>(?:(?!<\/credit>)[\s\S])*?<credit-words[^>]*>([^<]+)<\/credit-words>/); if (m) sub = dec(m[1]); }
   if (!sub && title) { const mv = pick(/<movement-title[^>]*>([^<]+)<\/movement-title>/); if (mv && mv !== title) sub = mv; }
-  if (sub) return sub;
-  const c = pick(/<creator[^>]*type="composer"[^>]*>([^<]+)<\/creator>/) || pick(/<creator[^>]*>([^<]+)<\/creator>/);
-  return c.replace(/^(?:(?:composed|music|words and music|arranged|arr\.?) by\s+|(?:music|composer|作曲|詞曲|曲)\s*[:：]\s*|作曲\s+)/i, "").trim();
+  return sub;   // 沒有副標題就留空:作曲/作詞者不帶入(使用者要求,2026-10:「Composed by 這一行不需要出現,只要標題跟副標題」)
 }
 /* 檔案選擇器一律保留 accept(只列樂譜格式、沒有圖片/影片類型):iPhone 沒有 accept 時會先跳「照片圖庫/拍照或錄影/選擇檔案」選單,
    有 accept 才直接打開「檔案」(使用者要求,2026-10;曾為了怕 .mxl/.gp5 變灰色拿掉過)。選錯檔案時 loadScoreFile 會說明。
