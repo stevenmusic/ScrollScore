@@ -1960,6 +1960,7 @@ let scoreDynMarks = [], scoreWedges = []; // 力度記號與髮夾(記譜位置)
 let scoreDynOffsets = [];
 let scoreChokeTimes = [];   // 鼓譜的止音文字(Mute / Choke…)位置(記譜位置),見 markDrumChokes   // una corda 等整段力度偏移 {start, end, delta}(記譜位置)
 let scoreSections = [];     // 段落 {t: 記譜位置, kind}(sectionKind;非古典的段落力度用,見 PIANO_SECTION)
+let scoreFermataWords = [];   // 延長的文字 {t: 記譜位置, len}(見 FERMATA)
 let scoreTempoSpans = [];   // rit./rall./accel. 的範圍 {start, end, hold, kind, target}(resolveTempoWordSpans,一定照做的速度曲線)
 let scoreTempoWords = [];   // 速度文字 {t: 記譜位置, kind: "rit" | "accel" | "atempo"}(rit./rall./a tempo…,彈性速度模型用)
 let ghostNoteheadEntries = {}; // 同上,記錄括號符頭(鬼音 ghost note,輕輕帶過的小鼓等),播放時用最輕的力度層
@@ -2464,6 +2465,7 @@ async function loadScoreFile(file){
     scoreDynMarks = parsed.dynMarks || [];
     scoreTempoWords = parsed.tempoWords || [];
     scoreTempoSpans = parsed.tempoSpans || [];
+    scoreFermataWords = parsed.fermataWords || [];
     scoreSections = (parsed.sections || []).map(x => ({ t: x.t, kind: sectionKind(x.text) })).filter(x => x.kind).sort((a, b) => a.t - b.t);
     scoreWedges = parsed.wedges || [];
     scoreDynOffsets = parsed.dynOffsets || [];
@@ -3934,6 +3936,7 @@ function parseXmlTimeline(xmlText){
     const wordActs = [];   // 力度文字 {t, a: dynamicWordActions(), dash: 虛線編號}(soft、dolce、cresc.…,見 resolveScoreDynamicWords)
     const dashStops = [];  // 虛線結束 {t, num}
     const chokeTimes = []; // 止音文字 Mute / Choke 的位置(鼓譜用)
+    const fermataWords = [];   // 延長的文字 {t, len}(Fermata lunga / Long hold…,fermataWordLen)
     const sections = [];   // 段落記號/段落文字 {t, text}(Intro / Verse / Chorus / 主歌 / 副歌…,sectionKind)
     const staffOnsets = {}; // staffNum -> [{tWhole, durWhole, pcs:Set}], 給重複音型偵測用
     const articMap = {}; // tWhole(定點字串) -> {accent,strongAccent,staccato,staccatissimo,tenuto,detachedLegato,spiccato,softAccent,fermata}
@@ -4004,6 +4007,7 @@ function parseXmlTimeline(xmlText){
           // gp-default-dynamics:Guitar Pro 匯入時第一個預設 f 只是顯示(見 gpToMusicXML),不當成力度記號
           if (dynEl && dynEl.children[0] && child.getAttribute("id") !== "gp-default-dynamics") dynMarks.push({ t: cursor, mark: dynEl.children[0].tagName.toLowerCase() });
           for (const rEl of Array.from(child.getElementsByTagName("rehearsal"))) sections.push({ t: cursor, text: rEl.textContent.trim() });
+          for (const wEl of Array.from(child.getElementsByTagName("words"))) { const fl = fermataWordLen(wEl.textContent); if (fl) fermataWords.push({ t: cursor, len: fl }); }
           for (const wEl of Array.from(child.getElementsByTagName("words"))) {
             if (sectionKind(wEl.textContent)) sections.push({ t: cursor, text: wEl.textContent.trim() });
             const kind = tempoWordKind(wEl.textContent);
@@ -4103,7 +4107,8 @@ function parseXmlTimeline(xmlText){
               if (artEl.getElementsByTagName("spiccato")[0]) flags.spiccato = true;
               if (artEl.getElementsByTagName("soft-accent")[0]) flags.softAccent = true;
             }
-            if (notations.getElementsByTagName("fermata")[0]) flags.fermata = true;
+            const fermEl = notations.getElementsByTagName("fermata")[0];
+            if (fermEl) { flags.fermata = true; flags.fermataLen = fermataShapeLen(fermEl.textContent); }
             if (Object.keys(flags).length) {
               const key = noteCursor.toFixed(6);
               const existing = articMap[key] || {};
@@ -4217,7 +4222,7 @@ function parseXmlTimeline(xmlText){
     const measureRanges = measureBoundaries.map((start, i) => ({
       start, end: i + 1 < measureBoundaries.length ? measureBoundaries[i + 1] : cursor
     }));
-    return { slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges, articMap, arpMap, soundTempo, metronomeDisplay, timeSig, isDrumScore, crossNoteheadMap, ghostNoteheadMap, dynMarks, dynOffsets, chokeTimes, tempoWords, tempoSpans, sections, wedges, measureRanges, guitarTechMap, vibratoRanges: outWavyLines, scoreTitle };
+    return { slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges, articMap, arpMap, soundTempo, metronomeDisplay, timeSig, isDrumScore, crossNoteheadMap, ghostNoteheadMap, dynMarks, dynOffsets, chokeTimes, tempoWords, tempoSpans, sections, fermataWords, wedges, measureRanges, guitarTechMap, vibratoRanges: outWavyLines, scoreTitle };
   } catch (e) {
     console.error("讀取踏板/圓滑線資訊失敗:", e);
     return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, arpMap: {}, soundTempo: null, metronomeDisplay: null, timeSig: null, isDrumScore: false, crossNoteheadMap: {}, measureRanges: [], guitarTechMap: {}, vibratoRanges: [], scoreTitle: null };
@@ -4535,6 +4540,50 @@ function resolveTempoWordSpans(words, dashStops, bars, endT){
   return out;
 }
 /* 記譜位置 → 速度文字造成的速度倍率(1 = 原速) */
+/* 延長記號的長短(使用者要求,2026-10:「Fermata lunga、Long hold、Very long hold 這類文字記號也應該加上效果」):
+   速度倍率(那個音所在的時間變成 1/倍率 倍長):短 0.75(約 1.3 倍)、一般 0.58(約 1.7 倍,ASAP 真人平均)、長 0.45(約 2.2 倍)、
+   很長 0.33(約 3 倍);前一個音也稍微放慢(prev,接得上)。記號的形狀:<fermata>angled / double-angled</fermata> 短、square 長、
+   double-square 很長,其他(normal、空白)一般。文字:fermata lunga / lunga / long hold / 長延長 = 長,very long hold / molto lunga /
+   lunghissima / 很長 = 很長,fermata breve / short hold = 短,單獨的 fermata / 延長記號 = 一般(「hold」單獨不算,常是 hold pedal)。
+   文字貼在那個位置起半拍內最近的音上。跟 rit. 一樣不管彈性速度開不開都照做(以前只在彈性速度裡,關掉時時間不會停) */
+const FERMATA = { short: 0.75, normal: 0.58, long: 0.45, verylong: 0.33 };
+function fermataShapeLen(shape){
+  const s = String(shape || "").trim().toLowerCase();
+  if (s === "angled" || s === "double-angled") return "short";
+  if (s === "square") return "long";
+  if (s === "double-square") return "verylong";
+  return "normal";
+}
+function fermataWordLen(text){
+  const s = String(text || "").toLowerCase().replace(/[\s.]+/g, " ").trim();
+  if (!s || s.length > 30) return null;
+  if (/\b(very long hold|extra long hold|molto lunga|lunghissim[ao]|fermata molto lunga)\b|很長的延長|非常長/.test(s)) return "verylong";
+  if (/\b(fermata lunga|lunga|long hold|long fermata|lunga pausa)\b|長延長|长延长|長い延長/.test(s)) return "long";
+  if (/\b(fermata breve|short hold|short fermata|breve)\b|短延長|短い延長/.test(s)) return "short";
+  if (/^(fermata|延長記號|延长记号|延長)$/.test(s)) return "normal";
+  return null;
+}
+/* 事件的延長長短(記號或文字);沒有回傳 null */
+function eventFermataLen(ev){
+  const a = ev.artic;
+  let len = a && a.fermata ? (a.fermataLen || "normal") : null;
+  const sT = ev.srcT != null ? ev.srcT : ev.tWhole, half = (ev.beatLen || 0.25) / 2;
+  for (const w of scoreFermataWords) if (sT >= w.t - 1e-6 && sT < w.t + half - 1e-6) {
+    if (!len || FERMATA[w.len] < FERMATA[len]) len = w.len;
+  }
+  return len;
+}
+function fermataFactors(){
+  const f = events.map(() => 1);
+  for (let i = 0; i < events.length; i++) {
+    const len = events[i].fermataLen;
+    if (!len) continue;
+    const v = FERMATA[len];
+    f[i] = Math.min(f[i], v);
+    if (i > 0 && !events[i - 1].fermataLen) f[i - 1] = Math.min(f[i - 1], Math.max(0.62, 1 - (1 - v) * 0.9));   // 前一個音:最多 0.62(延長之前稍微收,長短都一樣;拉長的是延長那個音)
+  }
+  return f;
+}
 function tempoWordFactor(t){
   for (const r of scoreTempoSpans) {
     if (t < r.start - 1e-6 || t >= r.hold - 1e-6) continue;
@@ -5042,8 +5091,11 @@ function buildTimeline(){
     const stMatch = bySt && ev.notes.some(n => !n.drum && bySt[n.staff || 1]);
     for (const n of ev.notes) {
       if (n.drum) continue;
-      n.artic = !ev.artic ? null : stMatch ? Object.assign({}, bySt[n.staff || 1] || {}, ev.artic.fermata ? { fermata: true } : {}) : ev.artic;
+      n.artic = !ev.artic ? null : stMatch ? Object.assign({}, bySt[n.staff || 1] || {}, ev.artic.fermata ? { fermata: true, fermataLen: ev.artic.fermataLen } : {}) : ev.artic;
     }
+    // 延長記號的長短(記號形狀或 Fermata lunga / Long hold 文字);文字的延長也加到每個音的 artic(放鍵時間跟著拉長)
+    ev.fermataLen = eventFermataLen(ev);
+    if (ev.fermataLen) for (const n of ev.notes) if (!n.drum) n.artic = Object.assign({}, n.artic || {}, { fermata: true, fermataLen: ev.fermataLen });
     ev.guitarTech = findNearestEntry(guitarTechEntries, sT, MARK_MATCH_EPSILON) || null;
     ev.vibrato = inRanges(sT, vibratoRanges);
   }
@@ -5832,7 +5884,8 @@ function buildRubatoMap(){
   showRubatoStyle(null);
   if (events.length < 2) return;
   // 譜上的 rit./rall./accel.(tempoWordFactor):彈性速度關掉、鼓組也照做(tempoWordMap);彈性速度開著時併進模型的倍率
-  const wf = events.map(ev => tempoWordFactor(ev.srcT != null ? ev.srcT : ev.tWhole));
+  const ff = fermataFactors();   // 延長記號(依長短),跟 rit. 一樣不管彈性速度開不開都照做
+  const wf = events.map((ev, i) => Math.min(tempoWordFactor(ev.srcT != null ? ev.srcT : ev.tWhole), ff[i]));
   if (wf.some(v => Math.abs(v - 1) > 1e-6)) tempoWordMap = warpMapFrom(wf);
   if (!RUBATO_MODEL) return;
   if (events.every(ev => ev.notes.every(nn => nn.drum))) return;   // 純鼓譜:律動要穩,不做彈性速度
@@ -5857,16 +5910,14 @@ function buildRubatoMap(){
   const style = RUBATO_NONCLASSICAL + (1 - RUBATO_NONCLASSICAL) * cp;
   const fastStyle = Math.max(0, (cp - 0.25) / 0.75);   // p ≤ 0.25 不加快,p = 1 跟以前一樣
   const mult = y.map(v => Math.exp((v - med) * (v < med ? RUBATO_AMOUNT.slow * style : RUBATO_AMOUNT.fast * fastStyle)));
-  // 延長記號是罕見但明確的情況,模型會低估(訓練時佔比太小),照 ASAP 真人平均補:那一拍慢 42%、前一個音慢 38%
+  // 延長記號是罕見但明確的情況,模型會低估(訓練時佔比太小):一般延長照 ASAP 真人平均補(那一拍慢 42%、前一個音慢 38%),
+  // 長短依記號形狀/文字(fermataFactors,已併在 wf 裡);倍率範圍限制之後才套,很長的延長(0.33)不會被 0.45 下限擋掉
   // (以前最後一小節再 ×0.83,新倍率下會慢到 50%、真人 37%,拿掉)
   for (let i = 0; i < n; i++) {
-    const a = events[i].artic || {}, an = (events[i + 1] && events[i + 1].artic) || {};
-    if (a.fermata) mult[i] = Math.min(mult[i], 0.58);
-    else if (an.fermata) mult[i] = Math.min(mult[i], 0.62);
-    // 譜上的 rit./accel.:至少慢/快到速度文字的曲線(模型本身也有 rit. 特徵,取較明顯的,不重複疊加)
-    if (wf[i] < 1) mult[i] = Math.min(mult[i], wf[i]); else if (wf[i] > 1) mult[i] = Math.max(mult[i], wf[i]);
     if (popBreath) mult[i] *= popBreath[i];
     mult[i] = Math.max(RUBATO_MULT_RANGE[0], Math.min(RUBATO_MULT_RANGE[1], mult[i]));
+    // 譜上的 rit./accel./延長記號:至少慢/快到記號的程度(模型本身也有 rit./延長特徵,取較明顯的,不重複疊加)
+    if (wf[i] < 1) mult[i] = Math.min(mult[i], wf[i]); else if (wf[i] > 1) mult[i] = Math.max(mult[i], wf[i]);
   }
   rubatoMap = warpMapFrom(mult);
 }
@@ -7847,7 +7898,7 @@ function playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel
     else if (artic.staccato) keyUp = dur * 0.5;
     else if (artic.detachedLegato) keyUp = dur * 0.75;
     if (artic.tenuto) keyUp = Math.max(keyUp, dur * 0.98);
-    if (artic.fermata) keyUp *= 1.8;
+    if (artic.fermata) keyUp *= 1.8 * FERMATA.normal / FERMATA[artic.fermataLen || "normal"];
   }
   keyUp = when + Math.max(0.04, keyUp) + (legato && !pedal ? 0.03 : 0);
   const damperAt = harmonyEndSec != null ? Math.max(harmonyEndSec, keyUp) : keyUp;
@@ -8039,7 +8090,7 @@ function playGuitarNote(inst, freq, when, dur, ringEndSec, artic, tech, vel, gn)
     else if (artic.staccato) hold = dur * 0.5;
     else if (artic.detachedLegato) hold = dur * 0.75;
     if (artic.tenuto) hold = Math.max(hold, dur * 0.98);
-    if (artic.fermata) hold *= 1.8;
+    if (artic.fermata) hold *= 1.8 * FERMATA.normal / FERMATA[artic.fermataLen || "normal"];
   }
   const short = artic && (artic.staccatissimo || artic.spiccato || artic.staccato || artic.detachedLegato);
   let releaseAt = when + Math.max(0.04, hold);
@@ -9262,7 +9313,7 @@ function applyArticulation(sustain, peakGain, dur, artic){
   else if (artic.staccato) s = dur * 0.5;        // 斷奏:縮短到約一半
   else if (artic.detachedLegato) s = dur * 0.75; // 半斷音(斷奏+保持音的折衷):稍微縮短
   if (artic.tenuto) s = Math.max(s, dur * 0.98); // 保持音:確保彈滿全部時值,不被縮短
-  if (artic.fermata) s = s * 1.8;                // 延長記號:明顯拉長
+  if (artic.fermata) s = s * 1.8 * FERMATA.normal / FERMATA[artic.fermataLen || "normal"];                // 延長記號:明顯拉長
   if (artic.strongAccent) g = g * 1.5;           // 強音記號(marcato):音量大幅加強
   else if (artic.accent) g = g * 1.3;            // 重音:音量加強
   else if (artic.softAccent) g = g * 1.15;       // 次強音:小幅加強
