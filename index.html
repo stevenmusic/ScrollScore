@@ -7213,11 +7213,11 @@ function pianoHalfPedalTau(m){ return PIANO_HALF_PEDAL * Math.max(0.35, 1.3 - (m
    - 起音:pres 在敲下瞬間再多 attack×(力度/127) dB,20ms 時間常數回到原值(琴槌敲弦那一下的亮度)
    參數用 tools/audiotest 的模擬器對 7 首 MAESTRO 演奏校正:各力度區間亮度差 ≤ 2dB、起音高頻 1.8dB(真鋼琴 1.9)、
    1~5kHz 頻譜形狀差 ≤ 3dB;補到 12dB 的高頻後,取樣的底噪仍在 −100dBFS 左右 */
-const PIANO_TONE = { presFreq: 2000, presLo: -10, presHi: 5, presV0: 45, presV1: 105, airFreq: 6500, airLo: 4, airHi: 21, airExp: 1.4, attack: 12, attackTau: 0.02 };
+const PIANO_TONE = { presFreq: 2000, presLo: -10, presHi: 5, presV0: 45, presV1: 105, airFreq: 6500, airLo: 4, airHi: 21, airExp: 1.4, attack: 12, attackExp: 1, attackTau: 0.02 };
 function pianoToneFor(vel){
   const T = PIANO_TONE, v = Math.max(1, Math.min(127, vel));
   const pres = T.presLo + (T.presHi - T.presLo) * Math.max(0, Math.min(1, (v - T.presV0) / (T.presV1 - T.presV0)));
-  return { pres, air: T.airLo + (T.airHi - T.airLo) * Math.pow(v / 127, T.airExp), attack: T.attack * v / 127 };
+  return { pres, air: T.airLo + (T.airHi - T.airLo) * Math.pow(v / 127, T.airExp), attack: T.attack * Math.pow(v / 127, T.attackExp) };
 }
 /* 踏板共鳴:踩下延音踏板 = 所有制音器離開琴弦,88 組弦都會被正在響的聲音帶動跟著共振(真鋼琴踩踏板的「光暈」)。
    piano/sympa.flac 是全部琴弦當共振器的脈衝響應(piano/build/sympa_ir.py:每條弦的泛音含非諧和性、低音弦衰減慢、
@@ -7367,13 +7367,18 @@ function sectionKind(text){
   return null;
 }
 /* 記譜位置 → 段落力度(力度單位);段落開頭一拍內從前一段接過來,導歌整段線性漸強 */
-function pianoSectionOffset(srcT, beatLen){
-  const S = scoreSections;
-  if (!S.length || srcT == null || srcT < S[0].t - 1e-6) return 0;
+/* 段落的力度倍率(第三版,使用者:「前奏的旋律聽起來也很用力!不是音量,是音色」):Salamander 每種力度是分開錄的,
+   前奏/主歌旋律 60~71 用的是中強那幾層錄音(亮、有敲擊感),之後被壓縮器/限幅器拉成小音量,聽起來就是「小聲但每個音都很用力」。
+   輕的段落要真的用小力度彈才會換到柔和的錄音:最後的力度依段落乘倍率(伴奏同比例,旋律與伴奏的比例不變)。
+   〈甲乙丙丁〉旋律 前奏 60 → 45、主歌 71 → 57、導歌 74 → 60 漸強到 74、副歌 71 → 76 */
+const PIANO_SECTION_MUL = { intro: 0.75, verse: 0.8, prechorus: [0.81, 1.0], chorus: 1.07, bridge: 1.0, interlude: 0.8, solo: 0.9, outro: 0.75 };
+function pianoSectionOffset(srcT, beatLen, table){
+  const S = scoreSections, T = table || PIANO_SECTION, none = table ? 1 : 0;
+  if (!S.length || srcT == null || srcT < S[0].t - 1e-6) return none;
   let i = 0; for (let j = 0; j < S.length; j++) if (S[j].t <= srcT + 1e-6) i = j;
   const val = (k, t) => {
-    const v = PIANO_SECTION[S[k].kind];
-    if (!Array.isArray(v)) return v || 0;
+    const v = T[S[k].kind];
+    if (!Array.isArray(v)) return v != null ? v : none;
     const end = k + 1 < S.length ? S[k + 1].t : totalWhole;
     const p = Math.max(0, Math.min(1, (t - S[k].t) / Math.max(1e-6, end - S[k].t)));
     return v[0] + (v[1] - v[0]) * p;
@@ -7462,6 +7467,7 @@ function computePianoDynamics(){
         }
         if (n.durWhole >= 0.5) v += 2; else if (n.durWhole <= 1 / 16 + 1e-6) v -= 2;
         v += (seededRand01(k * 7.31 + m * 0.137) - 0.5) * 5;
+        if (popSections) v *= Math.pow(pianoSectionOffset(ev.srcT, ev.beatLen, PIANO_SECTION_MUL), hasMarks ? 0.5 : 1);   // 段落力度倍率(PIANO_SECTION_MUL)
         n._v0 = v; n._accDb = accDb - momDb; n._momDb = momDb; n._role = rh ? (n === top && !n._inner ? 1 : 2) : 3; delete n._inner;
         n.pvel = Math.max(8, Math.min(124, v * Math.pow(10, accDb / 40)));
         n.pdt = chord && !(rh && n === top) && n.rollIndex == null ? seededRand01(k * 5.71 + m * 0.291) * 0.007 : 0;
