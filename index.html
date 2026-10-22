@@ -7660,6 +7660,22 @@ function pianoAutoMacro(hasMarks){
    曲尾兩小節:拍子輕重與隨機起伏逐漸減到 35%、段落力度固定在這兩小節開頭的值。兩小節開頭剛好是 0,跟前面接得上。
    跟其他段落起伏一樣,譜上有力度記號時只用四成,以譜為主(例如曲尾寫了 dim./pp 照樣變小聲) */
 const PIANO_END = { bars: 2, perSemi: 0.7, max: 12 };
+/* 非古典的結尾漸弱(使用者要求 2026-10:「結尾應該要漸弱」):流行/抒情鋼琴的結尾幾乎都是收、不是推上去。
+   範圍 = 最後一個起音前 POP_END_FADE.bars 小節;譜上的 rit./rall. 一路到曲尾而且比較長(最多 maxBars 小節)時從 rit. 開始。
+   力度乘 1 → target(S 形),伴奏同比例;這段裡譜上有力度記號/髮夾就照譜、不加。取代古典用的「曲尾照旋律線條」(往上走會漸強) */
+const POP_END_FADE = { bars: 2, maxBars: 4, target: 0.72 };
+function popEndFade(hasMarks){
+  if (!events.length) return null;
+  const last = events[events.length - 1], bl = last.barLen > 0 ? last.barLen : 1;
+  let srcEnd = 0; for (const ev of events) if (ev.srcT != null) for (const n of ev.notes) srcEnd = Math.max(srcEnd, ev.srcT + (n.durWhole || 0));
+  let len = POP_END_FADE.bars * bl;
+  for (const r of scoreTempoSpans || []) if (r.kind === "rit" && r.end >= srcEnd - bl / 4 && srcEnd - r.start <= POP_END_FADE.maxBars * bl + 1e-6) len = Math.max(len, srcEnd - r.start);
+  // 到最後一個起音(最後的和弦)剛好到 target;以前算到整首結尾(含最後全音符的長度),最後的和弦只收一半
+  const t1 = last.tWhole, t0 = t1 - len;
+  if (hasMarks && scoreDynMarks.some(d => d.t >= srcEnd - len - 1e-6)) return null;
+  if ((scoreWedges || []).some(w => w.end > srcEnd - len + 1e-6)) return null;
+  return t => { if (t <= t0) return 1; const x = Math.min(1, (t - t0) / Math.max(1e-6, len)), k = x * x * (3 - 2 * x); return 1 + (POP_END_FADE.target - 1) * k; };
+}
 function pianoEndContour(nb, multiStaff){
   const pts = [];
   for (const ev of events) {
@@ -7903,6 +7919,15 @@ function computePianoDynamics(){
     for (let j = i + 1; j < events.length && events[j].tWhole <= t + w + 1e-6; j++) if (rhTops[j] != null) mx = Math.max(mx, rhTops[j]);
     return mx - m >= PIANO_POP.lineGap;
   };
+  // 和弦/雙音:前後一拍內「兩邊」都有比它高 lineGap 以上的右手音才算夾在中間的伴奏(旋律往下再回來的凹處),
+  // 只有一邊高的(和弦旋律之後往上走)照常是旋律
+  const isInnerChord = (ev, m) => {
+    const i = evIdx.get(ev), t = ev.tWhole, w = (ev.beatLen || 0.25) * PIANO_POP.lineWin;
+    let lo = -Infinity, hi = -Infinity;
+    for (let j = i - 1; j >= 0 && events[j].tWhole >= t - w - 1e-6; j--) if (rhTops[j] != null) lo = Math.max(lo, rhTops[j]);
+    for (let j = i + 1; j < events.length && events[j].tWhole <= t + w + 1e-6; j++) if (rhTops[j] != null) hi = Math.max(hi, rhTops[j]);
+    return lo - m >= PIANO_POP.lineGap && hi - m >= PIANO_POP.lineGap;
+  };
   // 左手同理(使用者反映 2026-10:「第 25、26 小節重複的低音太大聲,處理方式應該跟前奏一樣」):低音 Bb2 在拍點上、中間夾著
   // F3-Bb3-F3-Bb3 十六分音符,以前都是 62~76 跟低音一樣重。左手單音比前後一拍內左手最低音高 ≥ lineGap 半音 = 夾在中間的伴奏音,
   // 跟右手的內聲部一樣彈輕;拍點上的低音照常
@@ -7916,6 +7941,7 @@ function computePianoDynamics(){
   };
   const auto = pianoAutoMacro(hasMarks);
   const endContour = pianoEndContour(auto.nb, multiStaff);
+  const popEnd = pop ? popEndFade(hasMarks) : null;   // 非古典的結尾漸弱(取代照旋律線條的曲尾)
   // 和聲張力 + 樂句弧線整條曲線在前後約 PIANO_HARM.smoothBeats 拍做高斯平滑(使用者 2026-10:段落/樂句之間不要階梯;
   // 主歌停在屬和弦〔張力最高、樂句高點〕、導歌從 Bbmaj7 開新樂句時以前一下掉 11 力度):平滑整條曲線,不是固定長度的漸強漸弱——
   // 變化大的地方花比較久接過去,變化小的地方幾乎不變
@@ -7962,7 +7988,7 @@ function computePianoDynamics(){
       let m = (auto.macro[macroBar] || 0) * (popSections ? PIANO_POP.macroWithSections : 1) + (ho ? archW * ho.v : archW * (arch(4, 4) + arch(8, 5)));
       ev._chord = ho ? ho.chord : null;
       if (popSections) base += pianoSectionOffset(ev.tWhole, ev.beatLen, null, ev.barLen) * PIANO_POP.sectionGain * (hasMarks ? 0.5 : 1);
-      if (fromEnd < PIANO_END.bars) m += endContour(bar + pos);
+      if (fromEnd < PIANO_END.bars && !popEnd) m += endContour(bar + pos);
       base += m * auto.scale;
     }
     for (const h of [1, 2]) drift[h] = 0.8 * drift[h] + 0.6 * (seededRand01(k * 3.17 + h * 11.3) - 0.5) * 10 * (hplan ? PIANO_HARM.driftScale : 1);
@@ -7980,7 +8006,9 @@ function computePianoDynamics(){
         const na = n.artic || ev.artic;
         const accDb = (na ? (na.strongAccent ? PIANO_ACCENT_DB.strong : na.accent ? PIANO_ACCENT_DB.accent : na.softAccent ? PIANO_ACCENT_DB.soft : 0) : 0) + momDb;
         if (rh) {
-          if (n === top && pop && ns.length === 1 && isInnerSingle(ev, m)) {
+          // 雙音/和弦也一樣(使用者反映 2026-10:第 51 小節 B♭4+D5 的 D「還是太強、很不舒服」——旋律在 G5/A5,這個雙音是夾在中間的伴奏,
+          // 以前只有單音才判斷,和弦最上面一律當旋律加重)
+          if (n === top && pop && (ns.length === 1 ? isInnerSingle(ev, m) : isInnerChord(ev, m))) {
             v -= 5 + PIANO_POP.accomp; n._inner = true;   // 單音音型裡的伴奏音(見 isInnerSingle)
           } else if (n === top) {
             // 有和弦記號的非古典:和弦最上面的旋律音跟單音旋律一樣加 4(下面已經多一個音、本來就比較響,不用再多打;
@@ -8002,6 +8030,7 @@ function computePianoDynamics(){
         v += (seededRand01(k * 7.31 + m * 0.137) - 0.5) * 5;
         let secMul = 1;
         if (popSections) { secMul = Math.pow(pianoSectionOffset(ev.tWhole, ev.beatLen, PIANO_SECTION_MUL, ev.barLen), hasMarks ? 0.5 : 1); v *= secMul; }   // 段落力度倍率(PIANO_SECTION_MUL)
+        if (popEnd) { const f = popEnd(ev.tWhole); v *= f; secMul *= f; }
         if (n._micro != null) { n._mul = secMul; n._t = ev.tWhole; n._bl = ev.barLen > 0 ? ev.barLen : 1; }
         n._v0 = v; n._accDb = accDb - momDb; n._momDb = momDb; n._role = rh ? (n === top && !n._inner ? 1 : 2) : 3; delete n._inner;
         n.pvel = Math.max(8, Math.min(124, v * Math.pow(10, accDb / 40)));
