@@ -4729,18 +4729,74 @@ function showRubatoStyle(p){
   el.setAttribute("data-i18n", key); el.textContent = T(key); el.hidden = false;
 }
 let scoreStyleInfo = null;   // 最近一次判斷結果(console 與測試用)
-function scoreClassicalProb(){
+/* 古典機率(不顯示、不印):左手手指延音也要用,在彈性速度之前就要知道 */
+function classicalProbInfo(){
   let score = scoreStyleMeta.score;
   const reasons = [...scoreStyleMeta.reasons];
   const sr = scoreSyncopationRate();
   if (sr > 0.15) { score -= 1.5; reasons.push("-1.5 切分音 " + (sr * 100).toFixed(0) + "%"); }
   else if (sr > 0.08) { score -= 0.75; reasons.push("-0.75 切分音 " + (sr * 100).toFixed(0) + "%"); }
-  const p = 1 / (1 + Math.exp(-score * 1.2));
-  scoreStyleInfo = { p, score, reasons };
+  return { p: 1 / (1 + Math.exp(-score * 1.2)), score, reasons };
+}
+function scoreClassicalProb(){
+  const info = classicalProbInfo(), p = info.p;
+  scoreStyleInfo = info;
   showRubatoStyle(p);
-  console.log("樂譜風格:" + (p >= 0.5 ? "古典" : "非古典") + " p=" + p.toFixed(2) + " [" + reasons.join(", ") + "]");
+  console.log("樂譜風格:" + (p >= 0.5 ? "古典" : "非古典") + " p=" + p.toFixed(2) + " [" + info.reasons.join(", ") + "]");
   return p;
 }
+/* 左手手指延音(使用者要求,2026-10:「左手如果手指有辦法留長,就讓音符拉長,不用改變樂譜寫法;例如左手音域在八度內,
+   即使低音只寫半拍,也可以留長按住」)。n.holdWhole = 實際按住的長度(演奏位置,全音符),只影響鋼琴的聲音(放鍵時間),
+   樂譜與鍵盤顯示照原本的時值。只用在非古典的曲子(見函式內)。下方譜表(staff ≥ 2)每個音從起音開始按住,最遠到:
+     踩著譜上踏板 → 這段踏板放開;沒踩踏板但樂譜有踏板記號 → 小節結束或下一段踏板踩下(先到的);
+     有和弦記號 → 下一個和弦記號;都沒有 → 小節結束;最多 LH_HOLD.maxWhole。
+   中途手指做不到/會糊就提前放開(在那個音彈下的時候):同一個鍵要再彈、之後的音跟它超過 LH_HOLD.span 半音(八度,手撐不開)、
+   跟它只差 ≤ LH_HOLD.step 半音(級進:音階/經過音要換手指,全留著會糊)、出現比最近半小節左手彈過的音都低的新低音(換和聲)、
+   同時按住超過 LH_HOLD.fingers 個 */
+const LH_HOLD = { span: 12, step: 2, fingers: 5, maxWhole: 1, bassLook: 0.5 };
+function computeLeftHandHolds(chordSegs){
+  const eps = 1e-6, lh = [];   // {t, midi, n, ev}
+  for (const ev of events) for (const n of ev.notes) {
+    n.holdWhole = null;
+    if (n.drum || !n.freq || (n.staff || 1) < 2) continue;
+    lh.push({ t: ev.tWhole, midi: Math.round(freqToMidi(n.freq)), n, ev });
+  }
+  if (!lh.length) return;
+  // 只用在非古典(流行/抒情伴奏):古典(巴哈對位等)左手常是獨立的旋律線,跳進的音留著會讓聲部糊在一起;
+  // 試過只在分解和弦伴奏型(repeatChordRanges)套用,但它在 ASAP 各曲都標了 8~9 成,分不出來
+  if (classicalProbInfo().p >= 0.5) return;
+  const nextPedalStart = sT => { let best = Infinity; for (const r of pedalRanges) if (r.start > sT + eps && r.start < best) best = r.start; return best; };
+  for (let i = 0; i < lh.length; i++) {
+    const a = lh[i], ev = a.ev, sT = ev.srcT != null ? ev.srcT : ev.tWhole, toPerf = w => ev.tWhole + (w - sT);
+    const barEnd = ev.barPos != null ? ev.tWhole - ev.barPos + (ev.barLen || 1) : ev.tWhole + (ev.barLen || 1);
+    let B;
+    if (pedalRanges.length) {
+      const r = ev.pedalOn ? pedalRanges.find(r => inRange(sT, r)) : null;
+      B = r ? toPerf(r.end) : Math.min(barEnd, toPerf(nextPedalStart(sT)));
+    } else if (chordSegs.length && sT >= chordSegs[0].start - eps) {
+      const c = chordSegs.find(c => sT >= c.start - eps && sT < c.end - eps);
+      B = c ? toPerf(c.end) : barEnd;
+    } else B = barEnd;
+    let end = Math.min(B, a.t + LH_HOLD.maxWhole);
+    const written = a.t + a.n.durWhole;
+    if (end <= written + eps) continue;
+    // 之後的左手音:決定什麼時候得放開
+    // low:最近 LH_HOLD.bassLook 全音符內(含按住期間)左手彈過最低的音;之後出現比它還低的才算新低音
+    let held = 1, low = a.midi;
+    for (let k = i - 1; k >= 0 && lh[k].t > a.t - LH_HOLD.bassLook - eps; k--) low = Math.min(low, lh[k].midi);
+    for (let j = i + 1; j < lh.length && lh[j].t < end - eps; j++) {
+      const b = lh[j];
+      if (b.t <= a.t + eps) continue;   // 同時彈的(和弦)不算
+      const d = Math.abs(b.midi - a.midi);
+      // 之後每個音佔一根手指;比按住的音都低的新低音 = 換和聲(C → Am 的 A2),放開
+      if (d === 0 || d > LH_HOLD.span || d <= LH_HOLD.step || b.midi < low || ++held > LH_HOLD.fingers) { end = b.t; break; }
+      low = Math.min(low, b.midi);
+    }
+    if (end > written + eps) a.n.holdWhole = end - a.t;
+  }
+}
+/* 實際按住的長度(全音符):鋼琴左手手指延音 n.holdWhole,沒有就照樂譜 */
+function noteHoldWhole(n){ return n.holdWhole != null && n.holdWhole > n.durWhole ? n.holdWhole : n.durWhole; }
 /* 和弦記號 → 和弦區段 [記號, 下一個記號)(最後一段到 endWhole) */
 function chordSymbolSegments(times, endWhole){
   const out = [];
@@ -4986,6 +5042,7 @@ function buildTimeline(){
     ev.guitarTech = findNearestEntry(guitarTechEntries, sT, MARK_MATCH_EPSILON) || null;
     ev.vibrato = inRanges(sT, vibratoRanges);
   }
+  computeLeftHandHolds(chordSegs);
   // 滑音(glissando/slide)的目標音高要等所有事件都建好才能查「下一個音」,這裡統一補上;
   // 古典吉他滑音幾乎都是單音旋律線的動作,只在前後都恰好是單音符時才套用,避免和絃裡誤判
   for (let i = 0; i < events.length; i++) {
@@ -6923,7 +6980,8 @@ function scheduleEventNotes(ev, t, base, calib, isGuitar, live, st){
   for (const n of ev.notes) {
     try {
       const rollT = computeArpNoteOffsetSec(ev, n, t, calib);
-      const durSec = calib ? Math.max(calibToSec(ev.tWhole + n.durWhole) - t, 0.05) : spanSec(ev.tWhole, n.durWhole);
+      const holdW = isGuitar ? n.durWhole : noteHoldWhole(n);   // 鋼琴左手手指延音(computeLeftHandHolds)
+      const durSec = calib ? Math.max(calibToSec(ev.tWhole + holdW) - t, 0.05) : spanSec(ev.tWhole, holdW);
       // 吉他:同弦延音範圍(guitarRingEndWhole)取代一般和聲延長判斷,才符合「其他音符要在別條弦上才能延音」的物理限制
       const noteHarmonyEndSec = (isGuitar && n.guitarRingEndWhole != null) ? base + posToSec(n.guitarRingEndWhole, calib) : harmonyEndSec;
       const noteTech = (isGuitar && n.glissTargetFreq != null) ? Object.assign({}, tech, { glissTargetFreq: n.glissTargetFreq }) : tech;
@@ -7341,7 +7399,7 @@ function pianoComputeNeeds(){
       if (n.drum || !n.freq) continue;
       const c = pianoCenterFor(Math.round(freqToMidi(n.freq))), L = pianoLayerFor(n.pvel || 70);
       const key = pianoNoteName(c) + "-v" + L;
-      const sound = Math.max(spanSec(ev.tWhole, n.durWhole), hEnd != null ? hEnd - t : 0);
+      const sound = Math.max(spanSec(ev.tWhole, noteHoldWhole(n)), hEnd != null ? hEnd - t : 0);
       const e = need.get(key) || { key, c, L, uses: 0, sec: 0 };
       e.uses++; e.sec = Math.max(e.sec, sound); need.set(key, e);
     }
