@@ -1924,6 +1924,7 @@ function setStatus(msg){ statusEl.textContent = msg; }
 let osmd = null;
 let events = [];        // {tWhole, x, notes:[{freq,durWhole}], legato, pedalOn}
 let slurRanges = [], pedalRanges = [], repeatChordRanges = [], measureRanges = [], vibratoRanges = [], autoPedalRanges = [];
+let chordSymbolTimes = [];   // 譜上和弦記號(<harmony>)的記譜位置(全音符),見 chordSymbolSegments
 let perfMeasures = [];   // 展開反覆記號後依演奏順序的小節:[{start, end(演奏位置), mIdx, srcStart(記譜位置), qpm}]
 /* 小節高亮要對齊真正的小節線,不能靠音符位置內插:音符的 x 是「音符中心」,而小節線在
    第一個音符之前(還要容納譜號、調號、升降記號),兩者不成比例。實測內插出來的右邊界
@@ -2433,6 +2434,7 @@ async function loadScoreFile(file){
     slurRanges = parsed.slurRanges;
     pedalRanges = parsed.pedalRanges;
     repeatChordRanges = parsed.repeatRanges;
+    chordSymbolTimes = harmonySymbolTimes(xmlText);
     measureRanges = parsed.measureRanges;
     guitarTechMap = parsed.guitarTechMap;
     vibratoRanges = parsed.vibratoRanges;
@@ -4546,6 +4548,50 @@ function markDrumChokes(){
     for (const ev of events) if (ev.srcT != null && Math.abs(ev.srcT - best.srcT) < 1e-6) for (const n of cymbalNotes(ev)) n.choke = true;
   }
 }
+/* 譜上的和弦記號(使用者要求,2026-10:「和弦跟和弦之間還是會糊在一起,匯入的檔案有標和弦,踏板就跟著和弦記號換」)
+   回傳所有 <harmony> 的記譜位置(全音符,排序、去重),所有聲部都看(和弦記號常寫在另一個聲部/旋律譜);
+   <offset> 照算。每個聲部各自累計位置,小節開頭 = 上一小節最遠的位置 */
+function harmonySymbolTimes(xmlText){
+  let doc;
+  try { doc = new DOMParser().parseFromString(xmlText, "application/xml"); } catch (e) { return []; }
+  if (!doc || doc.getElementsByTagName("parsererror")[0] || !doc.getElementsByTagName("harmony")[0]) return [];
+  const ts = [];
+  const durOf = el => { const d = el.getElementsByTagName("duration")[0]; return d ? parseFloat(d.textContent) || 0 : 0; };
+  for (const part of Array.from(doc.getElementsByTagName("part"))) {
+    let divisions = 1, start = 0;
+    for (const measure of Array.from(part.getElementsByTagName("measure"))) {
+      let cur = start, far = start;
+      for (const child of Array.from(measure.children)) {
+        const tag = child.tagName;
+        if (tag === "attributes") {
+          const d = child.getElementsByTagName("divisions")[0];
+          if (d) divisions = parseFloat(d.textContent) || divisions;
+        } else if (tag === "harmony") {
+          const off = child.getElementsByTagName("offset")[0];
+          ts.push(cur + (off ? (parseFloat(off.textContent) || 0) / divisions / 4 : 0));
+        } else if (tag === "backup") cur -= durOf(child) / divisions / 4;
+        else if (tag === "forward") cur += durOf(child) / divisions / 4;
+        else if (tag === "note") {
+          if (child.getElementsByTagName("chord")[0] || child.getElementsByTagName("grace")[0]) continue;
+          cur += durOf(child) / divisions / 4;
+        }
+        if (cur > far) far = cur;
+      }
+      start = far;
+    }
+  }
+  ts.sort((a, b) => a - b);
+  return ts.filter((t, i) => i === 0 || t - ts[i - 1] > 1e-6);
+}
+/* 和弦記號 → 和弦區段 [記號, 下一個記號)(最後一段到 endWhole) */
+function chordSymbolSegments(times, endWhole){
+  const out = [];
+  for (let i = 0; i < times.length; i++) {
+    const end = i + 1 < times.length ? times[i + 1] : endWhole;
+    if (end - times[i] > 1e-6) out.push({ start: times[i], end });
+  }
+  return out;
+}
 function inRanges(t, ranges){
   for (const r of ranges) if (t >= r.start && t < r.end) return true;
   return false;
@@ -4697,7 +4743,23 @@ function buildTimeline(){
   // 但完全不設限的話會誇張到單一音符殘響10.4個全音符(約14小節),不同和聲整個疊在一起變糊。
   // 折衷:保留這個延長效果,但限制任何一個音符最多只能比自己的起點多響 RING_CAP_WHOLE。
   const RING_CAP_WHOLE = 1.0;
-  autoPedalRanges = pedalRanges.length ? [] : buildAutoPedalRanges(repeatChordRanges, RING_CAP_WHOLE);
+  // 譜上有和弦記號時(使用者要求,2026-10):和弦記號的時間優先於「重複分解和弦音型」的和聲判斷——
+  //   ① 和弦記號一換就換踏板(沒有踏板記號時的自動踏板)② 音符的和聲延長不跨過下一個和弦記號
+  //   ③ 和弦區段裡的音都照區段延長(同樣不超過 RING_CAP_WHOLE)。第一個和弦記號之前照原本的和聲判斷
+  //   譜上明確的踏板記號仍然最優先(那是作曲者寫的),踩著記號踏板的音照記號延長
+  let srcEndWhole = 0;
+  for (const ev of events) {
+    const sT = ev.srcT != null ? ev.srcT : ev.tWhole;
+    for (const n of ev.notes) srcEndWhole = Math.max(srcEndWhole, sT + (n.durWhole || 0));
+  }
+  const chordSegs = chordSymbolTimes.length && !isDrumScore ? chordSymbolSegments(chordSymbolTimes, Math.max(srcEndWhole, chordSymbolTimes[chordSymbolTimes.length - 1])) : [];
+  const firstChordT = chordSegs.length ? chordSegs[0].start : Infinity;
+  const nextChordAfter = t => { for (const c of chordSegs) if (c.start > t + 1e-6) return c.start; return Infinity; };
+  // 和弦記號之前的重複音型範圍:切在第一個和弦記號
+  const preChordRepeat = repeatChordRanges.filter(r => r.start < firstChordT - 1e-6).map(r => ({ start: r.start, end: Math.min(r.end, firstChordT) }));
+  autoPedalRanges = pedalRanges.length ? [] : chordSegs.length
+    ? buildAutoPedalRanges(preChordRepeat, RING_CAP_WHOLE).concat(buildAutoPedalRanges(chordSegs, RING_CAP_WHOLE))
+    : buildAutoPedalRanges(repeatChordRanges, RING_CAP_WHOLE);
   for (const ev of events) {
     const sT = ev.srcT != null ? ev.srcT : ev.tWhole, toPerf = w => ev.tWhole + (w - sT);   // 記譜位置的範圍 → 這一遍的演奏位置
     ev.pedalOn = inRanges(sT, pedalRanges);
@@ -4715,12 +4777,24 @@ function buildTimeline(){
     // 左手(或任一手)重複分解和弦音型偵測到的範圍,也當作和聲延伸的依據。這個延長本身就是
     // 讓聲音變豐滿的來源,所以有標踏板時照樣套用,只是不能無限延長——夾在 RING_CAP_WHOLE 以內,
     // 避免像先前那樣一路響過好幾個小節、把不同和聲全疊在一起
-    for (const r of repeatChordRanges) {
-      if (sT >= r.start && sT < r.end) {
-        const capped = Math.min(toPerf(r.end), ev.tWhole + RING_CAP_WHOLE);
-        rangeEnd = rangeEnd != null ? Math.max(rangeEnd, capped) : capped;
-        break;
+    const chordSeg = sT >= firstChordT - 1e-6 ? chordSegs.find(c => sT >= c.start - 1e-6 && sT < c.end - 1e-6) : null;
+    if (chordSeg) {
+      // 和弦記號區段:延長到這個和弦結束(下一個和弦記號),最多 RING_CAP_WHOLE
+      const capped = Math.min(toPerf(chordSeg.end), ev.tWhole + RING_CAP_WHOLE);
+      rangeEnd = rangeEnd != null ? Math.max(rangeEnd, capped) : capped;
+    } else {
+      for (const r of (chordSegs.length ? preChordRepeat : repeatChordRanges)) {
+        if (sT >= r.start && sT < r.end) {
+          const capped = Math.min(toPerf(r.end), ev.tWhole + RING_CAP_WHOLE);
+          rangeEnd = rangeEnd != null ? Math.max(rangeEnd, capped) : capped;
+          break;
+        }
       }
+    }
+    // 圓滑線/和聲的延長也不跨過下一個和弦記號(換和弦 = 換踏板);譜上明確的踏板記號照原樣
+    if (rangeEnd != null && chordSegs.length && !ev.pedalOn) {
+      const nc = nextChordAfter(sT);
+      if (nc < Infinity) rangeEnd = Math.min(rangeEnd, Math.max(toPerf(nc), ev.tWhole));
     }
     // 同一時刻裡,只要有更長時值的音符(例如左手四拍和絃),其他較短的音符(例如右手旋律音)
     // 就延長撐滿到那個最長時值的音符結束為止,不用判斷和聲、純粹看樂譜上寫的時值

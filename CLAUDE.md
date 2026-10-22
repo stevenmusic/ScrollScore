@@ -43,6 +43,7 @@
 - 鋼琴殘響送出一律 0.5（以前踏板 ×1.7 是在近似琴弦共鳴，現在有真的共鳴就拿掉了）。harmonyEndSec 一定有值（至少是同時最長音的結尾），不能拿來判斷踏板
 - 踏板琴弦共鳴（PIANO_SYMPA）：piano/sympa.flac（piano/build/sympa_ir.py 產生，manifest aux 有登記）= 88 組弦當共振器的 IR（泛音含非諧和性 B、低音 T60 18s → 高音 2s、單/雙/三弦一組微走音、低音左高音右），ConvolverNode normalize = false；踩著踏板時發的音以 send 4.5e-4 送進去（單音共鳴約比琴聲小 15dB），輸出經閘門：踩下 0.02s 打開、放開 0.1s 關掉（pianoSchedulePedalNoise 排程，停止播放 pianoCloseResonance）。重建 IR 要重新校正 send
 - 自動踏板（autoPedalRanges，使用者要求）：樂譜沒有任何踏板記號時，用和聲範圍（repeatChordRanges 合併；新和聲出現就換、同一和聲每 RING_CAP_WHOLE 換一次）當成踩踏板，只加踏板機械聲與琴弦共鳴，不畫在樂譜上，音符延長/半踏板衰減照原本規則不變
+- 和弦記號換踏板(使用者要求,2026-10:「和弦跟和弦之間還是會糊在一起」):匯入的檔案有 <harmony> 和弦記號時(harmonySymbolTimes 掃所有聲部、含 <offset>,存在 chordSymbolTimes),和弦記號的時間優先於 repeatChordRanges 的和聲判斷:① 沒有踏板記號時自動踏板 = 和弦區段 [記號, 下一個記號)(一樣每 RING_CAP_WHOLE 切一次)② 音符的和聲延長 = 到這個和弦結束、最多 RING_CAP_WHOLE,圓滑線/和聲延長都不跨下一個和弦記號 ③ 第一個和弦記號之前照舊用重複音型判斷(切在第一個記號)④ 譜上明確的踏板記號仍最優先、照記號延長;鼓譜不套用。原因:重複音型偵測常把好幾小節的分解和弦當成同一個和聲(測試譜 4 小節、每半小節換和弦,被當成一整段),每個音延長一個全音符跨過換和弦
 - 同音連彈（2.5 秒內、同一取樣層）輪流改用相鄰力度層（pianoRRFlip），模擬真鋼琴每下略有不同（Salamander 沒有輪替錄音）
 - 譜上沒踏板、由和聲自動延長的音用「半踏板」：放鍵後依 pianoHalfPedalTau（PIANO_HALF_PEDAL 0.7）較快衰減，避免級進旋律全部疊在一起變糊；譜上有踏板才完全延音
 - 「圓滑/踏板」開關已移除（使用者要求）：圓滑線、踏板、和聲延音的**播放**一律開啟，不要再加回播放的開關
