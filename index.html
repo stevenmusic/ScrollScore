@@ -7818,7 +7818,8 @@ function computePianoDynamics(){
   // 旋律跟和弦的關係:拍點上(或八分音符以上)不屬於和弦的旋律音 +nct;前一個旋律音是這種音、這個音級進解決到和弦音 −nctRes
   let lastMel = null;   // {m, nct}
   const melodyChordLean = (ev, m) => {
-    const c = ev._chord, pc = ((Math.round(m) % 12) + 12) % 12, inChord = c.tones.includes(pc);
+    // 和弦記號是原調(scoreHarmony 從原檔讀),音高是移調後的(n.freq),比對前換回原調;以前移調後非和弦音整個判斷錯
+    const c = ev._chord, pc = ((Math.round(m - transposeSemitones) % 12) + 12) % 12, inChord = c.tones.includes(pc);
     const onBeat = ev.barPos != null && ev.beatLen > 0 && Math.abs(ev.barPos / ev.beatLen - Math.round(ev.barPos / ev.beatLen)) < 0.02;
     const top = ev.notes.filter(n => !n.drum && n.freq && (!multiStaff || (n.staff || 1) === 1)).reduce((p, q) => (q.freq > p.freq ? q : p));
     // 只有「之後級進解決到和弦音」的才算倚音/經過的不協和音(加重);流行和弦上的 9、11、13 音(C7 上的 D)是色彩音,
@@ -7828,7 +7829,7 @@ function computePianoDynamics(){
       const i = evIdx.get(ev);
       for (let j = i + 1; j < events.length; j++) {
         if (rhTops[j] == null) continue;
-        const nc = hoSmooth && hoSmooth[j] ? hoSmooth[j].chord : null, npc = ((Math.round(rhTops[j]) % 12) + 12) % 12;
+        const nc = hoSmooth && hoSmooth[j] ? hoSmooth[j].chord : null, npc = ((Math.round(rhTops[j] - transposeSemitones) % 12) + 12) % 12;
         resolves = Math.abs(rhTops[j] - m) <= 2.5 && Math.abs(rhTops[j] - m) > 0.5 && !!nc && nc.tones.includes(npc);
         break;
       }
