@@ -189,7 +189,7 @@
 - OSMD 1.8.4 的 cursor 不會處理反覆記號，2.0.0 版本才支援
 - 移調要先設定 osmd.TransposeCalculator 再設 osmd.Sheet.Transpose，否則不會生效
 - 移調(transposeMusicXML,2026-10 使用者回報 F## 與 F# 同小節時 F# 被寫錯):① 新調號超過 ±7 換等音調時,音符拼法要用同一個五度圈位移量(以前調號換了、音符沒換:5 升降半音變 2 降調號 + E##、F###);每個調號區段各自算 ② OSMD 對移調後的臨時記號常算錯(G# 後的 G 不畫還原、F## 後的 F# 不畫升),所以每小節照「同譜表、同八度、同字母,跟調號/前一個音不同才寫」重寫全部 <accidental>,跨小節延音線接過來的第一個音不寫,原檔的提醒用臨時記號保留(換成新符號)。③ 重升/重降移調後變成三升/三降時改寫成相鄰字母的等音(F### → G#)。檢查:15 個調 × ±12 半音 + 隨機雙譜表/和弦/中途換調,OSMD 畫出來的臨時記號 0 錯、音高全部 = 原音 + N
-- 移調旁的 ↺(#transReset,使用者要求 2026-10):有移調時才出現,一鍵回到原調。注意 .btn 的 display 會蓋掉 hidden 屬性,要寫 #transReset[hidden]{display:none}(第一版漏掉:原調時也一直顯示、320 寬超出面板,layout_check 抓到);寬 < 360 有移調時選單自己一列(:has)
+- 移調旁的 ↺(#transReset,使用者要求 2026-10):一鍵回到原調;**一直顯示、原調時變暗(disabled)**(使用者要求:不要隱藏,按鈕位置不要跳動)。−/＋/↺ 一樣大(32px,觸控 36px;以前照字寬,− 比 ＋ 窄),#transVal 固定寬 4.6em(「原調」「+11 半音」「Original」同寬)。寬 < 380 樂器選單與移調那組換兩列(移調那組固定 200px)。以前的寫法:注意 .btn 的 display 會蓋掉 hidden 屬性,要寫 #transReset[hidden]{display:none}(第一版漏掉:原調時也一直顯示、320 寬超出面板,layout_check 抓到);寬 < 360 有移調時選單自己一列(:has)
 - 匯出影片時 SVG 點陣化要切成4000px的tile，避免iOS canvas尺寸限制
 
 ## 所有工具共用的規則(使用者要求,2026-10;FingerDrill、ScrollScore、HarmonyMap、HarmonyHands、BackingTrack、SightScore、LessonNotes、LoudNorm 都一樣)

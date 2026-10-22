@@ -209,13 +209,7 @@ body.header-brand-hidden header .brand{display:none}
   #tempoRow #tempoSlider{order:3;flex:1 1 100%;min-width:0;margin:2px 0 12px}   /* 跟下面的游標色票拉開(使用者反映太靠近) */
 }
 #bgOpacityRow[hidden]{display:none}
-#transReset[hidden]{display:none}   /* .btn 的 display 會蓋掉 hidden 屬性(以前 ↺ 一直顯示、320 寬超出面板) */
-/* 窄螢幕(< 360)有移調、↺ 出現時「選單 + − 數值 ＋ ↺」一列放不下(320 寬超出 13px):選單自己一列,移調那組在下一列 */
-@media (max-width:359px){
-  .settings-group .combo-row:has(#transReset:not([hidden])){flex-wrap:wrap}
-  .combo-row:has(#transReset:not([hidden])) #instSeg{flex:1 1 100%;max-width:none}
-  .combo-row:has(#transReset:not([hidden])) .trans-group{margin-left:0}
-}
+/* ↺ 一直顯示(原調時變暗、不能按),位置不會因為移調而變動(使用者要求,2026-10);窄螢幕換行見下面 max-width:379px */
 #tempoRow input[type=range]{flex:1 1 auto;width:auto;min-width:60px}
 #tempoRow #tempo[hidden]{display:none}
 .tempo-box b{color:var(--gold-bright);font-size:var(--fs-lg);min-width:34px;text-align:right;font-variant-numeric:tabular-nums}
@@ -312,7 +306,8 @@ input[type=range]::-webkit-slider-thumb{
 .combo-row #instrument{flex:0 1 auto;min-width:92px;max-width:200px;align-self:stretch;min-height:0}
 .combo-row #instSeg{flex:0 1 auto;min-width:112px;max-width:200px;align-self:stretch}   /* 要寫在下面的 @media 前面,窄畫面才蓋得過 */
 .combo-row .trans-group{display:inline-flex;align-items:center;gap:6px;flex:none;margin-left:auto}
-.combo-row .trans-group .btn{padding:4px 10px}
+.combo-row .trans-group .btn{width:32px;height:32px;min-width:32px;padding:0;justify-content:center;font-size:var(--fs-lg);line-height:1}   /* −/＋/↺ 一樣大(以前照字寬,− 比 ＋ 窄) */
+.combo-row .trans-group #transVal{display:inline-block;min-width:4.6em;text-align:center;font-variant-numeric:tabular-nums;white-space:nowrap}   /* 「原調」與「+11 半音」同寬,按鈕不會跟著跳 */
 .combo-row #transVal{min-width:4.6em;text-align:center}
 /* 說明文字獨占一整列並允許換行。父層 .tempo-box 是 white-space:nowrap(那是為了讓
    「標籤 + 控制項」不要被拆行),但長句子套上去就會撐成一條 400px 的長線衝出面板
@@ -426,8 +421,8 @@ body.kb-hidden #keyboardCanvas{display:none}
   .settings-group{padding:10px 12px;gap:8px}
   #settingsPanel{gap:8px}
 }
-/* 折疊機外螢幕(280px):樂器選單與移調放不下同一列,換行、選單占滿整列 */
-@media (max-width:300px){
+/* 窄螢幕(< 380,含 SE 320、360、375):樂器選單與移調「− 數值 ＋ ↺」放不下同一列(移調那組固定 200px),換行、選單占滿整列 */
+@media (max-width:379px){
   .settings-group .combo-row{flex-wrap:wrap}
   .combo-row #instSeg{flex:1 1 100%;max-width:none}
   .combo-row .trans-group{margin-left:0}
@@ -1041,7 +1036,7 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
         <button class="btn" id="transDown" disabled title="降半音(請先載入樂譜)" data-i18n-attr="aria-label:transDownAria">−</button>
         <b id="transVal" data-i18n="transposeOriginal">原調</b>
         <button class="btn" id="transUp" disabled title="升半音(請先載入樂譜)" data-i18n-attr="aria-label:transUpAria">＋</button>
-        <button class="btn" id="transReset" hidden data-i18n-attr="aria-label:transResetAria,title:transResetAria">↺</button>
+        <button class="btn" id="transReset" disabled data-i18n-attr="aria-label:transResetAria,title:transResetAria">↺</button>
       </span>
     </div>
   </div>
@@ -6312,7 +6307,7 @@ document.addEventListener("keydown", e => {
 
 /* ── 移調 ─────────────────────────────────── */
 function updateTransposeLabel(){
-  $("transReset").hidden = transposeSemitones === 0;
+  $("transReset").disabled = transposeSemitones === 0 || $("transUp").disabled;   // 原調時變暗(不隱藏,位置不動)
   $("transVal").textContent = transposeSemitones === 0
     ? T("transposeOriginal")
     : T("transposeSemitone", {
@@ -6992,7 +6987,7 @@ function updateTransposeAvailability(){
   const disabled = isDrum || !scoreLoaded;
   $("transUp").disabled = disabled;
   $("transDown").disabled = disabled;
-  $("transReset").disabled = disabled;
+  $("transReset").disabled = disabled || transposeSemitones === 0;
   const title = !scoreLoaded ? T("transDisabledLoadFirst") : isDrum ? T("drumNotTransposable") : "";
   if (title) { $("transUp").title = title; $("transDown").title = title; }
   else { $("transUp").removeAttribute("title"); $("transDown").removeAttribute("title"); }
