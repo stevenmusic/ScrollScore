@@ -2435,6 +2435,9 @@ async function loadScoreFile(file){
     pedalRanges = parsed.pedalRanges;
     repeatChordRanges = parsed.repeatRanges;
     chordSymbolTimes = harmonySymbolTimes(xmlText);
+    // 有和弦記號時,譜上的踏板記號也在每個和弦記號換一次踏板(使用者要求,2026-10:有踏板記號的譜照樣糊);
+    // 踏板放開的地方照原檔放開,只是不會踩著跨過換和弦
+    if (chordSymbolTimes.length && !parsed.isDrumScore) pedalRanges = splitRangesAt(pedalRanges, chordSymbolTimes);
     measureRanges = parsed.measureRanges;
     guitarTechMap = parsed.guitarTechMap;
     vibratoRanges = parsed.vibratoRanges;
@@ -4583,6 +4586,16 @@ function harmonySymbolTimes(xmlText){
   ts.sort((a, b) => a - b);
   return ts.filter((t, i) => i === 0 || t - ts[i - 1] > 1e-6);
 }
+/* 把每個範圍在 times 的位置切開(範圍內部的切點才算) */
+function splitRangesAt(ranges, times){
+  const out = [];
+  for (const r of ranges) {
+    let a = r.start;
+    for (const t of times) if (t > a + 1e-6 && t < r.end - 1e-6) { out.push({ start: a, end: t }); a = t; }
+    out.push({ start: a, end: r.end });
+  }
+  return out;
+}
 /* 和弦記號 → 和弦區段 [記號, 下一個記號)(最後一段到 endWhole) */
 function chordSymbolSegments(times, endWhole){
   const out = [];
@@ -4746,7 +4759,7 @@ function buildTimeline(){
   // 譜上有和弦記號時(使用者要求,2026-10):和弦記號的時間優先於「重複分解和弦音型」的和聲判斷——
   //   ① 和弦記號一換就換踏板(沒有踏板記號時的自動踏板)② 音符的和聲延長不跨過下一個和弦記號
   //   ③ 和弦區段裡的音都照區段延長(同樣不超過 RING_CAP_WHOLE)。第一個和弦記號之前照原本的和聲判斷
-  //   譜上明確的踏板記號仍然最優先(那是作曲者寫的),踩著記號踏板的音照記號延長
+  //   譜上的踏板記號在載入時已經在每個和弦記號切開(splitRangesAt),一樣跟著換
   let srcEndWhole = 0;
   for (const ev of events) {
     const sT = ev.srcT != null ? ev.srcT : ev.tWhole;
@@ -4791,8 +4804,8 @@ function buildTimeline(){
         }
       }
     }
-    // 圓滑線/和聲的延長也不跨過下一個和弦記號(換和弦 = 換踏板);譜上明確的踏板記號照原樣
-    if (rangeEnd != null && chordSegs.length && !ev.pedalOn) {
+    // 踏板記號/圓滑線/和聲的延長都不跨過下一個和弦記號(換和弦 = 換踏板)
+    if (rangeEnd != null && chordSegs.length) {
       const nc = nextChordAfter(sT);
       if (nc < Infinity) rangeEnd = Math.min(rangeEnd, Math.max(toPerf(nc), ev.tWhole));
     }
