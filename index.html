@@ -4475,6 +4475,7 @@ function parseXmlTimeline(xmlText){
               if (artEl.getElementsByTagName("detached-legato")[0]) flags.detachedLegato = true;
               if (artEl.getElementsByTagName("spiccato")[0]) flags.spiccato = true;
               if (artEl.getElementsByTagName("soft-accent")[0]) flags.softAccent = true;
+              if (artEl.getElementsByTagName("breath-mark")[0] || artEl.getElementsByTagName("caesura")[0]) flags.breath = true;   // 換氣記號:這個音提早放鍵(PHRASE_NUANCE.breath)
             }
             const fermEl = notations.getElementsByTagName("fermata")[0];
             if (fermEl) { flags.fermata = true; flags.fermataLen = fermataShapeLen(fermEl.textContent); }
@@ -5570,6 +5571,9 @@ function buildTimeline(){
       }
     }
     const pedalEnd = ev.pedalOn ? rangeEnd : null;
+    // 換踏板(這段踏板一放開下一段馬上踩下):制音器晚 PEDAL_CHANGE.lag 秒才落下,新和弦先響、舊和弦才收(延遲換踩)
+    if (ev.pedalOn) { const pr = pedalRanges.find(r => inRange(sT, r)); ev.pedalChange = !!pr && pedalRanges.some(r2 => r2 !== pr && Math.abs(r2.start - pr.end) < 1e-4); }
+    else ev.pedalChange = false;
     // 左手(或任一手)重複分解和弦音型偵測到的範圍,也當作和聲延伸的依據。這個延長本身就是
     // 讓聲音變豐滿的來源,所以有標踏板時照樣套用,只是不能無限延長——夾在 RING_CAP_WHOLE 以內,
     // 避免像先前那樣一路響過好幾個小節、把不同和聲全疊在一起
@@ -7603,7 +7607,7 @@ document.addEventListener("visibilitychange", () => { if (noteSched) noteSched.p
 function scheduleEventNotes(ev, t, base, calib, isGuitar, live, st){
   const now = live ? audioCtx.currentTime : 0;
   const chordAnchors = {};
-  const harmonyEndSec = ev.harmonyEndWhole != null ? base + posToSec(ev.harmonyEndWhole, calib) : null;
+  const harmonyEndSec = ev.harmonyEndWhole != null ? base + posToSec(ev.harmonyEndWhole, calib) + (ev.pedalChange && !isGuitar ? PEDAL_CHANGE.lag : 0) : null;
   const tech = (isGuitar && ev.guitarTech) ? Object.assign({}, ev.guitarTech, { vibrato: ev.vibrato }) : (isGuitar && ev.vibrato ? { vibrato: true } : null);
   for (const n of ev.notes) {
     try {
@@ -8152,6 +8156,97 @@ function harmonyOffsets(plan, t, beatLen){
   }
   return { harm, arc, chord: c };
 }
+/* 細部情感(使用者 2026-10 選的 ①②③④⑤⑧):旋律線上音與音之間怎麼接,看樂譜結構判斷,古典非古典都套用。
+   ① decay:鋼琴長音按著會一直變小聲,真人彈下一個音會配合「已經變小的音量」接上,不會突然冒出來——前一個旋律音響了 minSec 秒以上、
+      中間沒有休止符時,下一個音往衰減後的音量靠 k(最多 −max 力度、不低於原本 floor 倍;往上跳 leap 半音以上減半;之後一拍內的音收 follow 倍)
+   ② pickup:弱起拍(休止符或長音之後、一拍以內的短音,接到下一個重拍)往重拍推:越接近重拍越大聲,最多 +max,不超過重拍的音
+   ③ repeat:旋律連續同一個音不要每下一樣——之後往上走或接到下一個音前漸強,往下走或接休止符漸弱,每下 step、最多 max
+   ⑤ legato:旋律音的下一個旋律音緊接著彈 → n.legatoNext(playPianoNote 晚一點放鍵)
+   ⑧ breath:換氣處提早放鍵 → n.breath(換氣記號在 artic.breath;這裡標:圓滑線結束、下一個音馬上開始新的圓滑線;長音後面接弱起拍)
+   ④ 換踏板的延遲在 PEDAL_CHANGE(制音器與踏板聲) */
+const PHRASE_NUANCE = {
+  decay:  { minSec: 0.6, k: 0.2, max: 5, floor: 0.8, leap: 5, maxDb: 18, follow: 0.5 },
+  pickup: { max: 5, below: 1 },
+  repeat: { step: 1.5, max: 5 },
+  legato: { frac: 0.15, min: 0.015, max: 0.045 },
+  breath: { frac: 0.2, max: 0.12, minKeep: 0.6 }
+};
+const PEDAL_CHANGE = { lag: 0.05, up: 0.04, down: 0.13 };
+/* 鋼琴音按著時每秒小幾 dB(粗估:低音弦慢、高音快;A0 約 3、C4 約 9、C6 約 13dB/秒) */
+function pianoDecayDbPerSec(m){ return 3 + Math.max(0, Math.min(87, m - 21)) * 0.15; }
+function pianoLineNuance(){
+  const P = PHRASE_NUANCE, eps = 1e-6;
+  const mel = [];
+  for (const ev of events) for (const n of ev.notes) if (n.pmel && n.pvel != null) { mel.push({ ev, n, t: ev.tWhole, m: freqToMidi(n.freq) }); break; }
+  for (const x of mel) { delete x.n.legatoNext; delete x.n.breath; }
+  if (mel.length < 2) return;
+  const sec = (t, d) => { try { const s2 = spanSec(t, d); return isFinite(s2) ? s2 : d * 2; } catch (e) { return d * 2; } };
+  const conn = j => j + 1 < mel.length && mel[j + 1].t - (mel[j].t + mel[j].n.durWhole) <= eps;   // 下一個旋律音緊接著(沒有休止符)
+  const fixed = x => !!(x.n._accDb || x.n._momDb) || (x.ev.srcT != null && scoreDynMarks.some(d => Math.abs(d.t - x.ev.srcT) < 1e-4));   // 重音、力度記號的音照譜
+  const strong = x => { const e = x.ev; if (e.barPos == null || !(e.barLen > 0)) return false; if (e.barPos < 1e-4) return true;
+    const nb = Math.round(e.barLen / (e.beatLen || e.barLen)); return nb === 4 && Math.abs(e.barPos - e.barLen / 2) < 1e-4; };
+  const clampV = v => Math.max(8, Math.min(124, v));
+  const add = new Array(mel.length).fill(0);
+  // ② 弱起拍
+  const pickupStart = new Set();
+  for (let s = 0; s < mel.length; s++) {
+    const a = mel[s], bl = a.ev.beatLen || 0.25;
+    if (strong(a) || a.n.durWhole >= bl - eps) continue;
+    const prev = mel[s - 1];
+    const afterRest = !prev || !conn(s - 1);
+    const afterLong = prev && conn(s - 1) && prev.n.durWhole >= bl - eps && prev.n.durWhole >= 2 * a.n.durWhole - eps;
+    if (!afterRest && !afterLong) continue;
+    let e = s;
+    while (e + 1 < mel.length && conn(e) && !strong(mel[e + 1]) && mel[e + 1].n.durWhole < bl - eps) e++;
+    const T = mel[e + 1];
+    if (!T || !conn(e) || !strong(T) || T.t - a.t > bl + eps) continue;
+    const L = e - s + 1;
+    for (let j = 0; j < L; j++) {
+      const x = mel[s + j]; if (fixed(x)) continue;
+      const want = P.pickup.max * (j + 1) / (L + 1);
+      add[s + j] += Math.max(0, Math.min(want, T.n.pvel - P.pickup.below - x.n.pvel));
+    }
+    if (afterLong) pickupStart.add(s);
+    s = e;
+  }
+  // ③ 同音反覆
+  for (let s = 0; s < mel.length; s++) {
+    let e = s;
+    while (e + 1 < mel.length && conn(e) && Math.round(mel[e + 1].m) === Math.round(mel[s].m)) e++;
+    if (e > s) {
+      const nx = mel[e + 1], dir = nx && conn(e) && nx.m > mel[s].m + 0.5 ? 1 : -1;
+      for (let j = 1; j <= e - s; j++) if (!fixed(mel[s + j])) add[s + j] += dir * Math.min(P.repeat.max, P.repeat.step * j);
+    }
+    s = e;
+  }
+  for (let j = 0; j < mel.length; j++) if (add[j]) mel[j].n.pvel = clampV(mel[j].n.pvel + add[j]);
+  // ① 長音後面的音配合衰減後的音量(同一個音被好幾個長音影響時取最大的,不累加)
+  const cutBy = new Array(mel.length).fill(0);
+  for (let j = 0; j + 1 < mel.length; j++) {
+    if (!conn(j)) continue;
+    const a = mel[j], b = mel[j + 1], held = sec(a.t, a.n.durWhole);
+    if (held < P.decay.minSec || fixed(b)) continue;
+    const target = a.n.pvel * Math.pow(10, -Math.min(P.decay.maxDb, pianoDecayDbPerSec(a.m) * held) / 40);
+    if (b.n.pvel <= target) continue;
+    let cut = Math.min(P.decay.max, P.decay.k * (b.n.pvel - target), b.n.pvel * (1 - P.decay.floor));
+    if (b.m - a.m >= P.decay.leap) cut *= 0.5;
+    cutBy[j + 1] = Math.max(cutBy[j + 1], cut);
+    const bl = b.ev.beatLen || 0.25;
+    for (let q = j + 2; q < mel.length && mel[q].t < b.t + bl - eps && conn(q - 1); q++) cutBy[q] = Math.max(cutBy[q], cut * P.decay.follow);
+  }
+  for (let j = 0; j < mel.length; j++) if (cutBy[j] && !fixed(mel[j])) mel[j].n.pvel = clampV(mel[j].n.pvel - cutBy[j]);
+  // ⑧ 換氣 / ⑤ 圓滑重疊
+  const slurAt = t => slurRanges.find(r => inRange(t, r));
+  for (let j = 0; j < mel.length; j++) {
+    const a = mel[j];
+    if (!conn(j)) continue;
+    const b = mel[j + 1], sa = a.ev.srcT != null ? a.ev.srcT : a.t, sb = b.ev.srcT != null ? b.ev.srcT : b.t;
+    const ra = slurAt(sa), rb = slurAt(sb);
+    const slurBreak = ra && rb && ra !== rb && rb.start >= sa + eps;   // 這條圓滑線結束、下一個音開始新的一條
+    if (slurBreak || pickupStart.has(j + 1)) a.n.breath = true;
+    else a.n.legatoNext = true;
+  }
+}
 function computePianoDynamics(){
   const multiStaff = events.some(ev => ev.notes.some(n => !n.drum && n.freq && (n.staff || 1) > 1));
   const hasMarks = scoreDynMarks.length > 0;
@@ -8362,6 +8457,7 @@ function computePianoDynamics(){
         if (popEnd) { const f = popEnd(ev.tWhole); v *= f; secMul *= f; }
         if (n._micro != null) { n._mul = secMul; n._t = ev.tWhole; n._bl = ev.barLen > 0 ? ev.barLen : 1; }
         n._v0 = v; n._accDb = accDb - momDb; n._momDb = momDb; n._role = rh ? (n === top && !n._inner ? 1 : 2) : 3; delete n._inner;
+        n.pmel = n._role === 1;   // 旋律音(pianoLineNuance 用)
         n.pvel = Math.max(8, Math.min(124, v * Math.pow(10, accDb / 40)));
         n.pdt = chord && !(rh && n === top) && n.rollIndex == null ? seededRand01(k * 5.71 + m * 0.291) * 0.007 : 0;
       }
@@ -8407,6 +8503,7 @@ function computePianoDynamics(){
       if (ref != null) n.pvel = Math.max(8, Math.min(124, Math.max(ref, n._v0) * Math.pow(10, (n._accDb + n._momDb) / 40)));
     }
   });
+  pianoLineNuance();
   for (const x of pn) delete x.n._v0, delete x.n._accDb, delete x.n._momDb, delete x.n._role;
 }
 
@@ -8710,7 +8807,7 @@ function pianoKill(v, at){
   try { v.src.stop(at + 0.35); } catch (e) {}
   for (const g of v.rel) { g.gain.cancelScheduledValues(0); g.gain.setValueAtTime(0, 0); }
 }
-function playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel, autoPedal){
+function playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel, autoPedal, gn){
   if (!pianoMan) return false;
   const tm = freqToMidi(freq), m = Math.round(tm);
   if (vel == null) vel = 70;
@@ -8737,7 +8834,14 @@ function playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel
     if (artic.tenuto) keyUp = Math.max(keyUp, dur * 0.98);
     if (artic.fermata) keyUp *= 1.8 * FERMATA.normal / FERMATA[artic.fermataLen || "normal"];
   }
-  keyUp = when + Math.max(0.04, keyUp) + (legato && !pedal ? 0.03 : 0);
+  // 樂句結尾換氣(PHRASE_NUANCE.breath):換氣記號、圓滑線接下一條圓滑線、長音接弱起拍的前一個音提早放鍵(不改時間)
+  const short = artic && (artic.staccatissimo || artic.spiccato || artic.staccato || artic.detachedLegato);
+  const breath = !short && ((gn && gn.breath) || (artic && artic.breath));
+  if (breath) { const B = PHRASE_NUANCE.breath; keyUp = Math.max(keyUp * B.minKeep, keyUp - Math.min(B.max, B.frac * keyUp)); }
+  // 旋律圓滑重疊(PHRASE_NUANCE.legato):下一個旋律音接著彈時,這個音晚一點點才放(真人約 15~45ms,音越長重疊越多)
+  let ov = legato && !pedal && !breath ? 0.03 : 0;
+  if (gn && gn.legatoNext && !pedal && !breath && !short) { const L = PHRASE_NUANCE.legato; ov = Math.max(ov, Math.max(L.min, Math.min(L.max, L.frac * dur))); }
+  keyUp = when + Math.max(0.04, keyUp) + ov;
   const damperAt = harmonyEndSec != null ? Math.max(harmonyEndSec, keyUp) : keyUp;
   const noDamper = m >= 89;
   const tau = noDamper ? 3.0 : pianoDamperTau(m);   // 沒有制音器的高音:放開也繼續自然衰減(原廠 ampeg_release=3)
@@ -8798,8 +8902,10 @@ function pianoSchedulePedalNoise(fromSec, toSec, timeToCtx){
     const r = (ev.pedalOn || ev.autoPedal) ? pianoRanges().find(r => inRange(sT, r)) : null;
     if (r !== cur || (r && Math.abs(off - curOff) > 1e-6)) {
       const t = posToSec(ev.tWhole, calib);
-      if (cur) fire("pedalU" + (1 + (k & 1)), r ? t - 0.06 : posToSec(Math.min(cur.end + curOff, ev.tWhole), calib), g);
-      if (r) fire("pedalD" + (1 + (k & 1)), t + 0.05, g * 0.8);
+      // 換踏板照真人的延遲換踩:新和弦按下後才放(PEDAL_CHANGE.up)、再踩(PEDAL_CHANGE.down);以前在新和弦前 0.06 秒就放開
+      const change = cur && r;
+      if (cur) fire("pedalU" + (1 + (k & 1)), r ? t + PEDAL_CHANGE.up : posToSec(Math.min(cur.end + curOff, ev.tWhole), calib), g);
+      if (r) fire("pedalD" + (1 + (k & 1)), t + (change ? PEDAL_CHANGE.down : 0.05), g * 0.8);
       cur = r; curOff = off; k++;
     }
   }
@@ -10337,7 +10443,7 @@ function scheduleNote(freq, when, dur, legato, pedal, chordAnchors, harmonyEndSe
     scheduleTremolo(freq, when, dur, tech.tremolo, legato, pedal, chordAnchors, harmonyEndSec, artic, staff, vel, gn);
     return;
   }
-  if (inst === "piano" && !pianoFallback && playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel, gn && gn.autoPedal)) return;
+  if (inst === "piano" && !pianoFallback && playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel, gn && gn.autoPedal, gn)) return;
   if (isGuitarSampled(inst) && playGuitarNote(inst, freq, when, dur, harmonyEndSec, artic, tech, vel, gn)) return;
   if (REAL_INSTRUMENTS[inst] && playSampledInstrument(inst, freq, when, dur, legato, pedal, chordAnchors, harmonyEndSec, artic, isGuitarInst ? tech : null, staff)) return;
   // 真實取樣尚未載入完成或缺失時,退回合成音色,絕不會沒有聲音
