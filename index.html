@@ -1955,6 +1955,7 @@ function metronomeUnitLabel(beatUnit, dotCount){
 let scoreDynMarks = [], scoreWedges = []; // 力度記號與髮夾(記譜位置),鼓的整首力度用
 let scoreDynOffsets = [];
 let scoreChokeTimes = [];   // 鼓譜的止音文字(Mute / Choke…)位置(記譜位置),見 markDrumChokes   // una corda 等整段力度偏移 {start, end, delta}(記譜位置)
+let scoreTempoSpans = [];   // rit./rall./accel. 的範圍 {start, end, hold, kind, target}(resolveTempoWordSpans,一定照做的速度曲線)
 let scoreTempoWords = [];   // 速度文字 {t: 記譜位置, kind: "rit" | "accel" | "atempo"}(rit./rall./a tempo…,彈性速度模型用)
 let ghostNoteheadEntries = {}; // 同上,記錄括號符頭(鬼音 ghost note,輕輕帶過的小鼓等),播放時用最輕的力度層
 let crossNoteheadEntries = {}; // midi(取整數) -> 已排序的 {t,v} 陣列,記錄哪些時間點是打叉符頭(rim click等特殊擊法),用 findNearestEntry 容許誤差比對
@@ -2450,6 +2451,7 @@ async function loadScoreFile(file){
     }
     scoreDynMarks = parsed.dynMarks || [];
     scoreTempoWords = parsed.tempoWords || [];
+    scoreTempoSpans = parsed.tempoSpans || [];
     scoreWedges = parsed.wedges || [];
     scoreDynOffsets = parsed.dynOffsets || [];
     scoreChokeTimes = parsed.chokeTimes || [];
@@ -3978,7 +3980,10 @@ function parseXmlTimeline(xmlText){
           if (dynEl && dynEl.children[0] && child.getAttribute("id") !== "gp-default-dynamics") dynMarks.push({ t: cursor, mark: dynEl.children[0].tagName.toLowerCase() });
           for (const wEl of Array.from(child.getElementsByTagName("words"))) {
             const kind = tempoWordKind(wEl.textContent);
-            if (kind) tempoWords.push({ t: cursor, kind });
+            if (kind) {
+              const dsh = Array.from(child.getElementsByTagName("dashes")).find(d => d.getAttribute("type") === "start");
+              tempoWords.push({ t: cursor, kind, dash: dsh ? (dsh.getAttribute("number") || "1") : null });
+            }
             if (isChokeWord(wEl.textContent)) chokeTimes.push(cursor);
             const acts = dynamicWordActions(wEl.textContent);
             if (acts) {
@@ -4177,12 +4182,14 @@ function parseXmlTimeline(xmlText){
       repeatRanges = repeatRanges.concat(detectRepeatingChordRanges(staffOnsets[staffNum]));
     }
     // 把小節起點清單接成 [start,end) 範圍,最後一小節的結尾就是整份樂譜結束的 cursor
+    let tempoSpans = [];
+    try { tempoSpans = resolveTempoWordSpans(tempoWords, dashStops, measureBoundaries, cursor); } catch (e) { console.warn("tempo words", e); }
     let dynOffsets = [];
     try { dynOffsets = resolveScoreDynamicWords(dynMarks, wedges, wordActs, dashStops, measureBoundaries, cursor); } catch (e) { console.warn("dynamic words", e); }
     const measureRanges = measureBoundaries.map((start, i) => ({
       start, end: i + 1 < measureBoundaries.length ? measureBoundaries[i + 1] : cursor
     }));
-    return { slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges, articMap, arpMap, soundTempo, metronomeDisplay, timeSig, isDrumScore, crossNoteheadMap, ghostNoteheadMap, dynMarks, dynOffsets, chokeTimes, tempoWords, wedges, measureRanges, guitarTechMap, vibratoRanges: outWavyLines, scoreTitle };
+    return { slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges, articMap, arpMap, soundTempo, metronomeDisplay, timeSig, isDrumScore, crossNoteheadMap, ghostNoteheadMap, dynMarks, dynOffsets, chokeTimes, tempoWords, tempoSpans, wedges, measureRanges, guitarTechMap, vibratoRanges: outWavyLines, scoreTitle };
   } catch (e) {
     console.error("讀取踏板/圓滑線資訊失敗:", e);
     return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, arpMap: {}, soundTempo: null, metronomeDisplay: null, timeSig: null, isDrumScore: false, crossNoteheadMap: {}, measureRanges: [], guitarTechMap: {}, vibratoRanges: [], scoreTitle: null };
@@ -4323,6 +4330,8 @@ function tempoWordKind(text){
   if (!s) return null;
   if (/\b(a tempo|tempo i\b|tempo primo|tempo 1\b|in tempo|tempo giusto)/.test(s)) return "atempo";
   if (/\b(rit|ritard|ritardando|riten|ritenuto|rall|rallent|rallentando|allarg|allargando|smorz|smorzando|calando|morendo|slentando|stentato)\b/.test(s) && !/ritmico/.test(s)) return "rit";
+  if (/(漸慢|渐慢|漸漸變慢|だんだん遅く|ゆっくりと)/.test(s) || /\b(slow down|slowing down|getting slower|immer langsamer|zuruckhalten|zurückhalten|cedez|cédez|en retenant|retenu)\b/.test(s)) return "rit";
+  if (/(漸快|渐快|だんだん速く)/.test(s) || /\b(speed up|getting faster|immer schneller|pressez|en pressant)\b/.test(s)) return "accel";
   if (/\b(accel|accelerando|string|stringendo|incalzando|affrettando|precipitando)\b/.test(s)) return "accel";
   return null;
 }
@@ -4469,6 +4478,44 @@ function dynamicWordActions(text){
    (最多 4 小節,poco a poco / sempre 8 小節),都沒有就 2 小節(poco a poco 4 小節),結束處補一個數值力度記號讓音量停在新的大小;
    下一個記號方向相反(cresc. 之後 subito p)時不往它靠,照預設幅度。同一時間已經有 <dynamics> 力度記號時,個性詞的上限/下限不套用。
    una corda → 回傳 {start, end, delta: −0.05}(到 tre corde 或曲尾)。bars = 每小節起點,endT = 曲尾 */
+/* 譜上的 rit./rall./accel. 一定照做(使用者反映,2026-10:「rall… 沒有被正確偵測,應該要慢下來」):
+   以前只是彈性速度模型的一項特徵(模型會往平均縮,常常聽不出來;彈性速度關掉、鼓組就完全沒有)。
+   現在每個速度文字算出範圍:有 <dashes> 到虛線結束;沒有就到下一個速度文字,最多 2 小節(離曲尾 4 小節內就到曲尾)。
+   範圍內速度從 1 線性降到 target(rit 0.72、曲尾 0.62;accel 1.2);之後 8 小節內有 a tempo 就維持新速度到 a tempo,
+   沒有就回原速。曲線見 tempoWordFactor() */
+const TEMPO_WORD = { rit: 0.72, ritEnd: 0.62, accel: 1.2, bars: 2, endBars: 4, holdBars: 8 };
+function resolveTempoWordSpans(words, dashStops, bars, endT){
+  const ws = [...words].sort((a, b) => a.t - b.t), out = [], eps = 1e-6;
+  const barAt = t => { let k = 0; for (let i = 0; i < bars.length; i++) if (bars[i] <= t + eps) k = i; return k; };
+  const barLenAt = t => { const k = barAt(t); return Math.max(1e-3, (k + 1 < bars.length ? bars[k + 1] : endT) - bars[k]); };
+  for (let i = 0; i < ws.length; i++) {
+    const w = ws[i];
+    if (w.kind !== "rit" && w.kind !== "accel") continue;
+    const next = ws.slice(i + 1).find(x => x.t > w.t + eps);
+    const bl = barLenAt(w.t), nearEnd = endT - w.t <= TEMPO_WORD.endBars * bl + eps;
+    let end = null;
+    const stop = w.dash != null ? dashStops.find(d => d.num === w.dash && d.t > w.t + eps) : null;
+    if (stop) end = stop.t;
+    else end = nearEnd ? endT : w.t + TEMPO_WORD.bars * bl;
+    if (next) end = Math.min(end, next.t);
+    end = Math.min(end, endT);
+    if (end - w.t < eps) continue;
+    const hold = next && next.kind === "atempo" && next.t - end <= TEMPO_WORD.holdBars * bl + eps ? next.t : end;
+    const target = w.kind === "accel" ? TEMPO_WORD.accel : (endT - end <= bl * 0.5 + eps ? TEMPO_WORD.ritEnd : TEMPO_WORD.rit);
+    out.push({ start: w.t, end, hold, kind: w.kind, target });
+  }
+  return out;
+}
+/* 記譜位置 → 速度文字造成的速度倍率(1 = 原速) */
+function tempoWordFactor(t){
+  for (const r of scoreTempoSpans) {
+    if (t < r.start - 1e-6 || t >= r.hold - 1e-6) continue;
+    if (t >= r.end) return r.target;
+    const p = (t - r.start) / Math.max(1e-6, r.end - r.start);
+    return 1 + (r.target - 1) * p;
+  }
+  return 1;
+}
 function resolveScoreDynamicWords(dynMarks, wedges, wordActs, dashStops, bars, endT){
   const offsets = [];
   if (!wordActs.length) return offsets;
@@ -5305,7 +5352,7 @@ function localTempoRatio(w){ return tempoMap.length ? tempoSegAt("w", w).r : 1; 
 function spanSec(w, d){ return wholeToSec(w + d) - wholeToSec(w); }   // 從 w 開始、長 d 全音符的音實際幾秒(會跨過速度變化)
 function totalSec(){
   if ($("useCalibration").checked && calibrationMap.length >= 2) return calibrationMap[calibrationMap.length-1].realSec;
-  if (rubatoEnabled()) return rubatoToSec(totalWhole);
+  if (activeWarpMap()) return rubatoToSec(totalWhole);
   return wholeToSec(totalWhole);
 }
 /* ── 校準時間換算(tap-along / 自動拍點偵測共用) ── */
@@ -5352,6 +5399,7 @@ function useCalib(){ return $("useCalibration").checked && calibrationMap.length
    只調整整個樂團共用的主時間軸,所有樂器/雙手一起呼吸伸縮,不會各自獨立飄移脫拍。
    rubatoMap 存的是「彈性速度換算後的等效全音符座標」而非秒數,實際秒數仍透過 wholeToSec()
    依目前的tempo滑桿計算,所以调整tempo不需要重建這張表。 */
+let tempoWordMap = [];   // 只有譜上 rit./rall./accel. 的時間表(彈性速度關掉或鼓組時用),格式同 rubatoMap
 let rubatoMap = []; // [{orig: 原始tWhole, warped: 換算後的等效全音符座標}],依orig遞增排序
 /* 彈性速度一律開啟(使用者要求,沒有開關);鼓組不套用(律動要穩) */
 function rubatoEnabled(){
@@ -5549,9 +5597,30 @@ function rubatoPredict(x){
   for (const [f, thr, L, R, val] of M.trees) { let k = 0; while (L[k] !== -1) k = x[f[k]] <= thr[k] ? L[k] : R[k]; v += val[k]; }
   return v;
 }
+/* 每個事件的速度倍率 → 等效全音符座標表(rubatoMap / tempoWordMap 共用) */
+function warpMapFrom(mult){
+  const n = events.length, T = events.map(ev => ev.tWhole), map = [];
+  // warped 用「開頭速度下的等效全音符」:先照樂譜的速度變化(tempoMap)換算,再套倍率
+  const C = w => wholeToSec(w) * bpm() / 240;
+  let cumWarped = C(T[0]);
+  map.push({ orig: T[0], warped: cumWarped });
+  for (let i = 0; i < n - 1; i++) {
+    cumWarped += (C(T[i + 1]) - C(T[i])) / mult[i];
+    map.push({ orig: T[i + 1], warped: cumWarped });
+  }
+  if (totalWhole > T[n - 1]) {
+    cumWarped += (C(totalWhole) - C(T[n - 1])) / mult[n - 1];
+    map.push({ orig: totalWhole, warped: cumWarped });
+  }
+  return map;
+}
 function buildRubatoMap(){
-  rubatoMap = [];
-  if (events.length < 2 || !RUBATO_MODEL) return;
+  rubatoMap = []; tempoWordMap = [];
+  if (events.length < 2) return;
+  // 譜上的 rit./rall./accel.(tempoWordFactor):彈性速度關掉、鼓組也照做(tempoWordMap);彈性速度開著時併進模型的倍率
+  const wf = events.map(ev => tempoWordFactor(ev.srcT != null ? ev.srcT : ev.tWhole));
+  if (wf.some(v => Math.abs(v - 1) > 1e-6)) tempoWordMap = warpMapFrom(wf);
+  if (!RUBATO_MODEL) return;
   if (events.every(ev => ev.notes.every(nn => nn.drum))) return;   // 純鼓譜:律動要穩,不做彈性速度
   const X = rubatoFeatures();
   if (!X) return;
@@ -5573,20 +5642,11 @@ function buildRubatoMap(){
     const a = events[i].artic || {}, an = (events[i + 1] && events[i + 1].artic) || {};
     if (a.fermata) mult[i] = Math.min(mult[i], 0.58);
     else if (an.fermata) mult[i] = Math.min(mult[i], 0.62);
+    // 譜上的 rit./accel.:至少慢/快到速度文字的曲線(模型本身也有 rit. 特徵,取較明顯的,不重複疊加)
+    if (wf[i] < 1) mult[i] = Math.min(mult[i], wf[i]); else if (wf[i] > 1) mult[i] = Math.max(mult[i], wf[i]);
     mult[i] = Math.max(RUBATO_MULT_RANGE[0], Math.min(RUBATO_MULT_RANGE[1], mult[i]));
   }
-  // warped 用「開頭速度下的等效全音符」:先照樂譜的速度變化(tempoMap)換算,再套彈性速度
-  const C = w => wholeToSec(w) * bpm() / 240;
-  let cumWarped = C(T[0]);
-  rubatoMap.push({ orig: T[0], warped: cumWarped });
-  for (let i = 0; i < n - 1; i++) {
-    cumWarped += (C(T[i + 1]) - C(T[i])) / mult[i];
-    rubatoMap.push({ orig: T[i + 1], warped: cumWarped });
-  }
-  if (totalWhole > T[n - 1]) {
-    cumWarped += (C(totalWhole) - C(T[n - 1])) / mult[n - 1];
-    rubatoMap.push({ orig: totalWhole, warped: cumWarped });
-  }
+  rubatoMap = warpMapFrom(mult);
 }
 
 // 二分搜尋 orig→warped(或反過來),跟 xAtSec() 用同樣的手法,確保長曲子也不會越播到後面越慢
@@ -5612,13 +5672,15 @@ function rubatoInterp(map, key, val){
   const f = (val - a[key]) / Math.max(b[key] - a[key], 1e-6);
   return a[other] + (b[other] - a[other]) * f;
 }
-function rubatoToSec(w){ return rubatoInterp(rubatoMap, "orig", w) * 240 / bpm(); }
-function rubatoSecToWhole(sec){ return rubatoInterp(rubatoMap, "warped", sec * bpm() / 240); }
+/* 目前用哪一張時間表:彈性速度開著用 rubatoMap(含速度文字),關著/鼓組但譜上有 rit./accel. 用 tempoWordMap,都沒有回傳 null */
+function activeWarpMap(){ return rubatoEnabled() ? rubatoMap : (tempoWordMap.length >= 2 ? tempoWordMap : null); }
+function rubatoToSec(w){ return rubatoInterp(activeWarpMap(), "orig", w) * 240 / bpm(); }
+function rubatoSecToWhole(sec){ return rubatoInterp(activeWarpMap(), "warped", sec * bpm() / 240); }
 /* 樂曲上絕對位置(全音符座標)→秒數的統一入口:calibration(真實錄音的tap-along資料)優先權最高,
    其次是rubato(合成的彈性速度模型),都沒有就照原本固定拍點換算 */
 function posToSec(w, calib){
   if (calib) return calibToSec(w);
-  if (rubatoEnabled()) return rubatoToSec(w);
+  if (activeWarpMap()) return rubatoToSec(w);
   return wholeToSec(w);
 }
 
@@ -9857,7 +9919,7 @@ function stageIsPortrait(){ const st = $("stage"); return !!st && st.clientHeigh
 function playlineX(){ const st = $("stage"); return st.clientWidth * (stageIsPortrait() && st.clientWidth < 600 ? PLAYLINE_RATIO_PORTRAIT : PLAYLINE_RATIO); }
 
 function secToWhole(sec){
-  return useCalib() ? calibSecToWhole(sec) : (rubatoEnabled() ? rubatoSecToWhole(sec) : secToWholeTempo(sec));
+  return useCalib() ? calibSecToWhole(sec) : (activeWarpMap() ? rubatoSecToWhole(sec) : secToWholeTempo(sec));
 }
 function xAtSec(sec){ return xAtWhole(secToWhole(sec)); } // sec → whole → x
 /* 全音符座標 → 樂譜上的 x。小節高亮需要直接用小節邊界(本來就是全音符座標)算出
