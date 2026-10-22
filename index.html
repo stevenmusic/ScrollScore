@@ -7821,7 +7821,19 @@ function computePianoDynamics(){
     const c = ev._chord, pc = ((Math.round(m) % 12) + 12) % 12, inChord = c.tones.includes(pc);
     const onBeat = ev.barPos != null && ev.beatLen > 0 && Math.abs(ev.barPos / ev.beatLen - Math.round(ev.barPos / ev.beatLen)) < 0.02;
     const top = ev.notes.filter(n => !n.drum && n.freq && (!multiStaff || (n.staff || 1) === 1)).reduce((p, q) => (q.freq > p.freq ? q : p));
-    const nct = !inChord && (onBeat || top.durWhole >= 0.125 - 1e-6);
+    // 只有「之後級進解決到和弦音」的才算倚音/經過的不協和音(加重);流行和弦上的 9、11、13 音(C7 上的 D)是色彩音,
+    // 跳開或停著不解決的不加重(使用者反映 2026-10:〈甲乙丙丁〉第 51 小節 C7 上的 D 特別重)
+    let resolves = false;
+    if (!inChord) {
+      const i = evIdx.get(ev);
+      for (let j = i + 1; j < events.length; j++) {
+        if (rhTops[j] == null) continue;
+        const nc = hoSmooth && hoSmooth[j] ? hoSmooth[j].chord : null, npc = ((Math.round(rhTops[j]) % 12) + 12) % 12;
+        resolves = Math.abs(rhTops[j] - m) <= 2.5 && Math.abs(rhTops[j] - m) > 0.5 && !!nc && nc.tones.includes(npc);
+        break;
+      }
+    }
+    const nct = !inChord && resolves && (onBeat || top.durWhole >= 0.125 - 1e-6);
     let d = nct ? PIANO_HARM.nct : 0;
     if (!nct && lastMel && lastMel.nct && inChord && Math.abs(m - lastMel.m) <= 2.5) d -= PIANO_HARM.nctRes;
     lastMel = { m, nct };
@@ -7922,8 +7934,11 @@ function computePianoDynamics(){
           if (n === top && pop && ns.length === 1 && isInnerSingle(ev, m)) {
             v -= 5 + PIANO_POP.accomp; n._inner = true;   // 單音音型裡的伴奏音(見 isInnerSingle)
           } else if (n === top) {
-            v += (ns.length > 1 ? 6 : 4) + (pop ? PIANO_POP.melody : 0);
-            if (hplan) n._micro = (ev._beatTerm || 0) + (ns.length > 1 ? 6 : 4) + (n.durWhole >= 0.5 ? 2 : n.durWhole <= 1 / 16 + 1e-6 ? -2 : 0);
+            // 有和弦記號的非古典:和弦最上面的旋律音跟單音旋律一樣加 4(下面已經多一個音、本來就比較響,不用再多打;
+            // 以前 +6,雙音的旋律音比前後單音重 2,第 51 小節 B♭4+D5 的 D 特別突出)
+            const topB = ns.length > 1 && !hplan ? 6 : 4;
+            v += topB + (pop ? PIANO_POP.melody : 0);
+            if (hplan) n._micro = (ev._beatTerm || 0) + topB + (n.durWhole >= 0.5 ? 2 : n.durWhole <= 1 / 16 + 1e-6 ? -2 : 0);
             if (pop) v += popMelodyContour(ev);   // 非古典:旋律整體的走向(平滑),見 popMelodyContour
             if (hplan && ev._chord) v += melodyChordLean(ev, m);   // 旋律跟和弦:非和弦音加重、解決音放輕
             else if (melodyHist.length) v += Math.max(-4, Math.min(4, (m - melodyHist.reduce((s, x) => s + x, 0) / melodyHist.length) * 0.35));
