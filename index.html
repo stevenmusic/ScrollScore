@@ -1969,7 +1969,7 @@ let scoreTempoSpans = [];   // rit./rall./accel. 的範圍 {start, end, hold, ki
 let scoreTempoWords = [];   // 速度文字 {t: 記譜位置, kind: "rit" | "accel" | "atempo"}(rit./rall./a tempo…,彈性速度模型用)
 let ghostNoteheadEntries = {}; // 同上,記錄括號符頭(鬼音 ghost note,輕輕帶過的小鼓等),播放時用最輕的力度層
 let crossNoteheadEntries = {}; // midi(取整數) -> 已排序的 {t,v} 陣列,記錄哪些時間點是打叉符頭(rim click等特殊擊法),用 findNearestEntry 容許誤差比對
-let articEntries = [], arpEntries = [];
+let articEntries = [], arpEntries = [], ornEntries = [];
 const MARK_MATCH_EPSILON = 0.01; // 全音符單位,容許兩套游標系統之間的小飄移
 function buildSortedEntries(map){
   return Object.keys(map).map(k => ({ t: parseFloat(k), v: map[k] })).sort((a, b) => a.t - b.t);
@@ -2462,6 +2462,7 @@ async function loadScoreFile(file){
     vibratoRanges = parsed.vibratoRanges;
     guitarTechEntries = buildSortedEntries(guitarTechMap);
     articMap = parsed.articMap;
+    ornEntries = buildSortedEntries(parsed.ornMap || {});
     isDrumScore = parsed.isDrumScore;
     crossNoteheadEntries = {};
     for (const mk of Object.keys(parsed.crossNoteheadMap || {})) {
@@ -4228,6 +4229,25 @@ async function renderScore(xmlText){
 }
 
 /* ── 從原始 MusicXML 讀取踏板記號與圓滑線範圍 ── */
+/* 裝飾音記號 → 類型(MusicXML <ornaments>):trill-mark/shake = 顫音(延續的波浪線只是畫出顫音多長,長度照音符時值);mordent = 下波音(主-下-主);
+   inverted-mordent = 上波音(主-上-主);turn/inverted-turn/delayed-turn/delayed-inverted-turn = 迴音 */
+const ACC_MARK_ALTER = { "sharp": 1, "flat": -1, "natural": 0, "double-sharp": 2, "sharp-sharp": 2, "flat-flat": -2, "double-flat": -2 };
+function ornamentTypeOf(ornEl){
+  const has = t => !!ornEl.getElementsByTagName(t)[0];
+  if (has("trill-mark") || has("shake")) return "trill";
+  if (has("inverted-mordent")) return "invMordent";
+  if (has("mordent")) return "mordent";
+  if (has("delayed-inverted-turn")) return "delayedInvTurn";
+  if (has("delayed-turn")) return "delayedTurn";
+  if (has("inverted-turn")) return "invTurn";
+  if (has("turn")) return "turn";
+  return null;   // 單獨的波浪線(沒有 tr)不算:吉他譜用它標抖音(vibratoRanges)
+}
+function keyAlterOf(letter, fifths){
+  if (fifths > 0) return "FCGDAEB".indexOf(letter) < fifths ? 1 : 0;
+  if (fifths < 0) return "BEADGCF".indexOf(letter) < -fifths ? -1 : 0;
+  return 0;
+}
 function parseXmlTimeline(xmlText){
   try {
     const doc = new DOMParser().parseFromString(xmlText, "text/xml");
@@ -4293,6 +4313,8 @@ function parseXmlTimeline(xmlText){
     });
 
     let divisions = 1, cursor = 0, lastStaff = 1, chordBaseCursor = 0;
+    let keyFifths = 0, measAcc = {};   // 裝飾音的上下鄰音要照調號與這小節前面出現過的臨時記號
+    const ornMap = {};   // 記譜位置 → [{ staff, midi, type, up, down }](裝飾音:顫音、波音、迴音)
     const slurStarts = {};
     const outSlurs = [];
     const pedalStack = [];
@@ -4366,11 +4388,14 @@ function parseXmlTimeline(xmlText){
       cursor = Math.max(cursor, mFar);
       mFar = cursor;
       measureBoundaries.push(cursor);
+      measAcc = {};
       for (const child of Array.from(measure.children)) {
         if (cursor > mFar) mFar = cursor;
         if (child.tagName === "attributes") {
           const d = child.getElementsByTagName("divisions")[0];
           if (d) divisions = parseFloat(d.textContent) || divisions;
+          const kf = child.getElementsByTagName("fifths")[0];
+          if (kf) keyFifths = parseInt(kf.textContent, 10) || 0;
         } else if (child.tagName === "direction") {
           const dynEl = child.getElementsByTagName("dynamics")[0];
           // gp-default-dynamics:Guitar Pro 匯入時第一個預設 f 只是顯示(見 gpToMusicXML),不當成力度記號
@@ -4452,6 +4477,34 @@ function parseXmlTimeline(xmlText){
           const staffNumEarly = staffElEarly ? parseInt(staffElEarly.textContent, 10) : lastStaff;
           lastStaff = staffNumEarly;
           const notations = child.getElementsByTagName("notations")[0];
+          // 裝飾音記號(顫音/波音/迴音):記下類型與上下鄰音(照調號、這小節前面的臨時記號、記號上的臨時記號),播放時照慣例彈出來
+          const pEl = child.getElementsByTagName("pitch")[0];
+          if (pEl && !isGrace) {
+            const step = (pEl.getElementsByTagName("step")[0] || {}).textContent, oct = parseInt((pEl.getElementsByTagName("octave")[0] || {}).textContent, 10);
+            const altEl = pEl.getElementsByTagName("alter")[0], alt = altEl ? parseFloat(altEl.textContent) : 0;
+            const ornEl2 = notations && notations.getElementsByTagName("ornaments")[0];
+            const ornType = ornEl2 ? ornamentTypeOf(ornEl2) : null;
+            if (ornType && step) {
+              const mainMidi = midiFromNote(child);
+              const marks = {};
+              for (const am of Array.from(ornEl2.getElementsByTagName("accidental-mark"))) {
+                const v = ACC_MARK_ALTER[am.textContent.trim()]; if (v == null) continue;
+                const pl = am.getAttribute("placement") || (ornType === "mordent" ? "below" : "above");
+                marks[pl] = v;
+              }
+              const nb = dir => {
+                const L = "CDEFGAB", i = L.indexOf(step.trim()), j = i + dir, o = oct + (j > 6 ? 1 : j < 0 ? -1 : 0), letter = L[(j + 7) % 7];
+                const a = marks[dir > 0 ? "above" : "below"] ?? measAcc[staffNumEarly + letter + o] ?? keyAlterOf(letter, keyFifths);
+                const m = (o + 1) * 12 + { C:0, D:2, E:4, F:5, G:7, A:9, B:11 }[letter] + a - mainMidi;
+                return Math.abs(m) >= 1 && Math.abs(m) <= 3 ? m : dir * 2;
+              };
+              if (mainMidi != null) {
+                const key = noteCursor.toFixed(6);
+                (ornMap[key] = ornMap[key] || []).push({ staff: staffNumEarly, midi: mainMidi, type: ornType, up: nb(1), down: nb(-1) });
+              }
+            }
+            if (step && !isNaN(oct)) measAcc[staffNumEarly + step.trim() + oct] = alt;   // 臨時記號只在同一譜表、同一八度有效
+          }
           const techFlags = {}; // 吉他技法標記,宣告在外層才能讓沒有<notations>的音符也套用悶音(見下方 pizzicato 判斷)
           if (notations) {
             for (const s of Array.from(notations.getElementsByTagName("slur"))) {
@@ -4592,7 +4645,7 @@ function parseXmlTimeline(xmlText){
     const measureRanges = measureBoundaries.map((start, i) => ({
       start, end: i + 1 < measureBoundaries.length ? measureBoundaries[i + 1] : cursor
     }));
-    return { slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges, articMap, arpMap, soundTempo, metronomeDisplay, timeSig, isDrumScore, crossNoteheadMap, ghostNoteheadMap, dynMarks, dynOffsets, chokeTimes, tempoWords, tempoSpans, sections, fermataWords, wedges, measureRanges, guitarTechMap, vibratoRanges: outWavyLines, scoreTitle };
+    return { ornMap, slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges, articMap, arpMap, soundTempo, metronomeDisplay, timeSig, isDrumScore, crossNoteheadMap, ghostNoteheadMap, dynMarks, dynOffsets, chokeTimes, tempoWords, tempoSpans, sections, fermataWords, wedges, measureRanges, guitarTechMap, vibratoRanges: outWavyLines, scoreTitle };
   } catch (e) {
     console.error("讀取踏板/圓滑線資訊失敗:", e);
     return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, arpMap: {}, soundTempo: null, metronomeDisplay: null, timeSig: null, isDrumScore: false, crossNoteheadMap: {}, measureRanges: [], guitarTechMap: {}, vibratoRanges: [], scoreTitle: null };
@@ -5410,7 +5463,23 @@ function buildTimeline(){
     lastX = x;
     const notes = [];
     const ves = it.CurrentVoiceEntries || [];
+    // 倚音(小音符):OSMD 把它跟主音放在同一個時間點,以前被當成和弦跟主音同時按下(F5+E5 一起響)。
+    // 有音高的倚音從和弦拿出來,掛在同一聲部的主音上(n.graces),播放時照慣例排在主音前面或佔主音的前半(graceOrnamentPlan);鼓的倚音(裝飾擊)照舊
+    const graceBuf = new Map();   // 聲部 → [[{ midi, lenWhole }…]…](每個倚音 voice entry 一組,和弦倚音一組多個音)
+    const graceSlash = new Map();
     for (const ve of ves) {
+      if (!ve.IsGrace || isDrumScore) continue;
+      const grp = [];
+      for (const n of ve.Notes) if (n.Pitch && !(n.isRest && n.isRest())) grp.push({ midi: freqToMidi(n.Pitch.Frequency), lenWhole: n.Length ? n.Length.RealValue : 0.125 });
+      if (!grp.length) continue;
+      const key = ve.ParentVoice || ve;
+      (graceBuf.get(key) || graceBuf.set(key, []).get(key)).push(grp);
+      graceSlash.set(key, (graceSlash.get(key) !== false) && !!ve.GraceNoteSlash);
+    }
+    for (const ve of ves) {
+      if (ve.IsGrace && !isDrumScore) continue;
+      const gList = graceBuf.get(ve.ParentVoice || ve);
+      const veStart = notes.length;
       for (const n of ve.Notes) {
         if (!n.Pitch || (n.isRest && n.isRest())) continue; // 休止符(有 display-step 定位的休止符 OSMD 也會給 Pitch,要用 isRest 判斷,否則會被當成音符播出來)
         if (n.NoteTie && n.NoteTie.StartNote !== n) continue; // 連結線後段不重發聲
@@ -5431,6 +5500,30 @@ function buildTimeline(){
           notes.push({ freq: n.Pitch.Frequency, durWhole, staff });
         }
       }
+      // 倚音掛在這個聲部離最後一個倚音最近的主音上;裝飾音記號照記譜位置、譜表、原調音高對到音符
+      const mine = notes.slice(veStart).filter(x => !x.drum && x.freq);
+      if (gList && mine.length) {
+        const lastG = gList[gList.length - 1][0].midi;
+        const host = mine.reduce((p, q) => (Math.abs(freqToMidi(q.freq) - lastG) < Math.abs(freqToMidi(p.freq) - lastG) ? q : p));
+        const hm = freqToMidi(host.freq);
+        host.graces = gList.map(g => g.map(x => ({ dm: x.midi - hm, lenWhole: x.lenWhole })));
+        host.graceSlash = !!graceSlash.get(ve.ParentVoice || ve);
+        graceBuf.delete(ve.ParentVoice || ve);
+      }
+      const ornHere = mine.length ? findNearestEntry(ornEntries, srcT0, MARK_MATCH_EPSILON) : null;
+      if (ornHere) for (const x of mine) {
+        const om = Math.round(freqToMidi(x.freq)) - transposeSemitones;
+        const o = ornHere.find(e => e.midi === om && e.staff === (x.staff || 1)) || ornHere.find(e => e.midi === om);
+        if (o) x.orn = { type: o.type, up: o.up, down: o.down };
+      }
+    }
+    // 沒找到同聲部主音的倚音(例如寫在別的聲部):掛在音高最近、還沒有倚音的音上,不要丟掉也不要變成和弦
+    for (const gList of graceBuf.values()) {
+      const cand = notes.filter(x => !x.drum && x.freq && !x.graces);
+      if (!cand.length) break;
+      const lastG = gList[gList.length - 1][0].midi;
+      const host = cand.reduce((p, q) => (Math.abs(freqToMidi(q.freq) - lastG) < Math.abs(freqToMidi(p.freq) - lastG) ? q : p));
+      host.graces = gList.map(g => g.map(x => ({ dm: x.midi - freqToMidi(host.freq), lenWhole: x.lenWhole }))); host.graceSlash = true;
     }
     const arpInfo = findNearestEntry(arpEntries, srcT0, MARK_MATCH_EPSILON);
     let arpCount = 0, arpGapBeforeWhole = null, arpPrevDurWhole = null;
@@ -7607,6 +7700,67 @@ function startNoteScheduler(fromSec, toSec, base, calib, opts){
   if (live && (st.k < order.length || pianoPedalQueue.length)) st.timer = setInterval(st.pump, SCHED_TICK_MS);
 }
 document.addEventListener("visibilitychange", () => { if (noteSched) noteSched.pump(); });
+/* 倚音與裝飾音的演奏(使用者 2026-10 要求檢查:以前倚音跟主音同時按下、顫音/波音/迴音只彈主音)。回傳依序要彈的音:
+   { dm 半音差, t 相對主音拍點的秒數, len 秒, vm 力度倍率 },最後一個一定是主音。
+   倚音:有斜線(短倚音)、好幾個一組、或比主音一半還短的 32 分音符以下 → 在拍點前很快帶過(每個 grace 秒,輕);
+        單一個沒斜線的(長倚音)→ 在拍點上、比主音重,佔主音的一半(附點音符佔三分之二;不超過寫的長度),主音晚彈、輕一點(解決)
+   顫音:古典(classicalProbInfo ≥ 0.5)從上方音開始、非古典從主音開始;前一個旋律音就是上方音時從主音開始(不重複同一個音);
+        每個音 trill 秒(開頭兩個慢一點),最後停在主音;太短的顫音只彈 主-上-主
+   波音:主-下-主(mordent)/ 主-上-主(inverted-mordent),在拍點上很快;迴音:上-主-下-主(inverted 相反),延遲迴音在後半才轉 */
+const ORNAMENT = { grace: 0.06, graceGroup: 0.045, graceVel: 0.8, appVel: 1.08, resVel: 0.88, trill: 0.068, trillSlow: 1.3, mordent: 0.06, turn: 0.075, vel: 0.8, minMain: 0.05 };
+function graceOrnamentPlan(n, D, ev, art){
+  const O = ORNAMENT, out = [];
+  let t0 = 0, mainLen = D, mainVm = 1;
+  const pitched = (n.graces || []).length;
+  if (pitched) {
+    const g = n.graces, single = g.length === 1, wLen = g[0][0].lenWhole || 0.125;
+    const longApp = single && !n.graceSlash && wLen >= 1 / 16 - 1e-6 && wLen <= n.durWhole + 1e-6;
+    if (longApp) {
+      const lg = Math.log2(n.durWhole * 2 / 3), dotted = Math.abs(lg - Math.round(lg)) < 1e-6;   // 附點音符(長度 = 2 的次方 × 1.5)
+      const frac = Math.min(dotted ? 2 / 3 : 1 / 2, wLen / n.durWhole);
+      const a = D * frac;
+      for (const x of g[0]) out.push({ dm: x.dm, t: 0, len: a + 0.01, vm: O.appVel });
+      t0 = a; mainLen = D - a; mainVm = O.resVel;
+    } else {
+      const each = g.length > 1 ? O.graceGroup : O.grace;
+      g.forEach((grp, k) => { for (const x of grp) out.push({ dm: x.dm, t: -(g.length - k) * each, len: each + 0.012, vm: O.graceVel }); });
+    }
+  }
+  const o = n.orn, push = (dm, t, len, vm) => out.push({ dm, t: t0 + t, len, vm });
+  if (o && mainLen > 0.12) {
+    const L = mainLen;
+    if (o.type === "trill") {
+      let startUp = classicalProbInfo().p >= 0.5;
+      if (startUp && n._prevMel != null && Math.round(n._prevMel) === Math.round(freqToMidi(n.freq) + o.up)) startUp = false;
+      if (L < 0.3) { const u = Math.max(0.04, L / 4); push(0, 0, u + 0.01, 1); push(o.up, u, u + 0.01, O.vel); push(0, 2 * u, L - 2 * u, O.vel); }
+      else {
+        let tt = 0, cur = startUp ? o.up : 0, k = 0;
+        const seq = [];
+        while (true) {
+          const len = k < 2 ? O.trill * O.trillSlow : O.trill;
+          if (tt + len + O.trill > L * 0.95) break;
+          seq.push([cur, tt, len]); tt += len; cur = cur === 0 ? o.up : 0; k++;
+        }
+        if (seq.length && seq[seq.length - 1][0] === 0) seq[seq.length - 1][2] = L - seq[seq.length - 1][1];   // 最後一個已經是主音:撐到最後
+        else seq.push([0, tt, L - tt]);
+        seq.forEach(([dm, tt2, len], i) => push(dm, tt2, i === seq.length - 1 ? len : len + 0.008, i === 0 ? 1 : O.vel));
+      }
+    } else if (o.type === "mordent" || o.type === "invMordent") {
+      const u = Math.min(O.mordent, L / 5), d = o.type === "mordent" ? o.down : o.up;
+      push(0, 0, u + 0.008, 1); push(d, u, u + 0.008, O.vel); push(0, 2 * u, L - 2 * u, O.vel);
+    } else {
+      const inv = o.type === "invTurn" || o.type === "delayedInvTurn", delayed = o.type === "delayedTurn" || o.type === "delayedInvTurn";
+      const u = Math.min(O.turn, L / (delayed ? 8 : 6)), a = inv ? o.down : o.up, b = inv ? o.up : o.down;
+      const s0 = delayed ? Math.max(L / 2, L - 4 * u) : 0;
+      if (delayed) push(0, 0, s0 + 0.008, 1);
+      push(a, s0, u + 0.008, delayed ? O.vel : 1); push(0, s0 + u, u + 0.008, O.vel); push(b, s0 + 2 * u, u + 0.008, O.vel); push(0, s0 + 3 * u, L - s0 - 3 * u, O.vel);
+    }
+  } else push(0, 0, mainLen, 1);
+  for (const x of out) if (x.t >= t0 - 1e-9 && t0 > 0) x.vm *= mainVm;   // 長倚音之後的主音(含它上面的裝飾音)輕一點
+  const last = out[out.length - 1];
+  last.len = Math.max(O.minMain, last.len);
+  return out;
+}
 function scheduleEventNotes(ev, t, base, calib, isGuitar, live, st){
   const now = live ? audioCtx.currentTime : 0;
   const chordAnchors = {};
@@ -7622,6 +7776,17 @@ function scheduleEventNotes(ev, t, base, calib, isGuitar, live, st){
       const noteTech = (isGuitar && n.glissTargetFreq != null) ? Object.assign({}, tech, { glissTargetFreq: n.glissTargetFreq }) : tech;
       // 人性化的時間偏移可能是負的(提早一點點):第一拍剛好在 currentTime 時會變成過去的時間而整個被丟掉,所以不早於現在
       if (n.drum) { const h = humanizeDrumHit(ev, n), w = Math.max(now, base + t + rollT + h.dt); scheduleDrum(n.key, w, h, n.choke ? drumChokeAt(w, durSec) : null); }
+      else if (n.graces || n.orn) {
+        // 倚音/裝飾音:拆成好幾個音依序彈(graceOrnamentPlan),最後一個是主音(帶原本的演奏記號、和聲延長、換氣/圓滑)
+        const w0 = base + t + rollT + ((isGuitar ? n.gdt : n.pdt) || 0), vel = isGuitar ? n.gvel : n.pvel, art = n.artic !== undefined ? n.artic : ev.artic;
+        const plan = graceOrnamentPlan(n, durSec, ev, art);
+        plan.forEach((p, k) => {
+          const last = k === plan.length - 1;
+          scheduleNote(n.freq * Math.pow(2, p.dm / 12), Math.max(now, w0 + p.t), p.len, ev.legato, ev.pedalOn, chordAnchors,
+            last || ev.pedalOn ? noteHarmonyEndSec : null, last ? art : null, noteTech, n.staff, vel == null ? null : Math.max(8, Math.min(124, vel * p.vm)),
+            last ? n : { autoPedal: n.autoPedal });
+        });
+      }
       else scheduleNote(n.freq, Math.max(now, base + t + rollT + ((isGuitar ? n.gdt : n.pdt) || 0)), durSec, ev.legato, ev.pedalOn, chordAnchors, noteHarmonyEndSec, n.artic !== undefined ? n.artic : ev.artic, noteTech, n.staff, isGuitar ? n.gvel : n.pvel, n);
     } catch (e) {
       st.errCount++; st.lastErr = e;
@@ -8182,6 +8347,7 @@ function pianoLineNuance(){
   const mel = [];
   for (const ev of events) for (const n of ev.notes) if (n.pmel && n.pvel != null) { mel.push({ ev, n, t: ev.tWhole, m: freqToMidi(n.freq) }); break; }
   for (const x of mel) { delete x.n.legatoNext; delete x.n.breath; }
+  mel.forEach((x, j) => { x.n._prevMel = j ? mel[j - 1].m : null; });   // 顫音:前一個旋律音就是上方音時從主音開始
   if (mel.length < 2) return;
   const sec = (t, d) => { try { const s2 = spanSec(t, d); return isFinite(s2) ? s2 : d * 2; } catch (e) { return d * 2; } };
   // 下一個旋律音緊接著(沒有休止符);下一個音在這個音還沒結束時就出現(長音按著、下面內聲部在動)不算同一條線
@@ -8528,11 +8694,20 @@ function pianoComputeNeeds(){
     const hEnd = ev.harmonyEndWhole != null ? posToSec(ev.harmonyEndWhole, calib) : null;
     for (const n of ev.notes) {
       if (n.drum || !n.freq) continue;
-      const c = pianoCenterFor(Math.round(freqToMidi(n.freq))), L = pianoLayerFor(n.pvel || 70);
-      const key = pianoNoteName(c) + "-v" + L;
       const sound = Math.max(spanSec(ev.tWhole, noteHoldWhole(n)), hEnd != null ? hEnd - t : 0);
-      const e = need.get(key) || { key, c, L, uses: 0, sec: 0 };
-      e.uses++; e.sec = Math.max(e.sec, sound); need.set(key, e);
+      // 倚音、裝飾音的鄰音也要載入(音高、力度層可能跟主音不同)
+      const mm = freqToMidi(n.freq), extra = [];
+      if (n.graces) for (const g of n.graces) for (const x of g) extra.push(x.dm);
+      if (n.orn) extra.push(n.orn.up, n.orn.down);
+      for (const [dm, vm, sec] of [[0, 1, sound]].concat(extra.map(d => [d, ORNAMENT.vel, 1.5]))) {
+        const c = pianoCenterFor(Math.round(mm + dm));
+        for (const L of new Set([pianoLayerFor(n.pvel || 70), pianoLayerFor((n.pvel || 70) * vm)])) {
+          const key = pianoNoteName(c) + "-v" + L;
+          const e = need.get(key) || { key, c, L, uses: 0, sec: 0 };
+          e.uses++; e.sec = Math.max(e.sec, sec); need.set(key, e);
+          if (dm === 0) break;
+        }
+      }
     }
   }
   return need;
@@ -8819,6 +8994,9 @@ function pianoKill(v, at){
   try { v.src.stop(at + 0.35); } catch (e) {}
   for (const g of v.rel) { g.gain.cancelScheduledValues(0); g.gain.setValueAtTime(0, 0); }
 }
+/* 斷音長度 [音長比例上限, 固定秒數, 再加音長的幾成]:60 BPM 四分音符(1 秒)斷音 0.5 → 0.25 秒、160 BPM(0.375 秒)維持約 0.19 秒、
+   十六分音符照舊約一半;極斷音 0.25 → 0.13 秒 */
+const STACCATO = { staccato: [0.5, 0.16, 0.09], spiccato: [0.3, 0.11, 0.05], issimo: [0.25, 0.09, 0.04] };
 function playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel, autoPedal, gn){
   if (!pianoMan) return false;
   const tm = freqToMidi(freq), m = Math.round(tm);
@@ -8839,9 +9017,12 @@ function playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel
   const gain = PIANO_GAIN * pianoVelGain(vel);
   let keyUp = Math.max(dur, 0.05);
   if (artic) {
-    if (artic.staccatissimo) keyUp = dur * 0.25;
-    else if (artic.spiccato) keyUp = dur * 0.3;
-    else if (artic.staccato) keyUp = dur * 0.5;
+    // 斷音照「秒」(使用者 2026-10 選的):真人的斷音大約固定一小段時間、跟速度關係不大;以前一律音長的一半,
+    // 60 BPM 的四分音符斷音響 0.5 秒(太長),快歌又太短。現在 = min(比例上限, 固定秒數 + 一點點音長)(STACCATO)
+    const S = STACCATO;
+    if (artic.staccatissimo) keyUp = Math.min(dur * S.issimo[0], S.issimo[1] + S.issimo[2] * dur);
+    else if (artic.spiccato) keyUp = Math.min(dur * S.spiccato[0], S.spiccato[1] + S.spiccato[2] * dur);
+    else if (artic.staccato) keyUp = Math.min(dur * S.staccato[0], S.staccato[1] + S.staccato[2] * dur);
     else if (artic.detachedLegato) keyUp = dur * 0.75;
     if (artic.tenuto) keyUp = Math.max(keyUp, dur * 0.98);
     if (artic.fermata) keyUp *= 1.8 * FERMATA.normal / FERMATA[artic.fermataLen || "normal"];
@@ -8854,7 +9035,8 @@ function playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel
   let ov = legato && !pedal && !breath ? 0.03 : 0;
   if (gn && gn.legatoNext && !pedal && !breath && !short) { const L = PHRASE_NUANCE.legato; ov = Math.max(ov, Math.max(L.min, Math.min(L.max, L.frac * dur))); }
   keyUp = when + Math.max(0.04, keyUp) + ov;
-  const damperAt = harmonyEndSec != null ? Math.max(harmonyEndSec, keyUp) : keyUp;
+  // 斷音類(斷音/極斷音/跳弓/次斷音)沒踩踏板時不套和聲自動延長(半踏板):以前放鍵後還拖著尾巴響到原本的時值,斷音聽不出來
+  const damperAt = harmonyEndSec != null && !(short && !pedal) ? Math.max(harmonyEndSec, keyUp) : keyUp;
   const noDamper = m >= 89;
   const tau = noDamper ? 3.0 : pianoDamperTau(m);   // 沒有制音器的高音:放開也繼續自然衰減(原廠 ampeg_release=3)
   const bufEnd = when + s.buf.duration / rate;
