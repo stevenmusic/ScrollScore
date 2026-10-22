@@ -3716,6 +3716,44 @@ function hideClefOctaveMarks(root){
 }
 /* 段落記號(rehearsal,例如 A、Verse、Intro)的方框改成圓角方形(使用者要求,2026-10:跟 App 原生按鈕一樣的圓角方形)。
    VexFlow 的 StaveSection 畫成 <rect fill="none" stroke-width="2">,後面接一個空 path 與粗體文字;圓角 = 框高 × 0.25 */
+/* 和弦名稱(使用者 2026-10 截圖:播放軸上端的三角形壓到 B♭maj7、♭ 前後空很大):
+   ① 每個和弦名稱的 SVG 節點加 class ss-chord,播放軸/小節色塊的上端照「最高的音符 + 留白」與「和弦名稱上緣 + CHORD_PAD_SP 格」取較高的,
+      和弦名稱一定在色塊裡、不被播放軸壓到;段落記號(Chorus 方框)在和弦名稱上面,維持在色塊外(跟小節號一樣是標示)
+   ② ♭ ♯:Times New Roman 沒有這兩個字,iPhone 會借別的字型,字寬比字母還寬,看起來像「B ♭ maj7」。
+      量出實際字寬,超過 ACC_W 個字高就把升降記號和後面的字往左收(兩邊各收一半) */
+const CHORD_PAD_SP = 0.5, CHORD_ACC_W = 0.42, REHEARSAL_LIFT = 0.8, REHEARSAL_GAP_SP = 0.2;
+function tagChordSymbols(o){
+  try {
+    for (const row of o.GraphicSheet.MeasureList) for (const m of row || []) {
+      if (!m) continue;
+      for (const se of m.staffEntries || []) for (const c of se.graphicalChordContainers || []) {
+        const node = c.GraphicalLabel && c.GraphicalLabel.SVGNode;
+        if (!node || !node.classList) continue;
+        node.classList.add("ss-chord");
+        const t = node.tagName && node.tagName.toLowerCase() === "text" ? node : node.querySelector && node.querySelector("text");
+        if (t) tightenChordAccidentals(t);
+      }
+    }
+  } catch (e) {}
+}
+function tightenChordAccidentals(t){
+  const str = t.textContent || "";
+  if (!/[♭♯𝄫𝄪]/u.test(str) || t.querySelector("tspan")) return;
+  const fs = parseFloat(t.getAttribute("font-size")) || 12, NS = "http://www.w3.org/2000/svg";
+  const parts = str.split(/([♭♯𝄫𝄪])/u).filter(x => x !== "");
+  t.textContent = "";
+  const spans = parts.map(p => { const sp = document.createElementNS(NS, "tspan"); sp.textContent = p; t.appendChild(sp); return sp; });
+  let shift = 0;   // 前一個升降記號留下、要從這個字開始往左收的量
+  for (const sp of spans) {
+    let dx = -shift; shift = 0;
+    if (/[♭♯𝄫𝄪]/u.test(sp.textContent)) {
+      let w = 0; try { w = sp.getComputedTextLength(); } catch (e) {}
+      const extra = w - CHORD_ACC_W * fs * [...sp.textContent].length;
+      if (extra > 0.5) { dx -= extra / 2; shift = extra / 2; }
+    }
+    if (Math.abs(dx) > 0.01) sp.setAttribute("dx", dx.toFixed(2));
+  }
+}
 function roundRehearsalBoxes(root){
   const svg = (root || $("score")).querySelector("svg");
   if (!svg) return;
@@ -3725,6 +3763,11 @@ function roundRehearsalBoxes(root){
     if (!n || n.tagName.toLowerCase() !== "text" || n.getAttribute("font-weight") !== "bold") continue;
     const rad = (parseFloat(r.getAttribute("height")) || 0) * 0.25;
     r.setAttribute("rx", rad.toFixed(2)); r.setAttribute("ry", rad.toFixed(2));
+    // 往上挪 REHEARSAL_LIFT 格(OSMD 固定只離和弦名稱半格,播放軸/小節色塊要包住和弦名稱就會碰到方框;2026-10 使用者截圖)
+    if (!r.classList.contains("ss-reh")) {
+      r.classList.add("ss-reh");
+      for (let el = r; el && el !== n.nextElementSibling; el = el.nextElementSibling) el.setAttribute("transform", `translate(0 ${-REHEARSAL_LIFT * 10})`);
+    }
   }
 }
 function extendLedgerLineStems(root){
@@ -3985,6 +4028,7 @@ async function renderScore(xmlText){
   if (osmd.EngravingRules.RenderPedals && scoreLayoutTooTall()) { osmd.EngravingRules.RenderPedals = false; crossArp.single.clear(); crossArp.strokes.clear(); osmd.render(); }
   if (finalXml.includes('id="gp-hide-clef-octave"')) hideClefOctaveMarks();
   roundRehearsalBoxes();
+  tagChordSymbols(osmd);
   extendLedgerLineStems(); // OSMD符桿長度是固定值,不會因為加線音符離譜表遠就自動加長,這裡渲染完手動補上
 
   buildTimeline();
@@ -9865,7 +9909,7 @@ function updatePlaylineExtent(){
   const sr = svg.getBoundingClientRect(), cr = scroller.getBoundingClientRect(), s0 = scoreFit.s || 1;
   const svgTop = (sr.top - cr.top) / s0, svgH = sr.height / s0;          // scroller 內、未縮放的座標
   const pad = e.sp * svgH * PLAYLINE_PAD_SPACES_WITH_PANEL;
-  const cTop = svgTop + e.top * svgH - pad, cBot = svgTop + e.bottom * svgH + pad;
+  const cTop = svgTop + playTopRel(e, PLAYLINE_PAD_SPACES_WITH_PANEL) * svgH, cBot = svgTop + e.bottom * svgH + pad;
   const boxTop = scroller.offsetTop, margin = Hs * 0.03;
   const fitFull = (Hs - 2 * margin) / (cBot - cTop);
   const maxSp = stage.clientWidth >= SCREEN_SCORE.wideFrom ? SCREEN_SCORE.maxSpWide : SCREEN_SCORE.maxSp;
@@ -11265,7 +11309,7 @@ function exportAutoScoreH(cfg, kind){
     const L = computeExportLayout({ ...cfg, scoreH: h });
     let over = Math.round(L.contentBottom - ((cfg.includeKeyboard ? L.kbY : cfg.H) - L.channelBand));
     if (e) {
-      const span = h * (e.bottom - e.top + 2 * pad), avail = L.cursorBottom - L.cursorTop;
+      const span = h * (e.bottom + pad - playTopRel(e, EXPORT_CURSOR_MIN_PAD)), avail = L.cursorBottom - L.cursorTop;
       if (span > avail + 1) over = Math.max(over, Math.ceil(h - h * avail / span));
     }
     if (over <= 0 || h <= 120) break;
@@ -11635,12 +11679,26 @@ function measureStaffExtent(svg){
   // 只算符頭的話,符尾朝上那一側(例如 hi-hat 的連桁)看起來很擠、另一側很空,上下不平衡。速度/力度文字不算
   svg.querySelectorAll(".vf-stavenote, .vf-stem, .vf-beam, .vf-flag, .vf-ledgers").forEach(take);
   if (!isFinite(top) || !isFinite(staffTop)) return null;
+  let chordTop = Infinity;   // 和弦名稱的上緣(tagChordSymbols)
+  svg.querySelectorAll(".ss-chord").forEach(el => { const q = el.getBoundingClientRect(); if (q.height > 0) chordTop = Math.min(chordTop, q.top); });
+  let rehBottom = -Infinity;   // 段落記號方框的下緣(roundRehearsalBoxes)
+  svg.querySelectorAll(".ss-reh").forEach(el => { const q = el.getBoundingClientRect(); if (q.height > 0) rehBottom = Math.max(rehBottom, q.bottom); });
   // 譜線間距(播放軸上下留白的單位):五線譜的橫線 y 座標,相鄰差值取偏小的那一段(避開兩個譜表之間的大間隔)
   const ys = [...new Set([...svg.querySelectorAll(".vf-measure > path")].map(e => e.getBoundingClientRect()).filter(q => q.width > 20 && q.height < 3).map(q => Math.round(q.top * 4) / 4))].sort((a, b) => a - b);
   const diffs = ys.slice(1).map((y, i) => y - ys[i]).filter(d => d > 1).sort((a, b) => a - b);
   const sp = diffs.length ? diffs[Math.floor(diffs.length / 4)] : (staffBottom - staffTop) / 4;
-  return { top: (top - sr.top) / sr.height, bottom: (bottom - sr.top) / sr.height, staffH: (staffBottom - staffTop) / sr.height, sp: sp / sr.height };
+  return { top: (top - sr.top) / sr.height, bottom: (bottom - sr.top) / sr.height, staffH: (staffBottom - staffTop) / sr.height, sp: sp / sr.height,
+    chordTop: isFinite(chordTop) ? (chordTop - sr.top) / sr.height : null, rehBottom: isFinite(rehBottom) ? (rehBottom - sr.top) / sr.height : null };
 }
+/* 播放軸/小節色塊的上端(相對樂譜圖高):最高的音符往上 padSp 格,有和弦名稱時至少包到和弦名稱上緣再 CHORD_PAD_SP 格 */
+function playTopRel(e, padSp){
+  let t = e.top - padSp * e.sp;
+  if (e.chordTop != null) t = Math.min(t, e.chordTop - CHORD_PAD_SP * e.sp);
+  // 段落記號(Chorus 方框)維持在色塊外:不超過方框下緣,但也不切到和弦名稱/音符
+  if (e.rehBottom != null) t = Math.min(Math.max(t, e.rehBottom + REHEARSAL_GAP_SP * e.sp), contentTopRel(e) - 0.1 * e.sp);
+  return t;
+}
+function contentTopRel(e){ return e.chordTop != null ? Math.min(e.top, e.chordTop) : e.top; }
 /* 播放軸上下端 = 整首最高/最低的音符(含符桿、連桁)再往外留幾個譜線間距,上下一樣多。
    有樂器面板 1.8 格、只有樂譜 1.2 格(比例沿用使用者調過的鼓譜匯出 80% : 55%;以前從符頭算留 3.2 / 2.2 格,
    但符桿約 3.5 格長,符尾朝上那側會很擠)。鋼琴、鼓、畫面、匯出影片都用同一條規則 */
@@ -11961,10 +12019,10 @@ function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
   if (exportStaffExtent) {   // 只貼著譜表與符頭,上下各留幾個譜線間距(見 PLAYLINE_PAD_SPACES_*)
     const e = exportStaffExtent, pad = e.sp * (cfg.includeKeyboard ? PLAYLINE_PAD_SPACES_WITH_PANEL : PLAYLINE_PAD_SPACES_SCORE_ONLY);
     // 可以超出樂譜圖的上下邊(上下才會一樣多),但不碰到標題、不壓到下方的樂器面板
-    plTop = Math.max(layout.minTopY || 0, topY + SCORE_H * (e.top - pad));
+    plTop = Math.max(layout.minTopY || 0, topY + SCORE_H * playTopRel(e, pad / e.sp));
     plBottom = Math.min(cfg.includeKeyboard ? layout.kbY - H * 0.01 : H, topY + SCORE_H * (e.bottom + pad));
     // 不要靠近副標題、頻道名稱與鍵盤(layout.cursorTop/cursorBottom);空間不夠時只縮留白,不切到音符
-    const nTop = topY + SCORE_H * e.top, nBot = topY + SCORE_H * e.bottom;
+    const nTop = topY + SCORE_H * contentTopRel(e), nBot = topY + SCORE_H * e.bottom;
     if (layout.cursorTop != null) plTop = Math.max(plTop, Math.min(layout.cursorTop, nTop));
     if (layout.cursorBottom != null) plBottom = Math.min(plBottom, Math.max(layout.cursorBottom, nBot));
   }
@@ -12109,6 +12167,7 @@ async function renderPageOsmd(contentW, sp){
   installCrossStaffArpeggio(); crossArp.single.clear(); crossArp.strokes.clear(); o.render();
   if (lastRenderedXml.includes('id="gp-hide-clef-octave"')) hideClefOctaveMarks(host);
   roundRehearsalBoxes(host);
+  tagChordSymbols(o);
   extendLedgerLineStems(host);
   return { o, host };
 }
