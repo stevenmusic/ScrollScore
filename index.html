@@ -7660,21 +7660,71 @@ function pianoAutoMacro(hasMarks){
    曲尾兩小節:拍子輕重與隨機起伏逐漸減到 35%、段落力度固定在這兩小節開頭的值。兩小節開頭剛好是 0,跟前面接得上。
    跟其他段落起伏一樣,譜上有力度記號時只用四成,以譜為主(例如曲尾寫了 dim./pp 照樣變小聲) */
 const PIANO_END = { bars: 2, perSemi: 0.7, max: 12 };
-/* 非古典的結尾漸弱(使用者要求 2026-10:「結尾應該要漸弱」):流行/抒情鋼琴的結尾幾乎都是收、不是推上去。
-   範圍 = 最後一個起音前 POP_END_FADE.bars 小節;譜上的 rit./rall. 一路到曲尾而且比較長(最多 maxBars 小節)時從 rit. 開始。
-   力度乘 1 → target(S 形),伴奏同比例;這段裡譜上有力度記號/髮夾就照譜、不加。取代古典用的「曲尾照旋律線條」(往上走會漸強) */
-const POP_END_FADE = { bars: 2, maxBars: 4, target: 0.72 };
+/* 非古典的結尾(使用者要求 2026-10:「結尾應該要漸弱」→「不是硬改,其他歌曲有可能漸強結束,要建立完整邏輯」):
+   從樂譜判斷這首是「收著結束」還是「推上去結束」,不是一律漸弱。看結尾跟整首比的特徵(每項 −1 ~ +1,正 = 大聲結束):
+   ① 織度走向:最後 2 小節的音符密度 比 前面 4 小節(變稀 = 收)② 最後和弦的厚度:音數比整首平均多/少
+   ③ 最後和弦的高度:最上面的音比整首旋律平均高/低(高 = 亮、大聲結束;落在中低音 = 收)
+   ④ 最後和弦的長短:短促的一下(≤ 一拍、後面是休止,樂團式收尾)= 大聲;長音不加減
+   ⑤ 最後和弦有重音/sf 類 = 大聲 ⑥ rit./rall. 一路到曲尾 = 偏收 ⑦ 最後 2 小節旋律往上/往下
+   ⑧ 最後一段是尾奏/前奏 = 收、副歌 = 偏大 ⑨ 結尾的密度比整首平均稀/密
+   ⑩ 最後和弦拉長(≥ 一小節或延長記號)讓它響完 = 偏收 ⑪ 最後兩小節右手重複同一個音型(結尾反覆的伴奏型/tag)= 收
+   最後和弦的厚度跟整首「最厚的和弦」(第 90 百分位)比,不是跟平均比——結尾和弦本來就比一般的音厚,跟平均比每首都會偏向大聲
+   加權總和(END_SHAPE.w)→ s = tanh(總和),s < 0 時漸弱到 1 + s × (1 − fadeMin)、s > 0 時漸強到 1 + s × (cresMax − 1)。
+   範圍 = 最後一個起音前 2 小節(rit. 一路到曲尾而且更長時從 rit. 開始,最多 4 小節),最後的和弦剛好到目標;這段譜上有力度記號/髮夾就照譜。
+   console 印「結尾:…」每項的值。古典照舊用「曲尾照旋律線條」(pianoEndContour) */
+const END_SHAPE = { bars: 2, maxBars: 4, fadeMin: 0.7, cresMax: 1.12,
+  w: { texture: 0.6, size: 0.4, register: 0.5, hit: 0.6, accent: 0.7, rit: 0.4, melody: 0.5, section: 0.6, density: 0.3, ring: 0.3, vamp: 0.5 } };
+let endShapeInfo = null;
 function popEndFade(hasMarks){
-  if (!events.length) return null;
-  const last = events[events.length - 1], bl = last.barLen > 0 ? last.barLen : 1;
+  // 最後一個「有音」的事件(後面可能還有休止符)
+  let last = null; for (let k = events.length - 1; k >= 0 && !last; k--) if (events[k].notes.some(n => !n.drum && n.freq)) last = events[k];
+  if (!last) return null;
+  const bl = last.barLen > 0 ? last.barLen : 1, bt = last.beatLen > 0 ? last.beatLen : bl / 4;
   let srcEnd = 0; for (const ev of events) if (ev.srcT != null) for (const n of ev.notes) srcEnd = Math.max(srcEnd, ev.srcT + (n.durWhole || 0));
-  let len = POP_END_FADE.bars * bl;
-  for (const r of scoreTempoSpans || []) if (r.kind === "rit" && r.end >= srcEnd - bl / 4 && srcEnd - r.start <= POP_END_FADE.maxBars * bl + 1e-6) len = Math.max(len, srcEnd - r.start);
-  // 到最後一個起音(最後的和弦)剛好到 target;以前算到整首結尾(含最後全音符的長度),最後的和弦只收一半
-  const t1 = last.tWhole, t0 = t1 - len;
+  let len = END_SHAPE.bars * bl, ritEnd = false;
+  for (const r of scoreTempoSpans || []) if (r.kind === "rit" && r.end >= srcEnd - bl / 4) { ritEnd = true; if (srcEnd - r.start <= END_SHAPE.maxBars * bl + 1e-6) len = Math.max(len, srcEnd - r.start); }
+  const t1 = last.tWhole, t0 = t1 - len;   // 到最後一個起音(最後的和弦)剛好到目標
   if (hasMarks && scoreDynMarks.some(d => d.t >= srcEnd - len - 1e-6)) return null;
   if ((scoreWedges || []).some(w => w.end > srcEnd - len + 1e-6)) return null;
-  return t => { if (t <= t0) return 1; const x = Math.min(1, (t - t0) / Math.max(1e-6, len)), k = x * x * (3 - 2 * x); return 1 + (POP_END_FADE.target - 1) * k; };
+  const pit = ev => ev.notes.filter(n => !n.drum && n.freq);
+  const multi = events.some(ev => pit(ev).some(n => (n.staff || 1) > 1));
+  const rhTop = ev => { const r = pit(ev).filter(n => !multi || (n.staff || 1) === 1); return r.length ? Math.max(...r.map(n => freqToMidi(n.freq))) : null; };
+  const onsets = (a, b) => events.reduce((c, ev) => c + (ev.tWhole >= a - 1e-6 && ev.tWhole < b - 1e-6 ? pit(ev).length : 0), 0);
+  const clamp = x => Math.max(-1, Math.min(1, x));
+  const lastNotes = pit(last), body = events.filter(ev => ev !== last && pit(ev).length);
+  const songDens = onsets(events[0].tWhole, t1) / Math.max(1e-6, t1 - events[0].tWhole);
+  const dEnd = onsets(t1 - 2 * bl, t1) / (2 * bl), dPrev = onsets(t1 - 6 * bl, t1 - 2 * bl) / (4 * bl);
+  const sizes = body.map(ev => pit(ev).length).sort((a, b) => a - b), bigSize = sizes.length ? sizes[Math.floor(0.9 * (sizes.length - 1))] : 1;
+  const rhSeq = (a, b) => events.filter(ev => ev.tWhole >= a - 1e-6 && ev.tWhole < b - 1e-6).map(rhTop).filter(x => x != null).map(x => Math.round(x));
+  const sA = rhSeq(t1 - 2 * bl, t1 - bl), sB = rhSeq(t1 - bl, t1);
+  const vamp = sA.length >= 3 && sA.length === sB.length && sA.filter((x, k) => x === sB[k]).length >= 0.8 * sA.length;
+  const tops = events.map(rhTop).filter(x => x != null), meanTop = tops.reduce((a, x) => a + x, 0) / Math.max(1, tops.length);
+  const lastTop = rhTop(last);
+  const melIn = (a, b) => { const v = events.filter(ev => ev.tWhole >= a - 1e-6 && ev.tWhole < b - 1e-6).map(rhTop).filter(x => x != null); return v.length ? v.reduce((p, x) => p + x, 0) / v.length : null; };
+  const mA = melIn(t1 - 2 * bl, t1 - bl), mB = melIn(t1 - bl, t1 + 1e-6);
+  const lastDur = Math.max(0, ...lastNotes.map(n => n.durWhole || 0));
+  const art = last.artic || {}, accent = lastNotes.some(n => n.artic && (n.artic.accent || n.artic.strongAccent)) || art.accent || art.strongAccent ||
+    scoreDynMarks.some(d => d.mark in PIANO_MOMENTARY && Math.abs(d.t - (last.srcT != null ? last.srcT : -9)) < 1e-4);
+  const G = perfSections(), lastKind = G.length ? G[G.length - 1].kind : null;
+  const f = {
+    texture: dPrev > 0 && dEnd > 0 ? clamp(Math.log2(dEnd / dPrev)) : 0,
+    size: clamp((lastNotes.length - bigSize) / 2),
+    register: lastTop != null && tops.length ? clamp((lastTop - meanTop) / 12) : 0,
+    hit: lastDur <= bt + 1e-6 && !(last.artic && last.artic.fermata) ? 1 : 0,
+    accent: accent ? 1 : 0,
+    rit: ritEnd ? -1 : 0,
+    melody: mA != null && mB != null ? clamp((mB - mA) / 7) : 0,
+    section: lastKind === "outro" || lastKind === "intro" ? -1 : lastKind === "chorus" ? 0.3 : 0,
+    density: songDens > 0 && dEnd > 0 ? clamp(Math.log2(dEnd / songDens)) : 0,
+    ring: lastDur >= bl - 1e-6 || (last.artic && last.artic.fermata) ? -1 : 0,
+    vamp: vamp ? -1 : 0,
+  };
+  let sum = 0; for (const k in f) sum += f[k] * END_SHAPE.w[k];
+  const sc = Math.tanh(sum), target = sc < 0 ? 1 + sc * (1 - END_SHAPE.fadeMin) : 1 + sc * (END_SHAPE.cresMax - 1);
+  endShapeInfo = { s: +sc.toFixed(2), target: +target.toFixed(2), f: Object.fromEntries(Object.entries(f).map(([k, v]) => [k, +v.toFixed(2)])) };
+  try { console.log("結尾:" + (sc < 0 ? "漸弱" : "漸強") + " ×" + endShapeInfo.target + " s=" + endShapeInfo.s + " " + JSON.stringify(endShapeInfo.f)); } catch (e) {}
+  if (Math.abs(target - 1) < 0.02) return null;
+  return t => { if (t <= t0) return 1; const x = Math.min(1, (t - t0) / Math.max(1e-6, len)), k = x * x * (3 - 2 * x); return 1 + (target - 1) * k; };
 }
 function pianoEndContour(nb, multiStaff){
   const pts = [];
@@ -7713,7 +7763,7 @@ function pianoEndContour(nb, multiStaff){
    改成 ×PIANO_POP.macroWithSections,以段落記號為主。譜上有力度記號時段落力度只用一半(以譜為主) */
 /* 2026-10 第二版(使用者:「感情不夠!」):POP909 是電腦編曲檔,大小聲保守;真人彈抒情流行段落差距大得多 →
    段落力度 ×sectionGain 2、旋律起伏(往上漸強、往下漸弱)每半音 contour 0.6 力度、上限 ±contourMax 7(古典 0.35、±4) */
-const PIANO_POP = { melody: 4, accomp: 3, macroWithSections: 0.5, sectionGain: 2, contour: 0.6, contourMax: 6, contourNear: 1, contourFar: 2, lineWin: 1, lineGap: 3, lhFiller: 8 };
+const PIANO_POP = { melody: 4, accomp: 3, macroWithSections: 0.5, sectionGain: 2, contour: 0.6, contourMax: 6, contourNear: 1, contourFar: 2, lineWin: 1, lineGap: 3, lhFiller: 8, dip: 2, dipMax: 10, dipWin: 1 };
 const PIANO_SECTION = { intro: -7, verse: -1.5, prechorus: [0.5, 2], chorus: 2.5, bridge: 1.5, interlude: -2, solo: 0, outro: -5 };
 function sectionKind(text){
   const s = String(text || "").toLowerCase().replace(/[\s._\-–—]+/g, " ").trim();
@@ -7912,21 +7962,23 @@ function computePianoDynamics(){
     if (near == null || far == null) return 0;
     return Math.max(-PIANO_POP.contourMax, Math.min(PIANO_POP.contourMax, (near - far) * PIANO_POP.contour));
   };
+  // 旋律的凹處放輕(使用者 2026-10:第 51 小節 B♭4+D5 的 D「是旋律沒錯,但聽起來過強」):旋律在 G5/A5 附近進行,
+  // 中間往下沉到 D 再回來,D 剛好在第 3 拍又是雙音,以前跟前後的 G 一樣重。前後 dipWin 拍內的旋律音平均比它高時,每半音 −dip、
+  // 最多 −dipMax;只放輕凹處,高點不另外加(整體走向交給 popMelodyContour,不然整條線會一顆一顆起伏)
+  const melodyDip = (ev, m) => {
+    const i = evIdx.get(ev), t = ev.tWhole, w = (ev.beatLen || 0.25) * PIANO_POP.dipWin;
+    let s = 0, c = 0;
+    for (let j = i - 1; j >= 0 && events[j].tWhole >= t - w - 1e-6; j--) if (rhTops[j] != null) { s += rhTops[j]; c++; }
+    for (let j = i + 1; j < events.length && events[j].tWhole <= t + w + 1e-6; j++) if (rhTops[j] != null) { s += rhTops[j]; c++; }
+    if (!c) return 0;
+    return -Math.min(PIANO_POP.dipMax, Math.max(0, s / c - m) * PIANO_POP.dip);
+  };
   const isInnerSingle = (ev, m) => {
     const i = evIdx.get(ev), t = ev.tWhole, w = (ev.beatLen || 0.25) * PIANO_POP.lineWin;
     let mx = -Infinity;
     for (let j = i - 1; j >= 0 && events[j].tWhole >= t - w - 1e-6; j--) if (rhTops[j] != null) mx = Math.max(mx, rhTops[j]);
     for (let j = i + 1; j < events.length && events[j].tWhole <= t + w + 1e-6; j++) if (rhTops[j] != null) mx = Math.max(mx, rhTops[j]);
     return mx - m >= PIANO_POP.lineGap;
-  };
-  // 和弦/雙音:前後一拍內「兩邊」都有比它高 lineGap 以上的右手音才算夾在中間的伴奏(旋律往下再回來的凹處),
-  // 只有一邊高的(和弦旋律之後往上走)照常是旋律
-  const isInnerChord = (ev, m) => {
-    const i = evIdx.get(ev), t = ev.tWhole, w = (ev.beatLen || 0.25) * PIANO_POP.lineWin;
-    let lo = -Infinity, hi = -Infinity;
-    for (let j = i - 1; j >= 0 && events[j].tWhole >= t - w - 1e-6; j--) if (rhTops[j] != null) lo = Math.max(lo, rhTops[j]);
-    for (let j = i + 1; j < events.length && events[j].tWhole <= t + w + 1e-6; j++) if (rhTops[j] != null) hi = Math.max(hi, rhTops[j]);
-    return lo - m >= PIANO_POP.lineGap && hi - m >= PIANO_POP.lineGap;
   };
   // 左手同理(使用者反映 2026-10:「第 25、26 小節重複的低音太大聲,處理方式應該跟前奏一樣」):低音 Bb2 在拍點上、中間夾著
   // F3-Bb3-F3-Bb3 十六分音符,以前都是 62~76 跟低音一樣重。左手單音比前後一拍內左手最低音高 ≥ lineGap 半音 = 夾在中間的伴奏音,
@@ -7941,7 +7993,7 @@ function computePianoDynamics(){
   };
   const auto = pianoAutoMacro(hasMarks);
   const endContour = pianoEndContour(auto.nb, multiStaff);
-  const popEnd = pop ? popEndFade(hasMarks) : null;   // 非古典的結尾漸弱(取代照旋律線條的曲尾)
+  const popEnd = pop ? popEndFade(hasMarks) : null;   // 非古典的結尾:依樂譜判斷漸弱或漸強(取代照旋律線條的曲尾)
   // 和聲張力 + 樂句弧線整條曲線在前後約 PIANO_HARM.smoothBeats 拍做高斯平滑(使用者 2026-10:段落/樂句之間不要階梯;
   // 主歌停在屬和弦〔張力最高、樂句高點〕、導歌從 Bbmaj7 開新樂句時以前一下掉 11 力度):平滑整條曲線,不是固定長度的漸強漸弱——
   // 變化大的地方花比較久接過去,變化小的地方幾乎不變
@@ -8008,7 +8060,7 @@ function computePianoDynamics(){
         if (rh) {
           // 雙音/和弦也一樣(使用者反映 2026-10:第 51 小節 B♭4+D5 的 D「還是太強、很不舒服」——旋律在 G5/A5,這個雙音是夾在中間的伴奏,
           // 以前只有單音才判斷,和弦最上面一律當旋律加重)
-          if (n === top && pop && (ns.length === 1 ? isInnerSingle(ev, m) : isInnerChord(ev, m))) {
+          if (n === top && pop && ns.length === 1 && isInnerSingle(ev, m)) {
             v -= 5 + PIANO_POP.accomp; n._inner = true;   // 單音音型裡的伴奏音(見 isInnerSingle)
           } else if (n === top) {
             // 有和弦記號的非古典:和弦最上面的旋律音跟單音旋律一樣加 4(下面已經多一個音、本來就比較響,不用再多打;
@@ -8016,7 +8068,7 @@ function computePianoDynamics(){
             const topB = ns.length > 1 && !hplan ? 6 : 4;
             v += topB + (pop ? PIANO_POP.melody : 0);
             if (hplan) n._micro = (ev._beatTerm || 0) + topB + (n.durWhole >= 0.5 ? 2 : n.durWhole <= 1 / 16 + 1e-6 ? -2 : 0);
-            if (pop) v += popMelodyContour(ev);   // 非古典:旋律整體的走向(平滑),見 popMelodyContour
+            if (pop) v += popMelodyContour(ev) + melodyDip(ev, m);   // 非古典:旋律整體的走向(平滑)+ 旋律凹處放輕,見 popMelodyContour / melodyDip
             if (hplan && ev._chord) v += melodyChordLean(ev, m);   // 旋律跟和弦:非和弦音加重、解決音放輕
             else if (melodyHist.length) v += Math.max(-4, Math.min(4, (m - melodyHist.reduce((s, x) => s + x, 0) / melodyHist.length) * 0.35));
             melodyHist.push(m); if (melodyHist.length > 8) melodyHist.shift();
