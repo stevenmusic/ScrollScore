@@ -5765,7 +5765,9 @@ function rubatoPredict(x){
    (譜上已經有 rit./rall. 的地方取較慢的,不疊加)。回傳每個事件的倍率(1 = 原速) */
 // 段落結尾漸慢與樂句結尾拉寬已拿掉(1 = 不放慢;使用者反映 2026-10:「第 12 小節琶音結束後拍子拉長了,應該保持一樣的拍子結束」——
 // 流行歌段落交接照拍子走,不會每段都慢下來)。保留旋律最高點停留與整首最後漸慢
-const POP_BREATH = { sectionEnd: 1, toChorus: 1, phraseEnd: 1, peak: 0.93, peakPrev: 0.97, endBars: 2, end: 0.85 };
+// 旋律最高點停留也已拿掉(peak/peakPrev = 1;使用者 2026-10:「要看旋律還有沒有繼續進行」「還是有漏洞」——4 小節硬切的樂句、
+// 「最高音 ≠ 樂句目標」、右手伴奏被當成旋律、固定一拍門檻都會判錯,加錯的停留比不加更糟)。非古典只剩整首最後漸慢 + 譜上 rit./延長記號
+const POP_BREATH = { sectionEnd: 1, toChorus: 1, phraseEnd: 1, peak: 1, peakPrev: 1, endBars: 2, end: 0.85 };
 function popBreathFactors(){
   const n = events.length, f = new Array(n).fill(1), eps = 1e-6;
   const src = events.map(ev => ev.srcT != null ? ev.srcT : ev.tWhole);
