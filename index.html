@@ -8507,6 +8507,35 @@ function pianoLineNuance(){
     }
   }
 }
+/* 同時彈的音照力度決定先後(使用者 2026-10 選的;資料:MAESTRO 演奏 MIDI 與 (n)ASAP 逐音對照,樂譜上同時的音):
+   力度越大越早響。這是鋼琴的機械原理:按得越用力
+   琴槌越早打到弦,手指其實是同時按的(Goebl 2001,22 位鋼琴家在電腦紀錄的 Bösendorfer 上量),所以跟風格無關、流行曲也一樣。
+   取樣的起音就是琴槌打到弦,沒有這段飛行時間,要自己加。以前和弦裡最高音準時、其他音隨機晚 0~7ms,跟力度無關。
+   curve = 每種力度比力度 80 晚幾 ms,從 (n)ASAP 141 萬個「樂譜上同時」的音擬合(每個和弦扣掉自己的平均):輕的音差很多(40~60 每 1 力度
+   約 0.7ms),重的音幾乎不差(80 以上約 0.3ms),跟琴槌飛行時間 ∝ 1/速度 一致;平均約 0.4ms/力度(直線回歸 0.41)。拿去預測最高音比其他音
+   早多少,跟真人差 ≤ 2ms(力度差 10~20:真人 6.3 / 預測 5.1ms;20~30:11.5 / 9.4;30 以上:14.6 / 15.0)。
+   做法:同一個時間點(不含琶音滾奏)最大聲的音準時,其他音晚 curve(自己) − curve(最大聲)(最多 max),再加 0~jitter 的隨機(真人還有約
+   ±7ms 的散布,但一部分是量測誤差,取一半以下);只有一個音的時間點不動 */
+const PIANO_ASYNC = { curve: [[20, 31.6], [30, 25.6], [40, 18], [50, 11.2], [60, 6.4], [70, 2.7], [80, 0], [90, -2.8], [100, -5.6], [110, -6.8], [127, -7.3]], max: 0.03, jitter: 0.003 };
+function pianoHammerLagMs(v){
+  const C = PIANO_ASYNC.curve;
+  if (v <= C[0][0]) return C[0][1];
+  for (let i = 1; i < C.length; i++) if (v <= C[i][0]) return C[i - 1][1] + (C[i][1] - C[i - 1][1]) * (v - C[i - 1][0]) / (C[i][0] - C[i - 1][0]);
+  return C[C.length - 1][1];
+}
+function pianoVelocityAsync(){
+  let k = 0;
+  for (const ev of events) {
+    const ns = ev.notes.filter(n => !n.drum && n.freq && n.pvel != null && n.rollIndex == null);
+    k++;
+    if (ns.length < 2) continue;
+    const vmax = Math.max(...ns.map(n => n.pvel));
+    for (const n of ns) {
+      const lag = Math.min(PIANO_ASYNC.max, (pianoHammerLagMs(n.pvel) - pianoHammerLagMs(vmax)) / 1000);
+      n.pdt = n.pvel >= vmax ? 0 : lag + seededRand01(k * 5.71 + freqToMidi(n.freq) * 0.291) * PIANO_ASYNC.jitter;
+    }
+  }
+}
 function computePianoDynamics(){
   const multiStaff = events.some(ev => ev.notes.some(n => !n.drum && n.freq && (n.staff || 1) > 1));
   const hasMarks = scoreDynMarks.length > 0;
@@ -8719,7 +8748,7 @@ function computePianoDynamics(){
         n._v0 = v; n._accDb = accDb - momDb; n._momDb = momDb; n._role = rh ? (n === top && !n._inner ? 1 : 2) : 3; delete n._inner;
         n.pmel = n._role === 1;   // 旋律音(pianoLineNuance 用)
         n.pvel = Math.max(8, Math.min(124, v * Math.pow(10, accDb / 40)));
-        n.pdt = chord && !(rh && n === top) && n.rollIndex == null ? seededRand01(k * 5.71 + m * 0.291) * 0.007 : 0;
+        n.pdt = 0;   // 同時的音誰先誰後:最後照力度算(pianoVelocityAsync)
       }
     }
   }
@@ -8764,6 +8793,7 @@ function computePianoDynamics(){
     }
   });
   pianoLineNuance();
+  pianoVelocityAsync();
   for (const x of pn) delete x.n._v0, delete x.n._accDb, delete x.n._momDb, delete x.n._role;
 }
 
