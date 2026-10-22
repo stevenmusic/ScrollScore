@@ -8153,7 +8153,8 @@ function computePianoDynamics(){
   const multiStaff = events.some(ev => ev.notes.some(n => !n.drum && n.freq && (n.staff || 1) > 1));
   const hasMarks = scoreDynMarks.length > 0;
   const pop = classicalProbInfo().p < 0.5, popSections = pop && scoreSections.length > 0;   // 非古典的彈法(PIANO_POP)
-  const hplan = pop ? buildHarmonyPlan() : null;   // 非古典 + 有和弦記號:和聲張力/樂句弧線/非和弦音(PIANO_HARM)
+  // 有和弦記號就用和聲安排(張力/樂句弧線/倚音),古典非古典都一樣(使用者 2026-10:通用的改動古典也要);古典譜很少有和弦記號
+  const hplan = buildHarmonyPlan();
   // 右手單音的分解音型(G4-C4-F4-C4-E4-C4…):每個時間點只有一個音,以前每一顆都被當成旋律加重(使用者反映 2026-10:
   // 「即使是前奏,每個音都彈得很用力」——〈甲乙丙丁〉前奏重複的 C4 也是 55~62)。比前後 PIANO_POP.lineWin 拍內右手最高音
   // 低 PIANO_POP.lineGap 半音以上的單音 = 伴奏的內聲部(持續音、分解和弦的下方音),照內聲部彈輕
@@ -8278,7 +8279,7 @@ function computePianoDynamics(){
       return { chord: raw[i].o.chord, v: sw > 0 ? sv / sw : raw[i].v };
     });
   }
-  const secShape = popSections ? sectionShapes() : null;
+  const secShape = scoreSections.length ? sectionShapes() : null;   // 段落內往高潮推、重複樂句更投入:有段落記號就用(古典也一樣)
   const drift = { 1: 0, 2: 0 };
   const melodyHist = [];
   let k = 0, bar = -1, lastM = null, lastPos = -1;
@@ -8340,9 +8341,10 @@ function computePianoDynamics(){
             const topB = ns.length > 1 && !hplan ? 6 : 4;
             v += topB + (pop ? PIANO_POP.melody : 0);
             if (hplan) n._micro = (ev._beatTerm || 0) + topB + (n.durWhole >= 0.5 ? 2 : n.durWhole <= 1 / 16 + 1e-6 ? -2 : 0);
-            if (pop) v += popMelodyContour(ev) + melodyDip(ev, m);   // 非古典:旋律整體的走向(平滑)+ 旋律凹處放輕,見 popMelodyContour / melodyDip
-            if (hplan && ev._chord) v += melodyChordLean(ev, m);   // 旋律跟和弦:非和弦音加重、解決音放輕
-            else if (melodyHist.length) v += Math.max(-4, Math.min(4, (m - melodyHist.reduce((s, x) => s + x, 0) / melodyHist.length) * 0.35));
+            v += melodyDip(ev, m);   // 旋律凹處放輕(通用)
+            if (pop) v += popMelodyContour(ev);   // 非古典:旋律整體的走向(平滑),見 popMelodyContour
+            else if (melodyHist.length) v += Math.max(-4, Math.min(4, (m - melodyHist.reduce((s, x) => s + x, 0) / melodyHist.length) * 0.35));   // 古典:跟前 8 個旋律音比
+            if (hplan && ev._chord) v += melodyChordLean(ev, m);   // 旋律跟和弦:非和弦音加重、解決音放輕(有和弦記號時)
             melodyHist.push(m); if (melodyHist.length > 8) melodyHist.shift();
           } else v -= 5 + (pop ? PIANO_POP.accomp : 0);
         } else {
