@@ -1966,6 +1966,7 @@ let scoreChokeTimes = [];   // 鼓譜的止音文字(Mute / Choke…)位置(記�
 let scoreSections = [];     // 段落 {t: 記譜位置, kind}(sectionKind;非古典的段落力度用,見 PIANO_SECTION)
 let scoreFermataWords = [];   // 延長的文字 {t: 記譜位置, len}(見 FERMATA)
 let scoreTempoSpans = [];   // rit./rall./accel. 的範圍 {start, end, hold, kind, target}(resolveTempoWordSpans,一定照做的速度曲線)
+let scoreSwingMarks = [];   // 搖擺指示(見 buildSwingSegs)
 let scoreTempoWords = [];   // 速度文字 {t: 記譜位置, kind: "rit" | "accel" | "atempo"}(rit./rall./a tempo…,彈性速度模型用)
 let ghostNoteheadEntries = {}; // 同上,記錄括號符頭(鬼音 ghost note,輕輕帶過的小鼓等),播放時用最輕的力度層
 let crossNoteheadEntries = {}; // midi(取整數) -> 已排序的 {t,v} 陣列,記錄哪些時間點是打叉符頭(rim click等特殊擊法),用 findNearestEntry 容許誤差比對
@@ -2471,6 +2472,7 @@ async function loadScoreFile(file){
     }
     scoreDynMarks = parsed.dynMarks || [];
     scoreTempoWords = parsed.tempoWords || [];
+    scoreSwingMarks = (parsed.swingMarks || []).sort((a, b) => a.t - b.t);
     scoreTempoSpans = parsed.tempoSpans || [];
     scoreFermataWords = parsed.fermataWords || [];
     scoreSections = (parsed.sections || []).map(x => ({ t: x.t, kind: sectionKind(x.text) })).filter(x => x.kind).sort((a, b) => a.t - b.t);
@@ -2925,7 +2927,10 @@ function gpToMusicXML(AT, score, trackIndex){
       topDirs.push([pos, `<direction placement="above">${metro || '<direction-type><words></words></direction-type>'}<sound tempo="${bpm}"/></direction>`]);
     }
     if (mb.tripletFeel !== prevTF) {
-      if (TF_TEXT[mb.tripletFeel]) topDirs.push([0, `<direction placement="above"><direction-type><words>${xmlEsc(TF_TEXT[mb.tripletFeel])}</words></direction-type></direction>`]);
+      // 播放也要照 Triplet Feel(以前只畫文字、照直拍播):寫成 MusicXML 的 <sound><swing>(swingMarksFromXml 讀)
+      const SW = { [TF.Triplet8th]: [2, 1, "eighth"], [TF.Triplet16th]: [2, 1, "16th"], [TF.Dotted8th]: [3, 1, "eighth"], [TF.Dotted16th]: [3, 1, "16th"], [TF.Scottish8th]: [1, 3, "eighth"], [TF.Scottish16th]: [1, 3, "16th"] }[mb.tripletFeel];
+      const snd = SW ? `<sound><swing><first>${SW[0]}</first><second>${SW[1]}</second><swing-type>${SW[2]}</swing-type></swing></sound>` : "<sound><swing><straight/></swing></sound>";
+      topDirs.push([0, `<direction placement="above"><direction-type>${TF_TEXT[mb.tripletFeel] ? `<words>${xmlEsc(TF_TEXT[mb.tripletFeel])}</words>` : "<words></words>"}</direction-type>${snd}</direction>`]);
       prevTF = mb.tripletFeel;
     }
     topDirs.sort((a, b) => a[0] - b[0]);
@@ -4249,6 +4254,77 @@ function keyAlterOf(letter, fifths){
   if (fifths < 0) return "BEADGCF".indexOf(letter) < -fifths ? -1 : 0;
   return 0;
 }
+/* 搖擺 / Shuffle(使用者 2026-10 選的):譜上寫 Swing、Shuffle、三連音記號(♫ = ♪³♪)或 MusicXML <sound><swing> 時,
+   成對的八分音符照「長—短」彈(以前一律照直拍)。來源依序:<swing> 寫明的比例(first/second,swing-type eighth/16th;<straight/> 取消)
+   → 節拍器記號裡的三連音換算(metronome-relation + metronome-tuplet)→ 文字。比例:寫明的照寫;Shuffle / 三連音記號 = 2:1(就是三連音);
+   只寫 Swing 照速度(swingRatioForBpm:真人速度越快搖得越少,≤130 BPM 2:1 → 230 BPM 以上 1.4:1)。Straight / Even 8ths / No swing 取消 */
+const SWING = { triplet: 2, slowBpm: 130, slow: 2.0, fastBpm: 230, fast: 1.4 };
+function swingRatioForBpm(q){
+  if (!(q > 0)) q = 120;
+  const f = Math.max(0, Math.min(1, (q - SWING.slowBpm) / (SWING.fastBpm - SWING.slowBpm)));
+  return SWING.slow + (SWING.fast - SWING.slow) * f;
+}
+function swingWordKind(text){
+  const t = String(text || "").trim(), s = t.toLowerCase();
+  if (!t) return null;
+  if (/\bno swing\b|\b(straight|even)\s*(8ths?|eighths?|quavers|16ths?|feel)\b|^straight$/.test(s)) return { kind: "straight" };
+  if (/(♫|♪\s*♪)\s*=.*[³3]/.test(t) || /\btriplet feel\b/.test(s)) return { kind: "shuffle", unit: /16/.test(s) ? 0.125 : 0.25 };
+  if (/\bshuffle\b/.test(s)) return { kind: "shuffle", unit: 0.25 };
+  if (/\b(swing|swung)\b/.test(s)) return { kind: "swing", unit: /\b16(th)?s?\b/.test(s) ? 0.125 : 0.25 };
+  return null;
+}
+function swingMarkOf(snd, dir){
+  const sw = snd && snd.getElementsByTagName("swing")[0];
+  if (sw) {
+    if (sw.getElementsByTagName("straight")[0]) return { kind: "straight" };
+    const num = tag => { const e = sw.getElementsByTagName(tag)[0]; return e ? parseFloat(e.textContent) : NaN; };
+    const ty = (sw.getElementsByTagName("swing-type")[0] || {}).textContent;
+    const f = num("first"), sc = num("second");
+    if (f > 0 && sc > 0 && Math.abs(f - sc) > 1e-6) return { kind: "ratio", r: f / sc, unit: ty && ty.trim() === "16th" ? 0.125 : 0.25 };
+    if (f > 0 && sc > 0) return { kind: "straight" };
+  }
+  if (!dir) return null;
+  const met = dir.getElementsByTagName("metronome")[0];
+  if (met && met.getElementsByTagName("metronome-relation")[0] && met.getElementsByTagName("metronome-tuplet")[0]) return { kind: "shuffle", unit: 0.25 };
+  return swingWordKind(Array.from(dir.getElementsByTagName("words")).map(w => w.textContent).join(" "));
+}
+/* 搖擺的拍子格(buildTimeline 最後算):每個 unit(八分音符搖擺 = 一拍 0.25 全音符、十六分音符搖擺 = 0.125)一格,
+   **只有格子裡所有起音都在正拍或剛好一半的位置才搖**——寫成三連音、十六分音符的拍子照寫的彈(搖擺譜裡的三連音本來就是三連音,
+   以前若整條時間一起扭會把它們也拉歪)。複合拍子(6/8、12/8 本來就是三分)與鼓譜(鼓已凍結)不套用。
+   演奏位置 w → 搖擺後的位置(swingWarp):格內前半拉長成 r/(1+r)、後半縮短,格子的頭尾不動(不會累積誤差)。
+   只用在聲音與鍵盤(posToSec、spanSec);樂譜捲動照直拍(secToWhole 不扭),不然播放軸每半拍一快一慢;兩者每拍對齊,格內最多差六分之一拍 */
+let swingSegs = [];
+function buildSwingSegs(){
+  swingSegs = [];
+  if (!scoreSwingMarks.length || isDrumScore || !events.length) return;
+  const stateAt = st => { let m = null; for (const x of scoreSwingMarks) if (x.t <= st + 1e-6) m = x; return m && m.kind !== "straight" ? m : null; };
+  const qAt = w => { let q = scoreSoundTempo > 0 ? scoreSoundTempo : 120; for (const m of perfMeasures) if (m.start <= w + 1e-9 && m.qpm > 0) q = m.qpm; return q; };
+  const cells = new Map();
+  for (const ev of events) {
+    if (ev.barPos == null || !(ev.beatLen > 0)) continue;
+    const mk = stateAt(ev.srcT != null ? ev.srcT : ev.tWhole);
+    if (!mk) continue;
+    const compound = Math.abs(ev.beatLen - 0.375) < 1e-6;
+    if (compound || ev.beatLen < mk.unit - 1e-9) continue;
+    const barStart = ev.tWhole - ev.barPos, k = Math.floor((ev.barPos + 1e-7) / mk.unit), a = barStart + k * mk.unit, key = a.toFixed(6);
+    let c = cells.get(key);
+    if (!c) { c = { a, u: mk.unit, r: mk.kind === "ratio" ? mk.r : mk.kind === "shuffle" ? SWING.triplet : swingRatioForBpm(qAt(ev.tWhole)), ok: true }; cells.set(key, c); }
+    const f = (ev.tWhole - a) / c.u;
+    if (!(Math.abs(f) < 1e-4 || Math.abs(f - 0.5) < 1e-4)) c.ok = false;
+  }
+  swingSegs = [...cells.values()].filter(c => c.ok && Math.abs(c.r - 1) > 1e-6).sort((x, y) => x.a - y.a);
+  if (swingSegs.length) console.log("搖擺:", swingSegs.length, "格,比例", [...new Set(swingSegs.map(c => c.r.toFixed(2)))].join("/"));
+}
+function swingWarp(w){
+  if (!swingSegs.length) return w;
+  let lo = 0, hi = swingSegs.length - 1;
+  if (w < swingSegs[0].a || w >= swingSegs[hi].a + swingSegs[hi].u) return w;
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (swingSegs[mid].a <= w + 1e-12) lo = mid; else hi = mid - 1; }
+  const c = swingSegs[lo];
+  if (w >= c.a + c.u) return w;
+  const f = (w - c.a) / c.u, p = c.r / (1 + c.r);
+  return c.a + c.u * (f < 0.5 ? f * 2 * p : p + (f - 0.5) * 2 * (1 - p));
+}
 function parseXmlTimeline(xmlText){
   try {
     const doc = new DOMParser().parseFromString(xmlText, "text/xml");
@@ -4317,6 +4393,7 @@ function parseXmlTimeline(xmlText){
     let keyFifths = 0, measAcc = {};   // 裝飾音的上下鄰音要照調號與這小節前面出現過的臨時記號
     const ornMap = {};   // 記譜位置 → [{ staff, midi, type, up, down }](裝飾音:顫音、波音、迴音)
     const slurStarts = {};
+    const swingMarks = [];   // 搖擺/直拍的指示(swingMarkOf):{ t: 記譜位置, kind, r, unit }
     const slurInfo = {}, voiceOnsets = new Map(), sighCand = [];   // 兩音圓滑線(嘆息音型)的判斷用:圓滑線起點的譜表/聲部/音高、各聲部的起音位置
     const outSlurs = [];
     const pedalStack = [];
@@ -4398,7 +4475,10 @@ function parseXmlTimeline(xmlText){
           if (d) divisions = parseFloat(d.textContent) || divisions;
           const kf = child.getElementsByTagName("fifths")[0];
           if (kf) keyFifths = parseInt(kf.textContent, 10) || 0;
+        } else if (child.tagName === "sound") {
+          const sm = swingMarkOf(child, null); if (sm) swingMarks.push(Object.assign({ t: cursor }, sm));
         } else if (child.tagName === "direction") {
+          { const sm = swingMarkOf(child.getElementsByTagName("sound")[0] || null, child); if (sm) swingMarks.push(Object.assign({ t: cursor }, sm)); }
           const dynEl = child.getElementsByTagName("dynamics")[0];
           // gp-default-dynamics:Guitar Pro 匯入時第一個預設 f 只是顯示(見 gpToMusicXML),不當成力度記號
           if (dynEl && dynEl.children[0] && child.getAttribute("id") !== "gp-default-dynamics") dynMarks.push({ t: cursor, mark: dynEl.children[0].tagName.toLowerCase() });
@@ -4658,7 +4738,7 @@ function parseXmlTimeline(xmlText){
     }));
     // 兩音圓滑線:頭尾之間這個聲部沒有別的音
     const sighs = sighCand.filter(c => !(voiceOnsets.get(c.vKey) || []).some(t => t > c.t1 + 1e-6 && t < c.t2 - 1e-6)).map(c => ({ staff: c.staff, t1: c.t1, t2: c.t2 }));
-    return { sighs, ornMap, slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges, articMap, arpMap, soundTempo, metronomeDisplay, timeSig, isDrumScore, crossNoteheadMap, ghostNoteheadMap, dynMarks, dynOffsets, chokeTimes, tempoWords, tempoSpans, sections, fermataWords, wedges, measureRanges, guitarTechMap, vibratoRanges: outWavyLines, scoreTitle };
+    return { swingMarks, sighs, ornMap, slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges, articMap, arpMap, soundTempo, metronomeDisplay, timeSig, isDrumScore, crossNoteheadMap, ghostNoteheadMap, dynMarks, dynOffsets, chokeTimes, tempoWords, tempoSpans, sections, fermataWords, wedges, measureRanges, guitarTechMap, vibratoRanges: outWavyLines, scoreTitle };
   } catch (e) {
     console.error("讀取踏板/圓滑線資訊失敗:", e);
     return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, arpMap: {}, soundTempo: null, metronomeDisplay: null, timeSig: null, isDrumScore: false, crossNoteheadMap: {}, measureRanges: [], guitarTechMap: {}, vibratoRanges: [], scoreTitle: null };
@@ -5752,6 +5832,7 @@ function buildTimeline(){
   computeGuitarStringRinging();
   buildMeasurePixels();
   buildTempoMap();
+  buildSwingSegs();
   buildRubatoMap();
 }
 
@@ -6193,7 +6274,7 @@ function secToWholeTempo(sec){
   return p.w + (c - p.c) * p.r;
 }
 function localTempoRatio(w){ return tempoMap.length ? tempoSegAt("w", w).r : 1; }
-function spanSec(w, d){ return wholeToSec(w + d) - wholeToSec(w); }   // 從 w 開始、長 d 全音符的音實際幾秒(會跨過速度變化)
+function spanSec(w, d){ return wholeToSec(swingWarp(w + d)) - wholeToSec(swingWarp(w)); }   // 搖擺的格子裡前長後短(swingWarp)   // 從 w 開始、長 d 全音符的音實際幾秒(會跨過速度變化)
 function totalSec(){
   if ($("useCalibration").checked && calibrationMap.length >= 2) return calibrationMap[calibrationMap.length-1].realSec;
   if (activeWarpMap()) return rubatoToSec(totalWhole);
@@ -6585,6 +6666,7 @@ function rubatoSecToWhole(sec){ return rubatoInterp(activeWarpMap(), "warped", s
    其次是rubato(合成的彈性速度模型),都沒有就照原本固定拍點換算 */
 function posToSec(w, calib){
   if (calib) return calibToSec(w);
+  w = swingWarp(w);   // 搖擺:聲音與鍵盤照「長—短」,樂譜捲動(secToWhole)照直拍
   if (activeWarpMap()) return rubatoToSec(w);
   return wholeToSec(w);
 }
