@@ -1970,7 +1970,7 @@ let scoreSwingMarks = [];   // 搖擺指示(見 buildSwingSegs)
 let scoreTempoWords = [];   // 速度文字 {t: 記譜位置, kind: "rit" | "accel" | "atempo"}(rit./rall./a tempo…,彈性速度模型用)
 let ghostNoteheadEntries = {}; // 同上,記錄括號符頭(鬼音 ghost note,輕輕帶過的小鼓等),播放時用最輕的力度層
 let crossNoteheadEntries = {}; // midi(取整數) -> 已排序的 {t,v} 陣列,記錄哪些時間點是打叉符頭(rim click等特殊擊法),用 findNearestEntry 容許誤差比對
-let articEntries = [], arpEntries = [], ornEntries = [], scoreSighs = [];
+let articEntries = [], arpEntries = [], ornEntries = [], scoreSighs = [], scoreLyrics = { ends: [], melismas: [] };
 const MARK_MATCH_EPSILON = 0.01; // 全音符單位,容許兩套游標系統之間的小飄移
 function buildSortedEntries(map){
   return Object.keys(map).map(k => ({ t: parseFloat(k), v: map[k] })).sort((a, b) => a.t - b.t);
@@ -2465,6 +2465,7 @@ async function loadScoreFile(file){
     articMap = parsed.articMap;
     ornEntries = buildSortedEntries(parsed.ornMap || {});
     scoreSighs = parsed.sighs || [];
+    scoreLyrics = scoreLyricPhrases(xmlText);
     isDrumScore = parsed.isDrumScore;
     crossNoteheadEntries = {};
     for (const mk of Object.keys(parsed.crossNoteheadMap || {})) {
@@ -5260,6 +5261,84 @@ function parseChordName(name){
   const seventh = /7|9|11|13/.test(r) && !/^(maj|M|Δ)/.test(r);
   return { root, bass, q, seventh };
 }
+/* 歌詞樂句(使用者選的,2026-10:「有歌詞的譜照歌詞決定樂句」):歌詞本身標出句子在哪裡結束,比照小節數/和弦終止式猜準。
+   每個聲部(樂器 + 譜表 + voice)第一段歌詞(number 1 或第一個 <lyric>)照順序排成音節,一個音節 = 有歌詞的音 + 後面沒有歌詞的音
+   (一字多音,到休止符或下一個歌詞為止)。句尾:<end-line>/<end-paragraph>、字尾標點(,。!?、;:…)、後面接休止符才唱下一個字、
+   字唱完(single/end)而且拖得很長(≥ 二分音符、≥ 這個聲部音節中位長度的 3 倍)、這個聲部最後一個字。
+   一字多音 = 一個音節裡有兩個以上不同音高的起音(同音延音線不算)。少於 LYRIC_PHRASE.minSyl 個音節的聲部不用。
+   回傳 { ends: [{ t: 句尾那個字的起音, end: 字唱完的位置 }], melismas: [{ s, e }] }(記譜位置,全音符) */
+const LYRIC_PHRASE = { minSyl: 8, longWhole: 0.5, longRatio: 3, punct: /[,.;:!?，。；：！？、…—]["'」』）)\]]*$/ };
+function scoreLyricPhrases(xmlText){
+  const out = { ends: [], melismas: [] };
+  let doc;
+  try { doc = new DOMParser().parseFromString(xmlText, "application/xml"); } catch (e) { return out; }
+  if (!doc || doc.getElementsByTagName("parsererror")[0] || !doc.getElementsByTagName("lyric").length) return out;
+  const kids = (el, tag) => Array.from(el.children).filter(c => c.tagName === tag);
+  const durOf = el => { const d = kids(el, "duration")[0]; return d ? parseFloat(d.textContent) || 0 : 0; };
+  const voices = new Map();   // key -> [{ on, end, rest, midi, tieStop, lyr }]
+  Array.from(doc.getElementsByTagName("part")).forEach((part, pi) => {
+    let divisions = 1, start = 0;
+    for (const measure of kids(part, "measure")) {
+      let cur = start, far = start;
+      for (const child of Array.from(measure.children)) {
+        const tag = child.tagName;
+        if (tag === "attributes") { const d = child.getElementsByTagName("divisions")[0]; if (d) divisions = parseFloat(d.textContent) || divisions; }
+        else if (tag === "backup") cur -= durOf(child) / divisions / 4;
+        else if (tag === "forward") cur += durOf(child) / divisions / 4;
+        else if (tag === "note") {
+          if (kids(child, "grace")[0]) continue;
+          const isChord = !!kids(child, "chord")[0], d = durOf(child) / divisions / 4;
+          if (!isChord) {
+            const st = kids(child, "staff")[0], vo = kids(child, "voice")[0];
+            const key = pi + "|" + (st ? st.textContent.trim() : "1") + "|" + (vo ? vo.textContent.trim() : "1");
+            const lyrs = kids(child, "lyric");
+            const ly = lyrs.find(l => (l.getAttribute("number") || "1") === "1") || lyrs[0] || null;
+            let lyr = null;
+            if (ly) {
+              const text = kids(ly, "text").map(e => e.textContent).join("").trim();
+              const sy = kids(ly, "syllabic")[0];
+              if (text) lyr = { text, syl: sy ? sy.textContent.trim() : "single", endLine: !!(kids(ly, "end-line")[0] || kids(ly, "end-paragraph")[0]) };
+            }
+            const pe = kids(child, "pitch")[0];
+            let midi = null;
+            if (pe) {
+              const stp = kids(pe, "step")[0], oc = kids(pe, "octave")[0], al = kids(pe, "alter")[0];
+              if (stp && oc) midi = (parseInt(oc.textContent, 10) + 1) * 12 + STEP_PC[stp.textContent.trim()] + (al ? Math.round(parseFloat(al.textContent) || 0) : 0);
+            }
+            const tieStop = kids(child, "tie").some(e => e.getAttribute("type") === "stop");
+            if (!voices.has(key)) voices.set(key, []);
+            voices.get(key).push({ on: cur, end: cur + d, rest: !!kids(child, "rest")[0] || midi == null, midi, tieStop, lyr });
+            cur += d;
+          }
+        }
+        if (cur > far) far = cur;
+      }
+      start = far;
+    }
+  });
+  for (const notes of voices.values()) {
+    const syl = [];
+    let curS = null;
+    for (const n of notes) {
+      if (n.rest) { curS = null; continue; }
+      if (n.lyr) { curS = { on: n.on, end: n.end, lastOn: n.on, lyr: n.lyr, pitches: [n.midi], onsets: 1 }; syl.push(curS); continue; }
+      if (curS) { curS.end = n.end; if (!n.tieStop) { curS.lastOn = n.on; if (n.midi !== curS.pitches[curS.pitches.length - 1]) curS.pitches.push(n.midi); curS.onsets++; } }
+    }
+    if (syl.length < LYRIC_PHRASE.minSyl) continue;
+    const spans = syl.map(x => x.end - x.on).sort((a, b) => a - b), med = spans[Math.floor(spans.length / 2)];
+    syl.forEach((x, i) => {
+      const nx = syl[i + 1];
+      const done = x.lyr.syl === "single" || x.lyr.syl === "end";
+      const isEnd = !nx || x.lyr.endLine || LYRIC_PHRASE.punct.test(x.lyr.text) || nx.on > x.end + 1e-6
+        || (done && x.end - x.on >= LYRIC_PHRASE.longWhole - 1e-6 && x.end - x.on >= LYRIC_PHRASE.longRatio * med - 1e-6);
+      if (isEnd) out.ends.push({ t: x.lastOn, end: x.end });
+      if (x.pitches.length >= 2) out.melismas.push({ s: x.on, e: x.end });
+    });
+  }
+  out.ends.sort((a, b) => a.t - b.t);
+  out.melismas.sort((a, b) => a.s - b.s);
+  return out;
+}
 /* 樂譜的和弦記號(含內容)與調號,各自依記譜位置排序:{chords: [{t, root, bass, q, seventh}], keys: [{t, tonic, minor}]} */
 function harmonySymbols(xmlText){
   const out = { chords: [], keys: [] };
@@ -7616,7 +7695,7 @@ function reverbAmount(){ return window.REVERB_OVERRIDE != null ? window.REVERB_O
 function reverbWetTarget(){ return reverbAmount() * 0.55; }
 function applyReverbAmount(){
   if (reverbWet) reverbWet.gain.value = reverbWetTarget();
-  if (pianoVerbWet) pianoVerbWet.gain.value = reverbAmount() * (pianoVerbHall ? PIANO_HALL.wet : PIANO_VERB.wet);
+  if (pianoVerbWet) pianoVerbWet.gain.value = reverbAmount() * (pianoVerbHall ? pianoHallWet() : PIANO_VERB.wet);
   if (gtrVerbWet) gtrVerbWet.gain.value = reverbAmount() * GTR_VERB.wet;
 }
 /* 真實鋼琴的低音弦在左、高音弦在右(以演奏者的視角),錄音也會保留這個位置感。
@@ -7775,6 +7854,7 @@ function stopNoteScheduler(){ if (noteSched && noteSched.timer) clearInterval(no
 /* 排程 [fromSec, toSec) 之間的事件;base = 樂曲第 0 秒對應的 audioCtx 時間 */
 function startNoteScheduler(fromSec, toSec, base, calib, opts){
   stopNoteScheduler();
+  pianoVerbSyncStyle();
   const live = !(typeof OfflineAudioContext !== "undefined" && audioCtx instanceof OfflineAudioContext);
   const offEnd = live ? 0 : audioCtx.length / audioCtx.sampleRate + 1;
   const isGuitar = currentInstrument() === "guitar" || currentInstrument() === "guitarnylon";
@@ -8457,7 +8537,8 @@ const PHRASE_NUANCE = {
   breath: { frac: 0.2, max: 0.12, minKeep: 0.6 },
   sync:   { mel: 4, other: 2 },
   fill:   { after: 0.4, ramp: 1.2, max: 4, below: 8 },
-  sigh:   { first: 2, ratio: 0.85, arrival: 1.1, minF: 0.8, frac: 0.3, max: 0.2, minKeep: 0.5, longWhole: 0.5 }
+  sigh:   { first: 2, ratio: 0.85, arrival: 1.1, minF: 0.8, frac: 0.3, max: 0.2, minKeep: 0.5, longWhole: 0.5 },
+  lyric:  { end: 3 }
 };
 const PEDAL_CHANGE = { lag: 0.05, up: 0.04, down: 0.13 };
 /* 鋼琴音按著時每秒小幾 dB(粗估:低音弦慢、高音快;A0 約 3、C4 約 9、C6 約 13dB/秒) */
@@ -8525,6 +8606,29 @@ function pianoLineNuance(){
     const ra = slurAt(sa), sameSlur = !!ra && inRange(sb, ra);
     if (pickupStart.has(j + 1) || (useSlurs && ra && !sameSlur)) a.n.breath = true;
     else if (Math.round(b.m) !== Math.round(a.m) && (!useSlurs || sameSlur)) a.n.legatoNext = true;   // 同一個鍵不能重疊(要先放才能再彈)
+  }
+  // ⑨ 歌詞樂句(scoreLyricPhrases,有歌詞的譜才用,古典非古典都一樣):① 一字多音的音一定連(同一個字唱好幾個音,鋼琴也要連著彈;
+  // 譜上圓滑線的規則讓開)② 句尾(那個字最後一個起音的旋律音):不連,下一個旋律音緊接著時提早放鍵換氣,力度 −end(句尾收;重音/力度記號照譜)。
+  // 句尾之後的音是新樂句:① 長音後面配合衰減的規則看 a.n.breath,不收
+  if (scoreLyrics.ends.length) {
+    const melRange = t => scoreLyrics.melismas.find(r => t >= r.s - eps && t < r.e - eps);
+    for (let j = 0; j + 1 < mel.length; j++) {
+      if (!conn(j)) continue;
+      const a = mel[j], b = mel[j + 1], r = melRange(srcOf(a));
+      if (!r || !(srcOf(b) >= r.s - eps && srcOf(b) < r.e - eps) || Math.round(b.m) === Math.round(a.m)) continue;
+      a.n.legatoNext = true; delete a.n.breath;
+    }
+    for (let j = 0; j < mel.length; j++) {
+      const sa = srcOf(mel[j]);
+      const pe = scoreLyrics.ends.find(e => sa >= e.t - eps && sa < e.end - eps);
+      if (!pe) continue;
+      const nxt = mel[j + 1];
+      if (nxt && srcOf(nxt) >= pe.t - eps && srcOf(nxt) < pe.end - eps && nxt.t > mel[j].t) continue;   // 同一個字後面還有旋律音:句尾是最後那個
+      const a = mel[j];
+      delete a.n.legatoNext;
+      if (conn(j)) a.n.breath = true;
+      if (!fixed(a)) a.n.pvel = clampV(a.n.pvel - PHRASE_NUANCE.lyric.end);
+    }
   }
   // ① 長音後面的音配合衰減後的音量(同一個音被好幾個長音影響時取最大的,不累加)。換氣處(新樂句)、段落開頭、漸強中不收:
   // 新的句子本來就重新開始,漸強是要越來越大聲
@@ -8739,10 +8843,11 @@ function computePianoDynamics(){
   };
   const isInnerSingle = (ev, m) => {
     const i = evIdx.get(ev), t = ev.tWhole, w = (ev.beatLen || 0.25) * PIANO_POP.lineWin;
-    let mx = -Infinity;
-    for (let j = i - 1; j >= 0 && events[j].tWhole >= t - w - 1e-6; j--) if (rhTops[j] != null) mx = Math.max(mx, rhTops[j]);
-    for (let j = i + 1; j < events.length && events[j].tWhole <= t + w + 1e-6; j++) if (rhTops[j] != null) mx = Math.max(mx, rhTops[j]);
-    return mx - m >= PIANO_POP.lineGap;
+    // 前後兩邊都要有更高的音(夾在中間):只看一邊的話,往上走的旋律(C → E → G 四分音符)起頭的音會被當成伴奏(2026-10 測試譜發現,C5 被扣 8)
+    let a = -Infinity, b = -Infinity;
+    for (let j = i - 1; j >= 0 && events[j].tWhole >= t - w - 1e-6; j--) if (rhTops[j] != null) a = Math.max(a, rhTops[j]);
+    for (let j = i + 1; j < events.length && events[j].tWhole <= t + w + 1e-6; j++) if (rhTops[j] != null) b = Math.max(b, rhTops[j]);
+    return a - m >= PIANO_POP.lineGap && b - m >= PIANO_POP.lineGap;
   };
   // 左手同理(使用者反映 2026-10:「第 25、26 小節重複的低音太大聲,處理方式應該跟前奏一樣」):低音 Bb2 在拍點上、中間夾著
   // F3-Bb3-F3-Bb3 十六分音符,以前都是 62~76 跟低音一樣重。左手單音比前後一拍內左手最低音高 ≥ lineGap 半音 = 夾在中間的伴奏音,
@@ -9175,12 +9280,49 @@ function buildPianoHallIR(cfg = PIANO_VERB){   // 吉他也用同一套演算法
    前段反射太稀疏)、0.89~0.97 秒有 −37dB 的平行牆顫動回聲,真實廳都沒有。hall.flac 沒載到就退回 buildPianoHallIR */
 const PIANO_HALL = { highpass: 110, wet: 0.44 };   // wet:殘響回送響度跟舊的模擬廳一樣(App 實測舒伯特/蕭邦/巴哈差 ≤ 0.11dB;ConvolverNode 會依 IR 能量與長度自動正規化,檔案本身的音量不算數);整體輸出各八度差 ≤ 0.3dB,新殘響本身 2~4kHz 暗 3~5dB(真實廳的高頻吸收)
 let pianoVerbIn = null, pianoVerbWet = null, pianoVerbCtx = null, pianoVerbConv = null, pianoVerbPre = null, pianoVerbHp = null, pianoVerbHall = false;
+/* 非古典曲的空間(使用者選的,2026-10:「流行曲用比較近、比較乾的空間」):流行鋼琴多半是錄音室/近距離收音,殘響短、少,
+   旋律貼近耳朵;古典照舊用音樂廳。同一份音樂廳 IR 再乘一段指數衰減,中頻 RT60 1.51 → rt 秒(各頻率一起縮,
+   125Hz 1.96 → 約 1.3、8kHz 0.90 → 約 0.7),長度不變(ConvolverNode normalize 照 IR 長度正規化,長度一樣總能量就一樣),
+   回送再 wetDb。用古典/非古典判斷(classicalProbInfo)自動切換,每次開始排音時對一次(pianoVerbSyncStyle) */
+const PIANO_HALL_POP = { rt: 1.1, hallRt: 1.51, wetDb: -3 };
+let pianoVerbPop = false, hallPopBuf = null, hallPopSrc = null;
+function pianoWantPopSpace(){
+  try { return typeof events !== "undefined" && events.length > 0 && classicalProbInfo().p < 0.5; } catch (e) { return false; }
+}
+function hallPopIR(){
+  const src = pianoAux.hall;
+  if (!src) return null;
+  if (hallPopSrc === src && hallPopBuf) return hallPopBuf;
+  const rate = src.sampleRate, len = src.length;
+  const k = 6.9078 * (1 / PIANO_HALL_POP.rt - 1 / PIANO_HALL_POP.hallRt) / rate;   // 每個樣本多衰減的量(自然對數)
+  const out = new AudioBuffer({ numberOfChannels: src.numberOfChannels, length: len, sampleRate: rate });
+  for (let c = 0; c < src.numberOfChannels; c++) {
+    const a = src.getChannelData(c), b = out.getChannelData(c);
+    for (let i = 0; i < len; i++) b[i] = a[i] * Math.exp(-k * i);
+  }
+  hallPopBuf = out; hallPopSrc = src;
+  return out;
+}
+function pianoVerbHallBuffer(){ return pianoVerbPop ? (hallPopIR() || pianoAux.hall) : pianoAux.hall; }
 function pianoVerbUseHall(){
   if (!pianoVerbConv || pianoVerbHall || !pianoAux.hall || PIANO_HALL.wet <= 0) return;
-  pianoVerbConv.buffer = pianoAux.hall;
+  pianoVerbPop = pianoWantPopSpace();
+  pianoVerbConv.buffer = pianoVerbHallBuffer();
   pianoVerbPre.delayTime.value = 0; pianoVerbHp.frequency.value = PIANO_HALL.highpass;
   pianoVerbHall = true; applyReverbAmount();
 }
+function pianoVerbSyncStyle(){   // 換曲子後古典/非古典可能不同:開始排音前換殘響(這時沒有聲音在響)
+  if (!pianoVerbConv || !pianoVerbHall || pianoVerbCtx !== audioCtx) return;
+  const want = pianoWantPopSpace();
+  if (want === pianoVerbPop) return;
+  pianoVerbPop = want;
+  try { pianoVerbConv.buffer = pianoVerbHallBuffer(); }
+  catch (e) {   // 少數瀏覽器不准換第二次 buffer:重建一組殘響
+    pianoVerbIn = null; getPianoVerb(); return;
+  }
+  applyReverbAmount();
+}
+function pianoHallWet(){ return PIANO_HALL.wet * (pianoVerbPop ? Math.pow(10, PIANO_HALL_POP.wetDb / 20) : 1); }
 function getPianoVerb(){
   if (pianoVerbIn && pianoVerbCtx === audioCtx) return pianoVerbIn;
   const input = audioCtx.createGain();
