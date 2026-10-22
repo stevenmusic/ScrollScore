@@ -3272,6 +3272,74 @@ function transposeMusicXML(xmlText, semitones){
    拉開將近 900px(蕭邦第一號敘事曲),畫面只看得到其中一個譜表。只改送去畫譜的那份 XML(播放用的原檔不動):
    - 多譜表的聲部,掛在非最後一個譜表、放在下方的踏板記號 → 改掛最後一個譜表(踏板本來就記在左手譜表下面)
    - 所有 direction 底下 |default-y| 超過 120(12 格)的,拿掉 default-y 讓 OSMD 自己排 */
+/* 樂譜裡設成隱藏(print-object="no")的記號不畫(使用者要求,2026-10:「樂譜有隱藏的記號,就不應該顯示在網頁上」——
+   〈甲乙丙丁〉第 51 小節兩個隱藏的延長記號,MuseScore 常用隱藏延長記號/速度記號只控制播放)。OSMD 只理會音符、拍號、聲部名稱、
+   反覆結尾的 print-object,延長記號、演奏記號、文字、力度、和弦名稱、段落記號、速度記號、踏板等都照畫。
+   這裡只改送去畫譜的那份 XML:拿掉隱藏的元素(<notations print-object="no"> 底下的全部顯示用記號也算),空掉的容器一起拿掉;
+   延音線(tied)、連音(tuplet)留著(影響時值);<direction> 裡的 <sound>(速度/力度的播放設定)留著——direction-type 都拿光時
+   換成一個空的 <words/>,OSMD 照樣讀到中途的速度變化(OSMD 只在第一小節讀小節層級的 <sound>)。播放的記號解析用原檔,不受影響 */
+const HIDDEN_MARK_TAGS = new Set(["fermata", "accent", "strong-accent", "staccato", "tenuto", "staccatissimo", "detached-legato", "spiccato",
+  "soft-accent", "stress", "unstress", "breath-mark", "caesura", "scoop", "plop", "doit", "falloff", "arpeggiate", "non-arpeggiate",
+  "trill-mark", "turn", "delayed-turn", "inverted-turn", "shake", "wavy-line", "mordent", "inverted-mordent", "schleifer", "tremolo",
+  "accidental-mark", "fingering", "string", "fret", "up-bow", "down-bow", "harmonic", "open-string", "stopped", "snap-pizzicato",
+  "hammer-on", "pull-off", "bend", "tap", "heel", "toe", "fingernails", "dynamics", "slur", "glissando", "slide", "other-notation",
+  "words", "rehearsal", "segno", "coda", "pedal", "metronome", "dashes", "bracket", "harmony", "lyric", "symbol", "other-direction"]);
+const HIDDEN_KEEP_IN_NOTATIONS = new Set(["tied", "tuplet"]);
+let hiddenTempoMarks = [];   // [{mi: 第幾小節(0 起算), bpm}],見 hideInvisibleMarksMusicXML
+function hideHiddenTempoMarks(o){
+  try {
+    for (const h of hiddenTempoMarks) {
+      const sm = o.Sheet.SourceMeasures[h.mi];
+      if (!sm || !sm.TempoExpressions) continue;
+      const keep = sm.TempoExpressions.filter(te => !(te.InstantaneousTempo && (!Number.isFinite(h.bpm) || Math.abs(te.InstantaneousTempo.TempoInBpm - h.bpm) < 0.5)));
+      sm.TempoExpressions.length = 0; sm.TempoExpressions.push(...keep);
+    }
+  } catch (e) { console.warn("hideHiddenTempoMarks", e); }
+}
+function hideInvisibleMarksMusicXML(xmlText){
+  hiddenTempoMarks = [];
+  if (!/print-object="no"/.test(xmlText)) return xmlText;
+  try {
+    const doc = new DOMParser().parseFromString(xmlText, "text/xml");
+    if (doc.getElementsByTagName("parsererror")[0]) return xmlText;
+    const kill = new Set();
+    // 隱藏的速度記號:OSMD 會用 <sound tempo> 自己再生一個「♩ = N」,記下第幾小節、多少速度,載入後從那一小節的速度標記清單刪掉
+    // (hideHiddenTempoMarks;那一小節的 TempoInBPM 已經讀好,播放速度不變)
+    hiddenTempoMarks = [];
+    const part0 = doc.getElementsByTagName("part")[0];
+    if (part0) Array.from(part0.getElementsByTagName("measure")).forEach((m, mi) => {
+      for (const met of Array.from(m.getElementsByTagName("metronome"))) {
+        if (met.getAttribute("print-object") !== "no") continue;
+        const dir = met.closest("direction"), snd = dir && Array.from(dir.children).find(c => c.nodeName === "sound" && c.getAttribute("tempo"));
+        const pm = met.getElementsByTagName("per-minute")[0];
+        hiddenTempoMarks.push({ mi, bpm: snd ? parseFloat(snd.getAttribute("tempo")) : (pm ? parseFloat(pm.textContent) : NaN) });
+      }
+    });
+    for (const el of Array.from(doc.getElementsByTagName("*"))) {
+      if (el.getAttribute("print-object") !== "no") continue;
+      if (el.nodeName === "notations") { for (const c of Array.from(el.children)) if (!HIDDEN_KEEP_IN_NOTATIONS.has(c.nodeName)) kill.add(c); el.removeAttribute("print-object"); }
+      else if (HIDDEN_MARK_TAGS.has(el.nodeName)) kill.add(el);
+    }
+    if (!kill.size) return xmlText;
+    const parents = new Set();
+    for (const el of kill) { if (el.parentNode) { parents.add(el.parentNode); el.parentNode.removeChild(el); } }
+    // 空掉的容器往上清:articulations / ornaments / technical / notations / direction-type / direction
+    const isEmpty = el => !Array.from(el.children).length;
+    let queue = Array.from(parents);
+    while (queue.length) {
+      const el = queue.shift(), up = el.parentNode;
+      if (!up || !el.nodeName) continue;
+      const name = el.nodeName;
+      if (["articulations", "ornaments", "technical", "notations", "direction-type"].includes(name) && isEmpty(el)) { up.removeChild(el); queue.push(up); continue; }
+      if (name === "direction" && !Array.from(el.children).some(c => c.nodeName === "direction-type")) {
+        if (Array.from(el.children).some(c => c.nodeName === "sound")) {
+          const dt = doc.createElement("direction-type"); dt.appendChild(doc.createElement("words")); el.insertBefore(dt, el.firstChild);
+        } else up.removeChild(el);
+      }
+    }
+    return new XMLSerializer().serializeToString(doc);
+  } catch (e) { console.warn("hideInvisibleMarksMusicXML 失敗,照原檔顯示:", e); return xmlText; }
+}
 function tameFarDirectionsMusicXML(xmlText){
   try {
     if (!/default-y="-?\d{3}/.test(xmlText)) return xmlText;
@@ -3817,9 +3885,10 @@ async function renderScore(xmlText){
   osmd.EngravingRules.AutoGenerateMultipleRestMeasuresFromRestMeasures = mergeRests;
 
   const transposedXml = transposeSemitones ? transposeMusicXML(xmlText, transposeSemitones) : xmlText;
-  const beamedXml = stemConventionMusicXML(autoBeamMusicXML(drumStemFixMusicXML(tameFarDirectionsMusicXML(transposedXml))));   // 符桿方向要在補完符尾之後算(同一組符尾要一起決定)
+  const beamedXml = stemConventionMusicXML(autoBeamMusicXML(drumStemFixMusicXML(tameFarDirectionsMusicXML(hideInvisibleMarksMusicXML(transposedXml)))));   // 符桿方向要在補完符尾之後算(同一組符尾要一起決定)
   const finalXml = mergeRests ? mergeRestMeasures(beamedXml) : splitRestMeasures(beamedXml);
   await osmd.load(finalXml);
+  hideHiddenTempoMarks(osmd);
   lastRenderedXml = finalXml;   // 直式翻頁影片用同一份重新排版
   osmd.zoom = 0.9;
   // 鼓譜的符尾一律水平:符尾的斜度應該看最靠近符尾的音(手打的 hi-hat/銅鈸,通常都在同一個位置),
@@ -11483,6 +11552,7 @@ async function renderPageOsmd(contentW, sp){
   R.RenderMeasureNumbersOnlyAtSystemStart = true;
   R.AutoGenerateMultipleRestMeasuresFromRestMeasures = M.AutoGenerateMultipleRestMeasuresFromRestMeasures;
   await o.load(lastRenderedXml);
+  hideHiddenTempoMarks(o);
   o.zoom = sp / 10;
   R.FlatBeams = M.FlatBeams;
   R.RenderPedals = M.RenderPedals;
