@@ -3754,6 +3754,174 @@ function tightenChordAccidentals(t){
     if (Math.abs(dx) > 0.01) sp.setAttribute("dx", dx.toFixed(2));
   }
 }
+/* 兩個譜表中間的文字(使用者 2026-10:「rall. 應該在兩個譜表中間,不能偏一邊」):OSMD 把上譜表的「下方」記號貼著上譜表放、
+   下譜表的「上方」記號貼著下譜表放。鋼琴譜慣例是兩譜表中間的文字/力度置中。畫完後:每個這樣的文字,在它左右範圍內找出兩個譜表之間
+   真正空著的一段(避開音符、符桿、加線、圓滑線、其他文字),放得下就移到那段的正中間;同一個位置疊了好幾個記號時不動(照 OSMD 疊法) */
+function centerBetweenStaffLabels(o, root){
+  try {
+    const svg = (root || $("score")).querySelector("svg");
+    if (!svg || !o || !o.GraphicSheet) return;
+    const items = [];
+    for (const page of o.GraphicSheet.MusicPages) for (const sys of page.MusicSystems) {
+      const SL = sys.StaffLines;
+      for (let i = 0; i < SL.length; i++) for (const ae of SL[i].AbstractExpressions || []) {
+        const L = ae.Label || ae.label;
+        if (!L || !L.SVGNode || !L.SVGNode.getBBox) continue;
+        const below = ae.Placement === 1, above = ae.Placement === 0;
+        const up = below && i + 1 < SL.length ? SL[i] : above && i > 0 ? SL[i - 1] : null;
+        const dn = below && i + 1 < SL.length ? SL[i + 1] : above && i > 0 ? SL[i] : null;
+        if (!up || !dn || up.ParentStaff.ParentInstrument !== dn.ParentStaff.ParentInstrument) continue;
+        items.push({ node: L.SVGNode, gapTop: (up.PositionAndShape.AbsolutePosition.y + 4) * 10, gapBot: dn.PositionAndShape.AbsolutePosition.y * 10 });
+      }
+    }
+    if (!items.length) return;
+    const own = new Set(items.map(it => it.node));
+    // 障礙物:SVG 裡所有畫出來的東西(不含這些文字、譜線、跨兩譜表的小節線/大括號)
+    const obs = [];
+    for (const el of svg.querySelectorAll("path, text, rect, line, polygon")) {
+      if (el.closest && [...own].some(n => n.contains(el))) continue;
+      let b; try { b = el.getBBox(); } catch (e) { continue; }
+      if (!b || (b.width < 0.01 && b.height < 0.01)) continue;
+      if (b.height < 1.5 && b.width > 60) continue;   // 譜線
+      obs.push({ x: b.x, y: b.y, width: b.width, height: b.height, el });
+    }
+    // 同一位置疊了好幾個(x 範圍重疊、在同一個譜表間隙)就不動
+    const boxes = items.map(it => ({ it, b: it.node.getBBox() }));
+    const seen = new Set();
+    for (const x of boxes) {
+      if (seen.has(x.it.node)) continue;
+      const dup = boxes.filter(y => y !== x && Math.abs(y.b.x - x.b.x) < 0.5 && Math.abs(y.b.y - x.b.y) < 0.5);   // OSMD 有時同一個記號畫兩次
+      dup.forEach(y => seen.add(y.it.node));
+      const crowd = boxes.some(y => y !== x && !dup.includes(y) && y.it.gapTop === x.it.gapTop && y.b.x < x.b.x + x.b.width && x.b.x < y.b.x + y.b.width);
+      if (crowd) continue;
+      const { gapTop, gapBot } = x.it, b = x.b, h = b.height;
+      // 同一個字 OSMD 有時畫了第二份(不在記號清單裡):位置一樣的文字當成自己,跟著一起移
+      const same = q => q.el.tagName.toLowerCase() === "text" && Math.abs(q.x - b.x) < 0.5 && Math.abs(q.y - b.y) < 0.5;
+      const extraEls = obs.filter(same).map(q => q.el.parentNode && q.el.parentNode.classList && q.el.parentNode.classList.contains("vf-text") ? q.el.parentNode : q.el);
+      let lo = gapTop, hi = gapBot;   // 找出包含文字目前位置的那段空白
+      const mid0 = b.y + h / 2;
+      for (const q of obs) {
+        if (same(q)) continue;
+        if (q.x > b.x + b.width + 4 || q.x + q.width < b.x - 4) continue;
+        if (q.height > gapBot - gapTop + 30 && q.width < 3) continue;   // 跨兩譜表的小節線
+        const qt = q.y, qb = q.y + q.height;
+        if (qb <= gapTop || qt >= gapBot) continue;
+        if (qb <= mid0) lo = Math.max(lo, qb); else if (qt >= mid0) hi = Math.min(hi, qt); else { lo = hi = mid0; break; }
+      }
+      const pad = 2;
+      if (hi - lo < h + 2 * pad) continue;
+      // 目標:兩個譜表正中間(看字的實際筆畫:有 l/d/大寫的字從 0.7 個字高算起,有 g/p/y 的往下 0.2),碰到音符就在空白範圍內往回收
+      const tEl = x.it.node.tagName.toLowerCase() === "text" ? x.it.node : x.it.node.querySelector("text");
+      let vis = mid0;
+      if (tEl) {
+        const base = parseFloat(tEl.getAttribute("y")), fs = parseFloat(tEl.getAttribute("font-size")) || h, str = tEl.textContent || "";
+        if (isFinite(base)) vis = base - (/[A-Zbdfhklt0-9]/.test(str) ? 0.7 : 0.47) * fs / 2 + (/[gjpqy]/.test(str) ? 0.2 : 0) * fs / 2;
+      }
+      let dy = (gapTop + gapBot) / 2 - vis;
+      dy = Math.max(lo + pad - b.y, Math.min(hi - pad - (b.y + h), dy));
+      if (Math.abs(dy) < 0.5) continue;
+      for (const n of new Set([x.it.node, ...dup.map(y => y.it.node), ...extraEls])) n.setAttribute("transform", `translate(0 ${dy.toFixed(2)})`);
+    }
+  } catch (e) { console.warn("centerBetweenStaffLabels", e); }
+}
+/* 文字後面的延長虛線(使用者 2026-10:「rall. - - - - - 這種感覺,但橫線不見了」):MusicXML 的 <words> 接 <dashes type="start"> 到
+   <dashes type="stop">,OSMD 只畫漸強漸弱文字的虛線、速度文字(rall./rit./accel.)與一般文字的虛線都不畫。這裡照原檔的位置自己畫:
+   從文字右邊畫到停止的位置(小節裡的時間換算成 x;停在小節結尾就畫到小節線前),跨行時每一行各畫一段 */
+function parseWordDashes(xml){
+  const out = [];
+  let doc; try { doc = new DOMParser().parseFromString(xml, "application/xml"); } catch (e) { return out; }
+  const part = doc.getElementsByTagName("part")[0];
+  if (!part) return out;
+  const measures = Array.from(part.getElementsByTagName("measure")), open = {};
+  let div = 1;
+  measures.forEach((m, mi) => {
+    let t = 0, far = 0;
+    const evs = [];
+    for (const ch of Array.from(m.children)) {
+      const tag = ch.tagName, dur = () => { const d = ch.getElementsByTagName("duration")[0]; return d ? parseFloat(d.textContent) || 0 : 0; };
+      if (tag === "attributes") { const d = ch.getElementsByTagName("divisions")[0]; if (d) div = parseFloat(d.textContent) || div; }
+      else if (tag === "backup") t -= dur();
+      else if (tag === "forward") t += dur();
+      else if (tag === "note") { if (!ch.getElementsByTagName("chord")[0] && !ch.getElementsByTagName("grace")[0]) t += dur(); }
+      else if (tag === "direction") {
+        const off = ch.getElementsByTagName("offset")[0], tt = t + (off ? parseFloat(off.textContent) || 0 : 0);
+        for (const d of Array.from(ch.getElementsByTagName("dashes"))) {
+          const num = d.getAttribute("number") || "1", type = d.getAttribute("type");
+          const w = ch.getElementsByTagName("words")[0], st = ch.getElementsByTagName("staff")[0];
+          evs.push({ type, num, t: tt, text: w ? w.textContent.trim() : "", staff: st ? parseInt(st.textContent, 10) || 1 : 1 });
+        }
+      }
+      if (t > far) far = t;
+    }
+    for (const e of evs) {
+      const pos = far > 0 ? Math.max(0, Math.min(1, e.t / far)) : 0;
+      if (e.type === "start") open[e.num] = { text: e.text, staff: e.staff, mi, pos };
+      else if (e.type === "stop" && open[e.num]) { const a = open[e.num]; delete open[e.num]; if (a.text) out.push({ ...a, stopMi: mi, stopPos: pos }); }
+    }
+  });
+  return out;
+}
+function drawWordDashes(o, root, xml){
+  try {
+    const svg = (root || $("score")).querySelector("svg");
+    if (!svg || !o || !o.GraphicSheet || !xml || !/<dashes/.test(xml)) return;
+    const ML = o.GraphicSheet.MeasureList, NS = "http://www.w3.org/2000/svg";
+    // 小節裡的時間位置 → SVG 的 x(照這一小節各音的位置內插;小節結尾 = 小節線)
+    const xAt = (gm, pos) => {
+      const ps = gm.PositionAndShape, x0 = ps.AbsolutePosition.x * 10, x1 = (ps.AbsolutePosition.x + ps.Size.width) * 10;
+      const pts = [];
+      for (const se of gm.staffEntries || []) pts.push([se.relInMeasureTimestamp.RealValue / Math.max(1e-6, gm.parentSourceMeasure.Duration.RealValue), se.PositionAndShape.AbsolutePosition.x * 10]);
+      pts.sort((a, b) => a[0] - b[0]);
+      if (pos >= 0.999) return x1 - 6;
+      let pA = [0, pts.length ? pts[0][1] : x0], pB = [1, x1];
+      for (const p of pts) { if (p[0] <= pos + 1e-6) pA = p; else { pB = p; break; } }
+      return pA[1] + (pB[1] - pA[1]) * ((pos - pA[0]) / Math.max(1e-6, pB[0] - pA[0]));
+    };
+    for (const d of parseWordDashes(xml)) {
+      const row0 = ML[d.mi], row1 = ML[d.stopMi];
+      if (!row0 || !row1) continue;
+      const si = Math.max(0, d.staff - 1), gm0 = row0[si] || row0[0];
+      // 找文字:這一小節所在那行的記號裡,文字一樣、離開始位置最近的
+      let label = null, best = Infinity;
+      const sl0 = gm0.ParentStaffLine, sys = sl0 && sl0.ParentMusicSystem;
+      if (!sys) continue;
+      const startX = xAt(gm0, d.pos);
+      for (const sl of sys.StaffLines) for (const ae of sl.AbstractExpressions || []) {
+        const L = ae.Label || ae.label;
+        if (!L || !L.SVGNode || !L.Label || L.Label.text.trim() !== d.text) continue;
+        const bb = L.SVGNode.getBBox(), dist = Math.abs(bb.x - startX);
+        if (dist < best) { best = dist; label = L.SVGNode; }
+      }
+      if (!label) continue;
+      const bb = label.getBBox(), tr = /translate\(0 (-?[\d.]+)\)/.exec(label.getAttribute("transform") || ""), ty = tr ? parseFloat(tr[1]) : 0;
+      const yRel = bb.y + ty + bb.height * 0.62 - sl0.PositionAndShape.AbsolutePosition.y * 10;   // 文字 x 高度的中間
+      // 一行一段
+      let segStart = bb.x + bb.width + 8, curSL = sl0;
+      const flush = (x2, sl) => {
+        if (x2 - segStart < 12) return;
+        const y = sl.PositionAndShape.AbsolutePosition.y * 10 + yRel;
+        const pth = document.createElementNS(NS, "path");
+        pth.setAttribute("d", `M${segStart.toFixed(1)} ${y.toFixed(1)}L${x2.toFixed(1)} ${y.toFixed(1)}`);
+        pth.setAttribute("stroke", "#000000"); pth.setAttribute("stroke-width", "1.3"); pth.setAttribute("stroke-dasharray", "6 6"); pth.setAttribute("fill", "none");
+        pth.classList.add("ss-dashes");
+        svg.appendChild(pth);
+      };
+      for (let mi = d.mi; mi <= d.stopMi; mi++) {
+        const gm = ML[mi] && (ML[mi][si] || ML[mi][0]);
+        if (!gm) continue;
+        const sl = gm.ParentStaffLine;
+        if (sl !== curSL) {   // 換行:上一行畫到最後一小節結尾,新的一行從第一個音前面開始
+          const prev = ML[mi - 1] && (ML[mi - 1][si] || ML[mi - 1][0]);
+          if (prev) flush(xAt(prev, 1), curSL);
+          curSL = sl;
+          const fx = (gm.staffEntries && gm.staffEntries[0]) ? gm.staffEntries[0].PositionAndShape.AbsolutePosition.x * 10 : gm.PositionAndShape.AbsolutePosition.x * 10;
+          segStart = fx - 4;
+        }
+        if (mi === d.stopMi) flush(xAt(gm, d.stopPos), curSL);
+      }
+    }
+  } catch (e) { console.warn("drawWordDashes", e); }
+}
 function roundRehearsalBoxes(root){
   const svg = (root || $("score")).querySelector("svg");
   if (!svg) return;
@@ -4029,6 +4197,8 @@ async function renderScore(xmlText){
   if (finalXml.includes('id="gp-hide-clef-octave"')) hideClefOctaveMarks();
   roundRehearsalBoxes();
   tagChordSymbols(osmd);
+  centerBetweenStaffLabels(osmd, $("score"));
+  drawWordDashes(osmd, $("score"), finalXml);
   extendLedgerLineStems(); // OSMD符桿長度是固定值,不會因為加線音符離譜表遠就自動加長,這裡渲染完手動補上
 
   buildTimeline();
@@ -12171,6 +12341,8 @@ async function renderPageOsmd(contentW, sp){
   if (lastRenderedXml.includes('id="gp-hide-clef-octave"')) hideClefOctaveMarks(host);
   roundRehearsalBoxes(host);
   tagChordSymbols(o);
+  centerBetweenStaffLabels(o, host);
+  drawWordDashes(o, host, lastRenderedXml);
   extendLedgerLineStems(host);
   return { o, host };
 }
