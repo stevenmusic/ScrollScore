@@ -547,7 +547,7 @@ input[type=color]::-webkit-color-swatch-wrapper{padding:3px}
 input[type=color]::-webkit-color-swatch{border:none;border-radius:2px}
 body.score-loaded #playline{display:block}
 #playline::before{
-  content:"";position:absolute;top:-2px;left:50%;transform:translateX(-50%);
+  content:"";position:absolute;top:0;left:50%;transform:translateX(-50%);   /* 三角形頂端跟小節色塊上緣對齊(使用者 2026-10) */
   /* 三角標記跟游標線同色,不然改了顏色只有線變、上面的三角形還是金色 */
   border:7px solid transparent;border-top:10px solid var(--cursor-col,var(--gold));
 }
@@ -11993,7 +11993,7 @@ function fillExportPlayline(ctx, x, top, bot, col){
   ctx.fillStyle = col;
   ctx.beginPath();
   ctx.rect(x - 2, top, 4, Math.max(0, bot - top));
-  ctx.moveTo(x - 9, top - 2); ctx.lineTo(x + 9, top - 2); ctx.lineTo(x, top + 13); ctx.closePath();
+  ctx.moveTo(x - 9, top); ctx.lineTo(x + 9, top); ctx.lineTo(x, top + 15); ctx.closePath();   // 三角形頂端 = 色塊上緣
   ctx.fill("nonzero");
 }
 function drawExportBackground(ctx, layout){
