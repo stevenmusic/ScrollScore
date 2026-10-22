@@ -2222,7 +2222,6 @@ function seededRand01(seed){
 /* 前面同一隻手的音太近、提前滾奏的空間不到理想的一半時,改成從拍點開始往後滾(第一個音在拍點上),
    不再把間隔壓成 0 變成一起彈(使用者反映,2026-10)。真人也是這樣:來不及提前就在拍上開始滾 */
 function arpRollsAfterBeat(ev, t0, calib){
-  if (ev.arpLHAlone) return true;
   const baseGap = arpGapSec() * arpDurationFactor(ev);
   return computeArpEffectiveGap(ev, t0, calib) < baseGap * 0.5;
 }
@@ -4751,8 +4750,12 @@ function chordSymbolSegments(times, endWhole){
   }
   return out;
 }
+/* 範圍比對都要有容許誤差(RANGE_EPS):OSMD 的音符時間(分數換成小數)跟解析 XML 算的範圍差一點點(27.9999999 vs 28),
+   以前每段踏板一開頭的音(多半是低音根音)被歸到前一段、踏板一放就切掉,聽起來不飽滿(使用者反映第 29、31、32 小節,2026-10) */
+const RANGE_EPS = 1e-6;
+function inRange(t, r){ return t >= r.start - RANGE_EPS && t < r.end - RANGE_EPS; }
 function inRanges(t, ranges){
-  for (const r of ranges) if (t >= r.start && t < r.end) return true;
+  for (const r of ranges) if (inRange(t, r)) return true;
   return false;
 }
 
@@ -4810,7 +4813,7 @@ function buildTimeline(){
       }
     }
     const arpInfo = findNearestEntry(arpEntries, srcT0, MARK_MATCH_EPSILON);
-    let arpCount = 0, arpGapBeforeWhole = null, arpPrevDurWhole = null, arpLHAlone = false;
+    let arpCount = 0, arpGapBeforeWhole = null, arpPrevDurWhole = null;
     if (arpInfo && notes.length > 1) {
       // 依編號分組:同編號=同一條線(可能跨手,一起滾奏);不同編號=各自獨立的線(例如左右手分開,但要同時起始)
       const groupNums = Object.keys(arpInfo.groups);
@@ -4860,9 +4863,6 @@ function buildTimeline(){
         // 「前一個音」只看琶音那隻手(同譜表)的音(使用者反映,2026-10:左手琶音常變成一起彈——前面右手旋律還在響,
         // 以前把它也當成前一個音,滾奏不能提前、間隔被壓成 0;另一隻手的音本來就可以跟滾奏重疊)
         const arpStaffs = new Set(notes.filter(n => n.rollIndex != null).map(n => n.staff || 1));
-        // 左手(下方譜表)琶音、右手這時沒有同時彈:滾奏從拍點開始往後(使用者要求,2026-10:起始時間往後移一點);
-        // 右手同時有音時照原本,最後一個音跟右手一起落在拍上
-        arpLHAlone = !arpStaffs.has(1) && !notes.some(n => !n.drum && n.freq && (n.staff || 1) === 1);
         let prevEv = null;
         for (let k = events.length - 1; k >= 0 && k >= events.length - 64; k--) {
           if (events[k].notes.some(n => !n.drum && arpStaffs.has(n.staff || 1))) { prevEv = events[k]; break; }
@@ -4897,7 +4897,7 @@ function buildTimeline(){
         beatLen = compound ? 3 / 8 : 1 / ts.Denominator;
       }
     } catch (e) { barPos = null; }
-    events.push({ tWhole, x, notes, arpCount, arpGapBeforeWhole, arpGapAfterWhole: null, arpPrevDurWhole, arpLHAlone, barPos, beatLen, barLen, srcT, mIdx });
+    events.push({ tWhole, x, notes, arpCount, arpGapBeforeWhole, arpGapAfterWhole: null, arpPrevDurWhole, barPos, beatLen, barLen, srcT, mIdx });
     cursor.next();
   }
   // 補上每個事件跟下一個事件的全音符間距,琶音邊界偵測要用(前面那一步只知道跟前一個事件的間距)
@@ -4939,7 +4939,7 @@ function buildTimeline(){
     let rangeEnd = null;
     if (activeRanges) {
       for (const r of activeRanges) {
-        if (sT >= r.start && sT < r.end) { rangeEnd = toPerf(r.end); break; }
+        if (inRange(sT, r)) { rangeEnd = toPerf(r.end); break; }
       }
     }
     const pedalEnd = ev.pedalOn ? rangeEnd : null;
@@ -4954,7 +4954,7 @@ function buildTimeline(){
       rangeEnd = rangeEnd != null ? Math.max(rangeEnd, capped) : capped;
     } else {
       for (const r of (chordSegs.length && !ev.pedalOn ? preChordRepeat : repeatChordRanges)) {
-        if (sT >= r.start && sT < r.end) {
+        if (inRange(sT, r)) {
           const capped = Math.min(toPerf(r.end), ev.tWhole + RING_CAP_WHOLE);
           rangeEnd = rangeEnd != null ? Math.max(rangeEnd, capped) : capped;
           break;
@@ -7715,7 +7715,7 @@ function pianoSchedulePedalNoise(fromSec, toSec, timeToCtx){
   for (const ev of events) {
     // 踏板範圍是記譜位置;反覆記號重播時同一個範圍再踩一次(off = 這一遍演奏位置與記譜位置的差)
     const sT = ev.srcT != null ? ev.srcT : ev.tWhole, off = ev.tWhole - sT;
-    const r = (ev.pedalOn || ev.autoPedal) ? pianoRanges().find(r => sT >= r.start && sT < r.end) : null;
+    const r = (ev.pedalOn || ev.autoPedal) ? pianoRanges().find(r => inRange(sT, r)) : null;
     if (r !== cur || (r && Math.abs(off - curOff) > 1e-6)) {
       const t = posToSec(ev.tWhole, calib);
       if (cur) fire("pedalU" + (1 + (k & 1)), r ? t - 0.06 : posToSec(Math.min(cur.end + curOff, ev.tWhole), calib), g);
