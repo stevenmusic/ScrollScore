@@ -8713,6 +8713,16 @@ function computePianoDynamics(){
     }
     return out;
   };
+  // 同一手上方還有更高的音按著(旋律長音)時,這個時間點最高的音是長音底下的伴奏/內聲部,不是旋律(非古典;使用者 2026-10 要求
+  // 自己測流行寫法時發現:右手 E5 長音底下的反拍和弦 C4-E4-G4,G4 被當成旋律加重,跟旋律差不到 5 力度)。古典不用:對位裡下面在動的常是主題
+  const heldAbove = (ev, m, st) => {
+    const i = evIdx.get(ev), t = ev.tWhole;
+    for (let j = i - 1; j >= 0 && events[j].tWhole > t - 2; j--) for (const q of events[j].notes) {
+      if (q.drum || !q.freq || (multiStaff && (q.staff || 1) !== st)) continue;
+      if (events[j].tWhole + (q.durWhole || 0) > t + 1e-6 && freqToMidi(q.freq) > m + 0.5) return true;
+    }
+    return false;
+  };
   const isInnerSingle = (ev, m) => {
     const i = evIdx.get(ev), t = ev.tWhole, w = (ev.beatLen || 0.25) * PIANO_POP.lineWin;
     let mx = -Infinity;
@@ -8802,7 +8812,7 @@ function computePianoDynamics(){
         if (rh) {
           // 雙音/和弦也一樣(使用者反映 2026-10:第 51 小節 B♭4+D5 的 D「還是太強、很不舒服」——旋律在 G5/A5,這個雙音是夾在中間的伴奏,
           // 以前只有單音才判斷,和弦最上面一律當旋律加重)
-          if (n === top && pop && ns.length === 1 && isInnerSingle(ev, m)) {
+          if (n === top && pop && ((ns.length === 1 && isInnerSingle(ev, m)) || heldAbove(ev, m, st))) {
             v -= 5 + PIANO_POP.accomp; n._inner = true;   // 單音音型裡的伴奏音(見 isInnerSingle)
           } else if (n === top) {
             // 有和弦記號的非古典:和弦最上面的旋律音跟單音旋律一樣加 4(下面已經多一個音、本來就比較響,不用再多打;
