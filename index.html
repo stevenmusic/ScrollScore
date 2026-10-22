@@ -2963,7 +2963,7 @@ function gpToMusicXML(AT, score, trackIndex){
           // 拍上的文字、力度、漸強漸弱(只看每個譜表的第一聲部)
           // 和弦名稱:寫成 <harmony><numeral-root text="…">,OSMD 會一字不差照原檔顯示(用 root/kind 的話 OSMD 會自己改寫,A6 變 Amaj6);
           // 寫成 <words> 的話會跟同一拍的 LetRing 併成同一行
-          if (!grace && b.chordId != null && b.chord && b.chord.name && b.chord.showName !== false) o(`<harmony print-frame="no"><numeral><numeral-root text="${xmlEsc(b.chord.name)}">1</numeral-root></numeral><kind>none</kind>${sNum}</harmony>`);
+          if (!grace && b.chordId != null && b.chord && b.chord.name && b.chord.showName !== false) o(`<harmony print-frame="no"><numeral><numeral-root text="${xmlEsc(prettyChordName(b.chord.name))}">1</numeral-root></numeral><kind>none</kind>${sNum}</harmony>`);
           // Let Ring:連續有 let ring 的拍子畫「LetRing - - -」(每個譜表的第一聲部)
           if (vi === 0 && !grace) {
             const ring = !b.isRest && b.notes.some(n => n.isLetRing);
@@ -3841,6 +3841,22 @@ function installCrossStaffArpeggio(){
     } catch (e) {}
   };
 }
+/* 和弦名稱的升降記號用 ♭ ♯(使用者反映 2026-10:「Bbm6、Bbmaj7 的降記號沒有正確顯示」——OSMD 預設寫成英文字母 b、#)。
+   OSMD 內建這組符號(resetChordAccidentalTexts 第二個參數),換了之後 m7♭5 這類名稱也要重建一次才會跟著換 */
+function useMusicalChordAccidentals(R){
+  try {
+    if (!R || !R.ChordAccidentalTexts || typeof R.resetChordAccidentalTexts !== "function") return;
+    R.resetChordAccidentalTexts(R.ChordAccidentalTexts, true);
+    if (R.ChordSymbolLabelTexts && typeof R.resetChordSymbolLabelTexts === "function") R.resetChordSymbolLabelTexts(R.ChordSymbolLabelTexts);
+  } catch (e) {}
+}
+/* Guitar Pro 的和弦名稱照原字顯示(numeral-root text),一樣把根音/低音後面的 b、# 與 b5/#9 這類換成 ♭ ♯ */
+function prettyChordName(name){
+  return String(name || "")
+    .replace(/^([A-G])b(?![a-z])/, "$1♭").replace(/^([A-G])bb/, "$1𝄫").replace(/^([A-G])b(?=m|M|\d|s|a|d|\+|\(|\/|$)/, "$1♭").replace(/^([A-G])#/, "$1♯")
+    .replace(/\/([A-G])b/, "/$1♭").replace(/\/([A-G])#/, "/$1♯")
+    .replace(/([(,\s]|\d)b(5|6|9|13)/g, "$1♭$2").replace(/([(,\s]|\d)#(5|9|11)/g, "$1♯$2");
+}
 function installSlurFlattening(){
   const G = window.opensheetmusicdisplay && opensheetmusicdisplay.GraphicalSlur;
   if (!G || !G.prototype.calculateCurve || G.prototype.__ssFlat) return;
@@ -3942,6 +3958,7 @@ async function renderScore(xmlText){
   // 圓滑線用 OSMD 較新的「依上下輪廓線擺放」:單行排版時很長的圓滑線(例如跨 7 小節、記在下方)
   // 用舊算法會往下彎很深,把兩個譜表的間距撐開好幾倍(蕭邦第一號敘事曲 95 → 39)
   osmd.EngravingRules.SlurPlacementUseSkyBottomLine = true;
+  useMusicalChordAccidentals(osmd.EngravingRules);
   osmd.EngravingRules.PageTopMargin = 1;
   osmd.EngravingRules.PageBottomMargin = 1;
   // 是否合併連續整小節休止符由使用者的開關決定(預設拆開):合併時連OSMD自己「檔案沒標記
@@ -12080,6 +12097,7 @@ async function renderPageOsmd(contentW, sp){
   });
   const R = o.EngravingRules, M = osmd.EngravingRules;
   R.SlurPlacementUseSkyBottomLine = true;
+  useMusicalChordAccidentals(R);
   R.PageTopMargin = 1; R.PageBottomMargin = 1; R.PageLeftMargin = 1; R.PageRightMargin = 1;
   R.RenderMeasureNumbersOnlyAtSystemStart = true;
   R.AutoGenerateMultipleRestMeasuresFromRestMeasures = M.AutoGenerateMultipleRestMeasuresFromRestMeasures;
