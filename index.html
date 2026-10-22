@@ -5523,6 +5523,9 @@ function buildTimeline(){
         barLen = ts.Numerator / ts.Denominator;
         const compound = ts.Denominator === 8 && ts.Numerator % 3 === 0 && ts.Numerator > 3; // 6/8、9/8、12/8 一拍是附點四分
         beatLen = compound ? 3 / 8 : 1 / ts.Denominator;
+        // 開頭的弱起小節(implicit、比拍號短):位置對齊到小節尾端,弱起音是最後一拍的反拍,不是第一拍(以前拍子輕重把它當重拍加重)
+        const md = m.Duration && m.Duration.RealValue;
+        if (m.ImplicitMeasure && m.measureListIndex === 0 && md > 0 && md < barLen - 1e-6) barPos += barLen - md;
       }
     } catch (e) { barPos = null; }
     events.push({ tWhole, x, notes, arpCount, arpGapBeforeWhole, arpGapAfterWhole: null, arpPrevDurWhole, barPos, beatLen, barLen, srcT, mIdx });
@@ -8160,12 +8163,12 @@ function harmonyOffsets(plan, t, beatLen){
    ① decay:鋼琴長音按著會一直變小聲,真人彈下一個音會配合「已經變小的音量」接上,不會突然冒出來——前一個旋律音響了 minSec 秒以上、
       中間沒有休止符時,下一個音往衰減後的音量靠 k(最多 −max 力度、不低於原本 floor 倍;往上跳 leap 半音以上減半;之後一拍內的音收 follow 倍)
    ② pickup:弱起拍(休止符或長音之後、一拍以內的短音,接到下一個重拍)往重拍推:越接近重拍越大聲,最多 +max,不超過重拍的音
-   ③ repeat:旋律連續同一個音不要每下一樣——之後往上走或接到下一個音前漸強,往下走或接休止符漸弱,每下 step、最多 max
+   ③ repeat:旋律連續同一個音不要每下一樣——之後接著彈下一個音就往它漸強,接休止符/曲尾就漸弱;總變化 step×(L−1)、最多 max,平均分在整串
    ⑤ legato:旋律音的下一個旋律音緊接著彈 → n.legatoNext(playPianoNote 晚一點放鍵)
-   ⑧ breath:換氣處提早放鍵 → n.breath(換氣記號在 artic.breath;這裡標:圓滑線結束、下一個音馬上開始新的圓滑線;長音後面接弱起拍)
+   ⑧ breath:換氣處提早放鍵 → n.breath(換氣記號在 artic.breath;這裡標:圓滑線結束、下一個音接著彈;長音後面接弱起拍)
    ④ 換踏板的延遲在 PEDAL_CHANGE(制音器與踏板聲) */
 const PHRASE_NUANCE = {
-  decay:  { minSec: 0.6, k: 0.2, max: 5, floor: 0.8, leap: 5, maxDb: 18, follow: 0.5 },
+  decay:  { minSec: 1.0, k: 0.2, max: 5, floor: 0.8, leap: 5, maxDb: 18, follow: 0.5 },
   pickup: { max: 5, below: 1 },
   repeat: { step: 1.5, max: 5 },
   legato: { frac: 0.15, min: 0.015, max: 0.045 },
@@ -8181,12 +8184,13 @@ function pianoLineNuance(){
   for (const x of mel) { delete x.n.legatoNext; delete x.n.breath; }
   if (mel.length < 2) return;
   const sec = (t, d) => { try { const s2 = spanSec(t, d); return isFinite(s2) ? s2 : d * 2; } catch (e) { return d * 2; } };
-  const conn = j => j + 1 < mel.length && mel[j + 1].t - (mel[j].t + mel[j].n.durWhole) <= eps;   // 下一個旋律音緊接著(沒有休止符)
+  // 下一個旋律音緊接著(沒有休止符);下一個音在這個音還沒結束時就出現(長音按著、下面內聲部在動)不算同一條線
+  const conn = j => { if (j + 1 >= mel.length) return false; const g = mel[j + 1].t - (mel[j].t + mel[j].n.durWhole); return g <= eps && g >= -eps; };
   const fixed = x => !!(x.n._accDb || x.n._momDb) || (x.ev.srcT != null && scoreDynMarks.some(d => Math.abs(d.t - x.ev.srcT) < 1e-4));   // 重音、力度記號的音照譜
   const strong = x => { const e = x.ev; if (e.barPos == null || !(e.barLen > 0)) return false; if (e.barPos < 1e-4) return true;
     const nb = Math.round(e.barLen / (e.beatLen || e.barLen)); return nb === 4 && Math.abs(e.barPos - e.barLen / 2) < 1e-4; };
   const clampV = v => Math.max(8, Math.min(124, v));
-  const add = new Array(mel.length).fill(0);
+  const add = new Array(mel.length).fill(0), capAt = new Array(mel.length).fill(Infinity);
   // ② 弱起拍
   const pickupStart = new Set();
   for (let s = 0; s < mel.length; s++) {
@@ -8205,6 +8209,7 @@ function pianoLineNuance(){
       const x = mel[s + j]; if (fixed(x)) continue;
       const want = P.pickup.max * (j + 1) / (L + 1);
       add[s + j] += Math.max(0, Math.min(want, T.n.pvel - P.pickup.below - x.n.pvel));
+      capAt[s + j] = Math.max(x.n.pvel, T.n.pvel - P.pickup.below);   // 加上同音反覆之後也不超過重拍的音
     }
     if (afterLong) pickupStart.add(s);
     s = e;
@@ -8214,18 +8219,36 @@ function pianoLineNuance(){
     let e = s;
     while (e + 1 < mel.length && conn(e) && Math.round(mel[e + 1].m) === Math.round(mel[s].m)) e++;
     if (e > s) {
-      const nx = mel[e + 1], dir = nx && conn(e) && nx.m > mel[s].m + 0.5 ? 1 : -1;
-      for (let j = 1; j <= e - s; j++) if (!fixed(mel[s + j])) add[s + j] += dir * Math.min(P.repeat.max, P.repeat.step * j);
+      // 方向:之後接著彈下一個音 → 往它推(漸強;不管往上或往下,反覆的音是在「走向」下一個音,例如莫札特 K310 開頭的 E 是越來越堅持,
+      // 不是收);之後是休止符/曲子結束/新樂句的弱起拍 → 句子收尾,漸弱。總變化 = step × (L−1)、最多 max,平均分在整串上(長串不會一路累加後停在最大值)
+      const L = e - s + 1, dir = mel[e + 1] && conn(e) && !pickupStart.has(e + 1) ? 1 : -1, tot = Math.min(P.repeat.max, P.repeat.step * (L - 1));
+      for (let j = 1; j < L; j++) if (!fixed(mel[s + j])) add[s + j] += dir * tot * j / (L - 1);
     }
     s = e;
   }
-  for (let j = 0; j < mel.length; j++) if (add[j]) mel[j].n.pvel = clampV(mel[j].n.pvel + add[j]);
-  // ① 長音後面的音配合衰減後的音量(同一個音被好幾個長音影響時取最大的,不累加)
+  for (let j = 0; j < mel.length; j++) if (add[j]) mel[j].n.pvel = clampV(Math.min(capAt[j], mel[j].n.pvel + add[j]));
+  // ⑧ 換氣 / ⑤ 圓滑重疊(先標,① 要用)。譜上有圓滑線(≥ 4 條、蓋到一成以上的旋律音)時照圓滑線:同一條圓滑線裡才連、圓滑線結束接著彈下一個音就換氣
+  // (古典的慣例「圓滑線最後一個音提早放」;沒寫圓滑線的音作曲者沒要求連,不自己加重疊);沒有圓滑線的譜(多半是流行)旋律接著彈就連
+  const slurAt = t => slurRanges.find(r => inRange(t, r)), srcOf = x => x.ev.srcT != null ? x.ev.srcT : x.t;
+  const useSlurs = slurRanges.length >= 4 && mel.filter(x => slurAt(srcOf(x))).length >= 0.1 * mel.length;   // 作曲者有系統地標圓滑線
+  for (let j = 0; j < mel.length; j++) {
+    const a = mel[j];
+    if (!conn(j)) continue;
+    const b = mel[j + 1], sa = a.ev.srcT != null ? a.ev.srcT : a.t, sb = b.ev.srcT != null ? b.ev.srcT : b.t;
+    const ra = slurAt(sa), sameSlur = !!ra && inRange(sb, ra);
+    if (pickupStart.has(j + 1) || (useSlurs && ra && !sameSlur)) a.n.breath = true;
+    else if (Math.round(b.m) !== Math.round(a.m) && (!useSlurs || sameSlur)) a.n.legatoNext = true;   // 同一個鍵不能重疊(要先放才能再彈)
+  }
+  // ① 長音後面的音配合衰減後的音量(同一個音被好幾個長音影響時取最大的,不累加)。換氣處(新樂句)、段落開頭、漸強中不收:
+  // 新的句子本來就重新開始,漸強是要越來越大聲
+  const secStarts = perfSections().map(g => g.t);
+  const lvl = x => pianoLevelAt(x.ev.srcT != null ? x.ev.srcT : x.t);
   const cutBy = new Array(mel.length).fill(0);
   for (let j = 0; j + 1 < mel.length; j++) {
     if (!conn(j)) continue;
     const a = mel[j], b = mel[j + 1], held = sec(a.t, a.n.durWhole);
-    if (held < P.decay.minSec || fixed(b)) continue;
+    if (held < P.decay.minSec || fixed(b) || a.n.breath) continue;
+    if (secStarts.some(t0 => Math.abs(t0 - b.t) < (b.ev.beatLen || 0.25) - eps) || lvl(b) > lvl(a) + 0.005) continue;
     const target = a.n.pvel * Math.pow(10, -Math.min(P.decay.maxDb, pianoDecayDbPerSec(a.m) * held) / 40);
     if (b.n.pvel <= target) continue;
     let cut = Math.min(P.decay.max, P.decay.k * (b.n.pvel - target), b.n.pvel * (1 - P.decay.floor));
@@ -8235,17 +8258,6 @@ function pianoLineNuance(){
     for (let q = j + 2; q < mel.length && mel[q].t < b.t + bl - eps && conn(q - 1); q++) cutBy[q] = Math.max(cutBy[q], cut * P.decay.follow);
   }
   for (let j = 0; j < mel.length; j++) if (cutBy[j] && !fixed(mel[j])) mel[j].n.pvel = clampV(mel[j].n.pvel - cutBy[j]);
-  // ⑧ 換氣 / ⑤ 圓滑重疊
-  const slurAt = t => slurRanges.find(r => inRange(t, r));
-  for (let j = 0; j < mel.length; j++) {
-    const a = mel[j];
-    if (!conn(j)) continue;
-    const b = mel[j + 1], sa = a.ev.srcT != null ? a.ev.srcT : a.t, sb = b.ev.srcT != null ? b.ev.srcT : b.t;
-    const ra = slurAt(sa), rb = slurAt(sb);
-    const slurBreak = ra && rb && ra !== rb && rb.start >= sa + eps;   // 這條圓滑線結束、下一個音開始新的一條
-    if (slurBreak || pickupStart.has(j + 1)) a.n.breath = true;
-    else a.n.legatoNext = true;
-  }
 }
 function computePianoDynamics(){
   const multiStaff = events.some(ev => ev.notes.some(n => !n.drum && n.freq && (n.staff || 1) > 1));
@@ -8836,7 +8848,7 @@ function playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel
   }
   // 樂句結尾換氣(PHRASE_NUANCE.breath):換氣記號、圓滑線接下一條圓滑線、長音接弱起拍的前一個音提早放鍵(不改時間)
   const short = artic && (artic.staccatissimo || artic.spiccato || artic.staccato || artic.detachedLegato);
-  const breath = !short && ((gn && gn.breath) || (artic && artic.breath));
+  const breath = !short && ((gn && gn.breath && !(artic && (artic.tenuto || artic.fermata))) || (artic && artic.breath));   // 保持音/延長記號照寫的長度(換氣記號照樣)
   if (breath) { const B = PHRASE_NUANCE.breath; keyUp = Math.max(keyUp * B.minKeep, keyUp - Math.min(B.max, B.frac * keyUp)); }
   // 旋律圓滑重疊(PHRASE_NUANCE.legato):下一個旋律音接著彈時,這個音晚一點點才放(真人約 15~45ms,音越長重疊越多)
   let ov = legato && !pedal && !breath ? 0.03 : 0;
