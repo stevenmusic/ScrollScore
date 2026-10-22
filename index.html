@@ -5795,7 +5795,14 @@ function popBreathFactors(){
       const top = Math.max(...rh.map(x => x.freq));
       if (top > best + 1e-6) { best = top; bi = i; }
     }
-    if (bi >= 0) { f[bi] = Math.min(f[bi], POP_BREATH.peak); if (bi > 0 && src[bi - 1] >= a - eps) f[bi - 1] = Math.min(f[bi - 1], POP_BREATH.peakPrev); }
+    // 旋律在最高點停住才停留(使用者反映 2026-10:「旋律最高點停留不一定正確,要看旋律還有沒有繼續進行」):
+    // 最高點的音本身至少一拍長,或下一個右手音至少一拍之後才出現;一串音經過最高點、旋律還在走就照拍子
+    if (bi >= 0) {
+      const topN = events[bi].notes.filter(x => !x.drum && x.freq && (x.staff || 1) === 1).reduce((p, q) => (q.freq > p.freq ? q : p));
+      let nx = null; for (let j = bi + 1; j < n; j++) if (events[j].notes.some(x => !x.drum && x.freq && (x.staff || 1) === 1)) { nx = src[j]; break; }
+      const arrives = topN.durWhole >= beat - eps || nx == null || nx - src[bi] >= beat - eps;
+      if (arrives) { f[bi] = Math.min(f[bi], POP_BREATH.peak); if (bi > 0 && src[bi - 1] >= a - eps) f[bi - 1] = Math.min(f[bi - 1], POP_BREATH.peakPrev); }
+    }
   }
   // ④ 曲尾
   slowTo(endT - POP_BREATH.endBars * barLen, endT, POP_BREATH.end);
