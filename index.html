@@ -5763,7 +5763,9 @@ function rubatoPredict(x){
    ① 段落結尾最後一拍漸慢到 sectionEnd(進副歌前 toChorus,多吸一口氣)② 每 4 小節一個樂句(從段落開頭起算,沒有段落記號就從第一小節):
    樂句最後半拍拉寬到 phraseEnd ③ 樂句裡旋律(右手最高音)的最高點停留 peak、前一個音 peakPrev ④ 最後一段的最後 endBars 小節漸慢到 end
    (譜上已經有 rit./rall. 的地方取較慢的,不疊加)。回傳每個事件的倍率(1 = 原速) */
-const POP_BREATH = { sectionEnd: 0.88, toChorus: 0.85, phraseEnd: 0.94, peak: 0.93, peakPrev: 0.97, endBars: 2, end: 0.85 };
+// 段落結尾漸慢與樂句結尾拉寬已拿掉(1 = 不放慢;使用者反映 2026-10:「第 12 小節琶音結束後拍子拉長了,應該保持一樣的拍子結束」——
+// 流行歌段落交接照拍子走,不會每段都慢下來)。保留旋律最高點停留與整首最後漸慢
+const POP_BREATH = { sectionEnd: 1, toChorus: 1, phraseEnd: 1, peak: 0.93, peakPrev: 0.97, endBars: 2, end: 0.85 };
 function popBreathFactors(){
   const n = events.length, f = new Array(n).fill(1), eps = 1e-6;
   const src = events.map(ev => ev.srcT != null ? ev.srcT : ev.tWhole);
