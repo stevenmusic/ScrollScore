@@ -3621,6 +3621,19 @@ function hideClefOctaveMarks(root){
     for (let i = 1; i < paths.length; i++) paths[i].remove();
   }
 }
+/* 段落記號(rehearsal,例如 A、Verse、Intro)的方框改成圓角方形(使用者要求,2026-10:跟 App 原生按鈕一樣的圓角方形)。
+   VexFlow 的 StaveSection 畫成 <rect fill="none" stroke-width="2">,後面接一個空 path 與粗體文字;圓角 = 框高 × 0.25 */
+function roundRehearsalBoxes(root){
+  const svg = (root || $("score")).querySelector("svg");
+  if (!svg) return;
+  for (const r of svg.querySelectorAll('rect[fill="none"][stroke-width="2"]')) {
+    let n = r.nextElementSibling;
+    while (n && n.tagName.toLowerCase() === "path" && !n.getAttribute("d")) n = n.nextElementSibling;
+    if (!n || n.tagName.toLowerCase() !== "text" || n.getAttribute("font-weight") !== "bold") continue;
+    const rad = (parseFloat(r.getAttribute("height")) || 0) * 0.25;
+    r.setAttribute("rx", rad.toFixed(2)); r.setAttribute("ry", rad.toFixed(2));
+  }
+}
 function extendLedgerLineStems(root){
   const svg = (root || $("score")).querySelector("svg");
   if (!svg) return;
@@ -3796,6 +3809,7 @@ async function renderScore(xmlText){
   // (踏板的播放照樣依原檔),一般曲子不受影響
   if (osmd.EngravingRules.RenderPedals && scoreLayoutTooTall()) { osmd.EngravingRules.RenderPedals = false; osmd.render(); }
   if (finalXml.includes('id="gp-hide-clef-octave"')) hideClefOctaveMarks();
+  roundRehearsalBoxes();
   extendLedgerLineStems(); // OSMD符桿長度是固定值,不會因為加線音符離譜表遠就自動加長,這裡渲染完手動補上
 
   buildTimeline();
@@ -11059,6 +11073,7 @@ async function renderPageOsmd(contentW, sp){
   R.RenderPedals = M.RenderPedals;
   o.render();
   if (lastRenderedXml.includes('id="gp-hide-clef-octave"')) hideClefOctaveMarks(host);
+  roundRehearsalBoxes(host);
   extendLedgerLineStems(host);
   return { o, host };
 }
