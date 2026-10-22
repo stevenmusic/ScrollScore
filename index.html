@@ -306,6 +306,9 @@ input[type=range]::-webkit-slider-thumb{
 .combo-row #instrument{flex:0 1 auto;min-width:92px;max-width:200px;align-self:stretch;min-height:0}
 .combo-row #instSeg{flex:0 1 auto;min-width:112px;max-width:200px;align-self:stretch}   /* 要寫在下面的 @media 前面,窄畫面才蓋得過 */
 .combo-row .trans-group{display:inline-flex;align-items:center;gap:6px;flex:none;margin-left:auto}
+/* −/＋/↺ 用 SVG 畫(使用者 2026-10:「移調箭頭怎麼沒有在方框的中間」):文字符號在各平台的字型裡位置不同(↺ 在 iPhone 借別的字型、
+   偏上偏右),畫成 16×16 的線條圖示才會每台裝置都剛好在正中間 */
+.btn-ico{width:16px;height:16px;flex:none;display:block;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}
 .combo-row .trans-group .btn{width:32px;height:32px;min-width:32px;padding:0;justify-content:center;font-size:var(--fs-lg);line-height:1}   /* −/＋/↺ 一樣大(以前照字寬,− 比 ＋ 窄) */
 .combo-row .trans-group #transVal{display:inline-block;min-width:4.6em;text-align:center;font-variant-numeric:tabular-nums;white-space:nowrap}   /* 「原調」與「+11 半音」同寬,按鈕不會跟著跳 */
 .combo-row #transVal{min-width:4.6em;text-align:center}
@@ -1033,10 +1036,10 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
         <option value="drum" data-i18n="instDrum">鼓組</option>
       </select>
       <span class="trans-group" role="group" data-i18n-attr="aria-label:transposeAria">
-        <button class="btn" id="transDown" disabled title="降半音(請先載入樂譜)" data-i18n-attr="aria-label:transDownAria">−</button>
+        <button class="btn" id="transDown" disabled title="降半音(請先載入樂譜)" data-i18n-attr="aria-label:transDownAria"><svg class="btn-ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8h9"/></svg></button>
         <b id="transVal" data-i18n="transposeOriginal">原調</b>
-        <button class="btn" id="transUp" disabled title="升半音(請先載入樂譜)" data-i18n-attr="aria-label:transUpAria">＋</button>
-        <button class="btn" id="transReset" disabled data-i18n-attr="aria-label:transResetAria,title:transResetAria">↺</button>
+        <button class="btn" id="transUp" disabled title="升半音(請先載入樂譜)" data-i18n-attr="aria-label:transUpAria"><svg class="btn-ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8h9M8 3.5v9"/></svg></button>
+        <button class="btn" id="transReset" disabled data-i18n-attr="aria-label:transResetAria,title:transResetAria"><svg class="btn-ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.6 6.2A5 5 0 1 1 3 8.6"/><path d="M3.2 2.6v3.8h3.8"/></svg></button>
       </span>
     </div>
   </div>
@@ -1047,7 +1050,7 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
     <!-- 2026-10 使用者反映「滑一下速度最少變 3」:手機上滑桿約 160px 要涵蓋 40~400(每 px 約 2.3)。
          改成 ① −/＋ 每按一下 1、按住連續 ② 滑桿用比例刻度(#tempoSlider,40→400 是 0→1000 的 log),常用的 60~160 比較細
          ③ 手機上滑桿自己一整列。真正的速度值仍在隱藏的 #tempo(40~400、每格 1),其他程式照舊讀它 -->
-    <div class="tempo-box" id="tempoRow"><span class="row-label" data-i18n="tempoAriaLabel">速度</span> <input type="range" id="tempoSlider" min="0" max="1000" value="398" step="1" data-i18n-attr="aria-label:tempoAriaLabel"><span class="tempo-num"><button class="btn tempo-step" id="tempoDown" type="button" data-i18n-attr="aria-label:tempoDownAria">−</button><input type="number" id="tempoVal" min="40" max="400" value="100" data-i18n-attr="aria-label:tempoAriaLabel"><button class="btn tempo-step" id="tempoUp" type="button" data-i18n-attr="aria-label:tempoUpAria">＋</button><span class="tempo-unit">BPM<span id="tempoUnitSuffix"></span></span></span><input type="range" id="tempo" min="40" max="400" value="100" step="1" hidden></div>
+    <div class="tempo-box" id="tempoRow"><span class="row-label" data-i18n="tempoAriaLabel">速度</span> <input type="range" id="tempoSlider" min="0" max="1000" value="398" step="1" data-i18n-attr="aria-label:tempoAriaLabel"><span class="tempo-num"><button class="btn tempo-step" id="tempoDown" type="button" data-i18n-attr="aria-label:tempoDownAria"><svg class="btn-ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8h9"/></svg></button><input type="number" id="tempoVal" min="40" max="400" value="100" data-i18n-attr="aria-label:tempoAriaLabel"><button class="btn tempo-step" id="tempoUp" type="button" data-i18n-attr="aria-label:tempoUpAria"><svg class="btn-ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8h9M8 3.5v9"/></svg></button><span class="tempo-unit">BPM<span id="tempoUnitSuffix"></span></span></span><input type="range" id="tempo" min="40" max="400" value="100" step="1" hidden></div>
     <!-- 游標顏色(2026-10 使用者請 Claude 設計):6 個色票,點一下就換、會記住。播放軸、小節色塊、匯出影片的標題共用;
          淺色主題與匯出影片照 exportInkColor 換成同色相的深色(色票也顯示換算後的顏色)。以前是任意調色盤 + 濃度滑桿,重開就回到金色 -->
     <div class="tempo-box" id="cursorColorRow"><span class="row-label" data-i18n="cursorColorLabel">游標顏色</span><span class="swatches" role="radiogroup" data-i18n-attr="aria-label:cursorColorLabel"><button type="button" class="swatch" role="radio" aria-checked="false" data-color="#E9CB7A" data-i18n-attr="aria-label:colorGold,title:colorGold"></button><button type="button" class="swatch" role="radio" aria-checked="false" data-color="#F2877A" data-i18n-attr="aria-label:colorRed,title:colorRed"></button><button type="button" class="swatch" role="radio" aria-checked="false" data-color="#7DB9F2" data-i18n-attr="aria-label:colorBlue,title:colorBlue"></button><button type="button" class="swatch" role="radio" aria-checked="false" data-color="#86D19A" data-i18n-attr="aria-label:colorGreen,title:colorGreen"></button><button type="button" class="swatch" role="radio" aria-checked="false" data-color="#B9A1F2" data-i18n-attr="aria-label:colorPurple,title:colorPurple"></button><button type="button" class="swatch" role="radio" aria-checked="false" data-color="#C6C6C6" data-i18n-attr="aria-label:colorGray,title:colorGray"></button></span><input type="hidden" id="cursorColor" value="#E9CB7A"></div>
