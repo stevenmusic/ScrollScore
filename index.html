@@ -7351,7 +7351,7 @@ function pianoEndContour(nb, multiStaff){
    改成 ×PIANO_POP.macroWithSections,以段落記號為主。譜上有力度記號時段落力度只用一半(以譜為主) */
 /* 2026-10 第二版(使用者:「感情不夠!」):POP909 是電腦編曲檔,大小聲保守;真人彈抒情流行段落差距大得多 →
    段落力度 ×sectionGain 2、旋律起伏(往上漸強、往下漸弱)每半音 contour 0.6 力度、上限 ±contourMax 7(古典 0.35、±4) */
-const PIANO_POP = { melody: 4, accomp: 3, macroWithSections: 0.5, sectionGain: 2, contour: 0.6, contourMax: 7 };
+const PIANO_POP = { melody: 4, accomp: 3, macroWithSections: 0.5, sectionGain: 2, contour: 0.6, contourMax: 7, lineWin: 1, lineGap: 3 };
 const PIANO_SECTION = { intro: -7, verse: -1.5, prechorus: [-1, 1.5], chorus: 2.5, bridge: 1.5, interlude: -2, solo: 0, outro: -5 };
 function sectionKind(text){
   const s = String(text || "").toLowerCase().replace(/[\s._\-–—]+/g, " ").trim();
@@ -7386,6 +7386,18 @@ function computePianoDynamics(){
   const multiStaff = events.some(ev => ev.notes.some(n => !n.drum && n.freq && (n.staff || 1) > 1));
   const hasMarks = scoreDynMarks.length > 0;
   const pop = classicalProbInfo().p < 0.5, popSections = pop && scoreSections.length > 0;   // 非古典的彈法(PIANO_POP)
+  // 右手單音的分解音型(G4-C4-F4-C4-E4-C4…):每個時間點只有一個音,以前每一顆都被當成旋律加重(使用者反映 2026-10:
+  // 「即使是前奏,每個音都彈得很用力」——〈甲乙丙丁〉前奏重複的 C4 也是 55~62)。比前後 PIANO_POP.lineWin 拍內右手最高音
+  // 低 PIANO_POP.lineGap 半音以上的單音 = 伴奏的內聲部(持續音、分解和弦的下方音),照內聲部彈輕
+  const rhTopOf = ev => { const r = ev.notes.filter(n => !n.drum && n.freq && (!multiStaff || (n.staff || 1) === 1)); return r.length ? Math.max(...r.map(n => freqToMidi(n.freq))) : null; };
+  const evIdx = new Map(events.map((e, i) => [e, i])), rhTops = events.map(rhTopOf);
+  const isInnerSingle = (ev, m) => {
+    const i = evIdx.get(ev), t = ev.tWhole, w = (ev.beatLen || 0.25) * PIANO_POP.lineWin;
+    let mx = -Infinity;
+    for (let j = i - 1; j >= 0 && events[j].tWhole >= t - w - 1e-6; j--) if (rhTops[j] != null) mx = Math.max(mx, rhTops[j]);
+    for (let j = i + 1; j < events.length && events[j].tWhole <= t + w + 1e-6; j++) if (rhTops[j] != null) mx = Math.max(mx, rhTops[j]);
+    return mx - m >= PIANO_POP.lineGap;
+  };
   const auto = pianoAutoMacro(hasMarks);
   const endContour = pianoEndContour(auto.nb, multiStaff);
   const drift = { 1: 0, 2: 0 };
@@ -7437,7 +7449,9 @@ function computePianoDynamics(){
         const na = n.artic || ev.artic;
         const accDb = (na ? (na.strongAccent ? PIANO_ACCENT_DB.strong : na.accent ? PIANO_ACCENT_DB.accent : na.softAccent ? PIANO_ACCENT_DB.soft : 0) : 0) + momDb;
         if (rh) {
-          if (n === top) {
+          if (n === top && pop && ns.length === 1 && isInnerSingle(ev, m)) {
+            v -= 5 + PIANO_POP.accomp; n._inner = true;   // 單音音型裡的伴奏音(見 isInnerSingle)
+          } else if (n === top) {
             v += (ns.length > 1 ? 6 : 4) + (pop ? PIANO_POP.melody : 0);
             if (melodyHist.length) { const cmax = pop ? PIANO_POP.contourMax : 4; v += Math.max(-cmax, Math.min(cmax, (m - melodyHist.reduce((s, x) => s + x, 0) / melodyHist.length) * (pop ? PIANO_POP.contour : 0.35))); }
             melodyHist.push(m); if (melodyHist.length > 8) melodyHist.shift();
@@ -7448,7 +7462,7 @@ function computePianoDynamics(){
         }
         if (n.durWhole >= 0.5) v += 2; else if (n.durWhole <= 1 / 16 + 1e-6) v -= 2;
         v += (seededRand01(k * 7.31 + m * 0.137) - 0.5) * 5;
-        n._v0 = v; n._accDb = accDb - momDb; n._momDb = momDb; n._role = rh ? (n === top ? 1 : 2) : 3;
+        n._v0 = v; n._accDb = accDb - momDb; n._momDb = momDb; n._role = rh ? (n === top && !n._inner ? 1 : 2) : 3; delete n._inner;
         n.pvel = Math.max(8, Math.min(124, v * Math.pow(10, accDb / 40)));
         n.pdt = chord && !(rh && n === top) && n.rollIndex == null ? seededRand01(k * 5.71 + m * 0.291) * 0.007 : 0;
       }
