@@ -9926,6 +9926,9 @@ function updatePlaylineExtent(){
   const top = boxTop + scoreFit.ty + scoreFit.s * cTop, bot = boxTop + scoreFit.ty + scoreFit.s * cBot;
   pl.style.top = Math.max(0, top) + "px";
   pl.style.bottom = Math.max(0, Hs - bot) + "px";
+  // 畫面上的小節色塊上下也照播放軸(以前整個樂譜區高,段落記號 Chorus/Intro 被蓋住;使用者 2026-10)
+  const hl = $("measureHighlight");
+  if (hl) { hl.style.top = cTop + "px"; hl.style.bottom = "auto"; hl.style.height = Math.max(0, cBot - cTop) + "px"; }
   setScrollerX(lastScrollX);
 }
 const KB_LOOKAHEAD_SEC = 0.06; // 鍵盤提前量,補償視覺感知上的延遲感
