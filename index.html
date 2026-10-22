@@ -6103,6 +6103,7 @@ function rubatoPredict(x){
 // 流行歌段落交接照拍子走,不會每段都慢下來)。保留旋律最高點停留與整首最後漸慢
 // 旋律最高點停留也已拿掉(peak/peakPrev = 1;使用者 2026-10:「要看旋律還有沒有繼續進行」「還是有漏洞」——4 小節硬切的樂句、
 // 「最高音 ≠ 樂句目標」、右手伴奏被當成旋律、固定一拍門檻都會判錯,加錯的停留比不加更糟)。非古典只剩整首最後漸慢 + 譜上 rit./延長記號
+const SECTION_ARC = { amp: 5, arcLow: 0.5, repeat: 2.5 };
 const POP_BREATH = { sectionEnd: 1, toChorus: 1, phraseEnd: 1, peak: 1, peakPrev: 1, endBars: 2, end: 0.85 };
 function popBreathFactors(){
   const n = events.length, f = new Array(n).fill(1), eps = 1e-6;
@@ -7973,6 +7974,44 @@ function computePianoDynamics(){
     if (!c) return 0;
     return -Math.min(PIANO_POP.dipMax, Math.max(0, s / c - m) * PIANO_POP.dip);
   };
+  // 段落內的起伏(使用者 2026-10:「同段落裡的旋律是否有起伏」——檢查結果:和聲樂句弧線每 2~4 小節一個小起伏、幅度約 ±4,
+  // 副歌兩次一樣的樂句力度完全一樣,整段沒有往哪裡推):每個段落(演奏順序)
+  // ① 往段落的高潮推:高潮 = 段落後三分之二裡、前後一小節平滑後旋律最高的地方(一樣高取後面的);段落開頭 −arcLow×amp
+  //    → 高潮 +amp → 段落結尾回到 0(S 形)② 段落裡重複的樂句(兩小節旋律跟前面一模一樣)第二次 +repeat、第三次以後 +2×repeat,
+  //    同樣的句子再唱一次會更投入,不會像複製貼上
+  const sectionShapes = () => {
+    const out = events.map(() => 0), sm = x => { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); };
+    for (const g of perfSections()) {
+      if (!g.kind) continue;
+      const idx = []; for (let i = 0; i < events.length; i++) if (events[i].tWhole >= g.t - 1e-6 && events[i].tWhole < g.end - 1e-6) idx.push(i);
+      if (!idx.length) continue;
+      const bl = events[idx[0]].barLen > 0 ? events[idx[0]].barLen : 1, len = g.end - g.t;
+      if (len < 2 * bl - 1e-6) continue;
+      const pts = idx.filter(i => rhTops[i] != null).map(i => ({ t: events[i].tWhole, p: rhTops[i] }));
+      if (pts.length < 4) continue;
+      const smP = pts.map(a => { let s2 = 0, c = 0; for (const b of pts) if (Math.abs(b.t - a.t) <= bl + 1e-6) { s2 += b.p; c++; } return s2 / c; });
+      let tc = null, best = -Infinity;
+      pts.forEach((a, k) => { if (a.t >= g.t + len / 3 - 1e-6 && a.t <= g.end - bl / 2 + 1e-6 && smP[k] >= best - 1e-6) { best = smP[k]; tc = a.t; } });
+      if (tc == null) tc = g.t + len * 0.75;
+      const A = SECTION_ARC.amp;
+      // 重複的兩小節樂句
+      const bars = []; for (let b = g.t; b < g.end - 1e-6; b += bl) bars.push(b);
+      const key = b => idx.filter(i => events[i].tWhole >= b - 1e-6 && events[i].tWhole < b + bl - 1e-6 && rhTops[i] != null).map(i => Math.round(rhTops[i]) + "@" + Math.round((events[i].tWhole - b) / bl * 48)).join(",");
+      const keys = bars.map(key), repB = bars.map(() => 0), seen = new Map();
+      for (let k = 0; k + 1 < bars.length; k++) {
+        if (!keys[k] || !keys[k + 1]) continue;
+        const kk = keys[k] + "|" + keys[k + 1], c = seen.get(kk) || 0;
+        if (c > 0) { const r = SECTION_ARC.repeat * Math.min(2, c); repB[k] = Math.max(repB[k], r); repB[k + 1] = Math.max(repB[k + 1], r); }
+        seen.set(kk, c + 1);
+      }
+      for (const i of idx) {
+        const t = events[i].tWhole;
+        const arc = t < tc ? -SECTION_ARC.arcLow * A + (1 + SECTION_ARC.arcLow) * A * sm((t - g.t) / Math.max(1e-6, tc - g.t)) : A - A * sm((t - tc) / Math.max(1e-6, g.end - tc));
+        out[i] = arc + repB[Math.min(repB.length - 1, Math.floor((t - g.t) / bl + 1e-6))];
+      }
+    }
+    return out;
+  };
   const isInnerSingle = (ev, m) => {
     const i = evIdx.get(ev), t = ev.tWhole, w = (ev.beatLen || 0.25) * PIANO_POP.lineWin;
     let mx = -Infinity;
@@ -8008,6 +8047,7 @@ function computePianoDynamics(){
       return { chord: raw[i].o.chord, v: sw > 0 ? sv / sw : raw[i].v };
     });
   }
+  const secShape = popSections ? sectionShapes() : null;
   const drift = { 1: 0, 2: 0 };
   const melodyHist = [];
   let k = 0, bar = -1, lastM = null, lastPos = -1;
@@ -8038,6 +8078,7 @@ function computePianoDynamics(){
       // 有和弦記號的非古典:固定 4/8 小節的弧線換成依和弦進行的樂句弧線 + 和聲張力
       const ho = hoSmooth ? hoSmooth[evIdx.get(ev)] : null;
       let m = (auto.macro[macroBar] || 0) * (popSections ? PIANO_POP.macroWithSections : 1) + (ho ? archW * ho.v : archW * (arch(4, 4) + arch(8, 5)));
+      if (secShape) m += archW * secShape[evIdx.get(ev)];   // 段落內的起伏:往段落高潮推、重複的樂句第二次更投入(SECTION_ARC)
       ev._chord = ho ? ho.chord : null;
       if (popSections) base += pianoSectionOffset(ev.tWhole, ev.beatLen, null, ev.barLen) * PIANO_POP.sectionGain * (hasMarks ? 0.5 : 1);
       if (fromEnd < PIANO_END.bars && !popEnd) m += endContour(bar + pos);
