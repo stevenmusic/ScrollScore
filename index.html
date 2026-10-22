@@ -339,7 +339,11 @@ input[type=range]::-webkit-slider-thumb{
 .switch-grid{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:repeat(3, auto);grid-auto-flow:column;gap:8px 12px;width:100%}
 .switch-grid .switch-row{min-width:0}
 @media (max-width:300px){ .switch-grid{grid-template-columns:1fr;grid-template-rows:none;grid-auto-flow:row} }
-.switch-row > span:last-child{white-space:nowrap}   /* 開關名稱不拆行(280px 時「小節高/亮」);放不下整個開關換到下一排 */
+.switch-row > span:last-child{white-space:nowrap}
+/* 彈性速度旁的自動判斷結果(古典/非古典):放得下同一行,放不下(英文兩欄)換到名稱下方 */
+.switch-row > .switch-text{display:flex;flex-wrap:wrap;align-items:baseline;column-gap:5px;min-width:0;line-height:1.2}
+.switch-text > span{white-space:nowrap}
+.switch-text > .switch-sub{font-size:.8em;color:var(--muted)}   /* 彈性速度旁的自動判斷結果(古典/非古典) */   /* 開關名稱不拆行(280px 時「小節高/亮」);放不下整個開關換到下一排 */
 .credits-list a[href*="creativecommons"]{white-space:nowrap}   /* 「CC BY / 4.0」不拆開 */
 .export-row{display:flex;gap:10px;flex-wrap:wrap;width:100%}
 /* 匯出是整個面板的主要動作,不再包進卡片,直接放在最下面當底部主按鈕 */
@@ -1058,7 +1062,7 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
          左排剛好都是預設開啟的,但排列的依據是重要性(使用者切換之後仍然合理);窄到一排時也照這個順序。
          「圓滑/踏板」播放開關已移除(一律開啟);「踏板記號」只管顯示;淺色模式在頁首 #themeToggle -->
       <label class="switch-row" data-i18n-attr="title:rubatoTitle">
-        <span class="switch"><input type="checkbox" id="rubatoOn" checked><span class="switch-track"></span></span><span data-i18n="rubatoLabel">彈性速度</span>
+        <span class="switch"><input type="checkbox" id="rubatoOn" checked><span class="switch-track"></span></span><span class="switch-text"><span data-i18n="rubatoLabel">彈性速度</span><span id="rubatoStyle" class="switch-sub" hidden></span></span>
       </label>
       <label class="switch-row" data-i18n-attr="title:measureHlTitle">
         <span class="switch"><input type="checkbox" id="measureHl" checked><span class="switch-track"></span></span><span data-i18n="measureHlLabel">小節高亮</span>
@@ -1397,6 +1401,8 @@ const I18N = {
     showPedalMarksLabel: "踏板記號",
     rubatoTitle: "像真人演奏一樣,依樂句自然地稍微加快、放慢;關掉就照穩定的速度播放(鼓組一律穩定速度)",
     rubatoLabel: "彈性速度",
+    rubatoStyleClassical: "古典",
+    rubatoStylePop: "非古典",
     measureHlTitle: "把正在演奏的那一小節整段用色塊標起來,視讀時更容易抓到位置",
     measureHlLabel: "小節高亮",
 
@@ -1662,6 +1668,8 @@ const I18N = {
     showPedalMarksLabel: "Pedal Marks",
     rubatoTitle: "Shape the tempo naturally with the phrasing, like a human player; turn off for a steady tempo (drums always play in steady tempo)",
     rubatoLabel: "Rubato",
+    rubatoStyleClassical: "Classical",
+    rubatoStylePop: "Non-classical",
     measureHlTitle: "Highlight the currently playing measure with a color band, making it easier to track while reading",
     measureHlLabel: "Highlight",
 
@@ -2219,6 +2227,7 @@ function seededRand01(seed){
 /* 前面同一隻手的音太近、提前滾奏的空間不到理想的一半時,改成從拍點開始往後滾(第一個音在拍點上),
    不再把間隔壓成 0 變成一起彈(使用者反映,2026-10)。真人也是這樣:來不及提前就在拍上開始滾 */
 function arpRollsAfterBeat(ev, t0, calib){
+  if (ev.arpLHAlone) return true;
   const baseGap = arpGapSec() * arpDurationFactor(ev);
   return computeArpEffectiveGap(ev, t0, calib) < baseGap * 0.5;
 }
@@ -2447,9 +2456,6 @@ async function loadScoreFile(file){
     repeatChordRanges = parsed.repeatRanges;
     chordSymbolTimes = harmonySymbolTimes(xmlText);
     scoreStyleMeta = detectScoreStyleMeta(xmlText, file.name);
-    // 有和弦記號時,譜上的踏板記號也在每個和弦記號換一次踏板(使用者要求,2026-10:有踏板記號的譜照樣糊);
-    // 踏板放開的地方照原檔放開,只是不會踩著跨過換和弦
-    if (chordSymbolTimes.length && !parsed.isDrumScore) pedalRanges = splitRangesAt(pedalRanges, chordSymbolTimes);
     measureRanges = parsed.measureRanges;
     guitarTechMap = parsed.guitarTechMap;
     vibratoRanges = parsed.vibratoRanges;
@@ -4664,16 +4670,6 @@ function harmonySymbolTimes(xmlText){
   ts.sort((a, b) => a - b);
   return ts.filter((t, i) => i === 0 || t - ts[i - 1] > 1e-6);
 }
-/* 把每個範圍在 times 的位置切開(範圍內部的切點才算) */
-function splitRangesAt(ranges, times){
-  const out = [];
-  for (const r of ranges) {
-    let a = r.start;
-    for (const t of times) if (t > a + 1e-6 && t < r.end - 1e-6) { out.push({ start: a, end: t }); a = t; }
-    out.push({ start: a, end: r.end });
-  }
-  return out;
-}
 /* ── 古典 / 非古典自動判斷(使用者要求,2026-10:「非古典音樂的彈性速度聽起來很怪」;維持彈性速度開關、自動判斷)──
    彈性速度模型是用古典鋼琴家的演奏(ASAP)訓練的:小節第一拍放慢、句尾拉長、長音前喘息,套在流行/爵士/抒情伴奏上會怪。
    這裡從樂譜找線索加減分(正 = 古典),scoreClassicalProb() 再加上音樂內容(切分音)換算成機率,
@@ -4724,6 +4720,14 @@ function scoreSyncopationRate(){
   }
   return tot >= 16 ? sync / tot : 0;
 }
+/* 彈性速度開關旁邊顯示自動判斷的結果(使用者要求,2026-10);p = null 藏起來(鼓譜、還沒載入) */
+function showRubatoStyle(p){
+  const el = $("rubatoStyle");
+  if (!el) return;
+  if (p == null) { el.hidden = true; el.removeAttribute("data-i18n"); return; }
+  const key = p >= 0.5 ? "rubatoStyleClassical" : "rubatoStylePop";
+  el.setAttribute("data-i18n", key); el.textContent = T(key); el.hidden = false;
+}
 let scoreStyleInfo = null;   // 最近一次判斷結果(console 與測試用)
 function scoreClassicalProb(){
   let score = scoreStyleMeta.score;
@@ -4733,6 +4737,7 @@ function scoreClassicalProb(){
   else if (sr > 0.08) { score -= 0.75; reasons.push("-0.75 切分音 " + (sr * 100).toFixed(0) + "%"); }
   const p = 1 / (1 + Math.exp(-score * 1.2));
   scoreStyleInfo = { p, score, reasons };
+  showRubatoStyle(p);
   console.log("樂譜風格:" + (p >= 0.5 ? "古典" : "非古典") + " p=" + p.toFixed(2) + " [" + reasons.join(", ") + "]");
   return p;
 }
@@ -4804,7 +4809,7 @@ function buildTimeline(){
       }
     }
     const arpInfo = findNearestEntry(arpEntries, srcT0, MARK_MATCH_EPSILON);
-    let arpCount = 0, arpGapBeforeWhole = null, arpPrevDurWhole = null;
+    let arpCount = 0, arpGapBeforeWhole = null, arpPrevDurWhole = null, arpLHAlone = false;
     if (arpInfo && notes.length > 1) {
       // 依編號分組:同編號=同一條線(可能跨手,一起滾奏);不同編號=各自獨立的線(例如左右手分開,但要同時起始)
       const groupNums = Object.keys(arpInfo.groups);
@@ -4854,6 +4859,9 @@ function buildTimeline(){
         // 「前一個音」只看琶音那隻手(同譜表)的音(使用者反映,2026-10:左手琶音常變成一起彈——前面右手旋律還在響,
         // 以前把它也當成前一個音,滾奏不能提前、間隔被壓成 0;另一隻手的音本來就可以跟滾奏重疊)
         const arpStaffs = new Set(notes.filter(n => n.rollIndex != null).map(n => n.staff || 1));
+        // 左手(下方譜表)琶音、右手這時沒有同時彈:滾奏從拍點開始往後(使用者要求,2026-10:起始時間往後移一點);
+        // 右手同時有音時照原本,最後一個音跟右手一起落在拍上
+        arpLHAlone = !arpStaffs.has(1) && !notes.some(n => !n.drum && n.freq && (n.staff || 1) === 1);
         let prevEv = null;
         for (let k = events.length - 1; k >= 0 && k >= events.length - 64; k--) {
           if (events[k].notes.some(n => !n.drum && arpStaffs.has(n.staff || 1))) { prevEv = events[k]; break; }
@@ -4888,7 +4896,7 @@ function buildTimeline(){
         beatLen = compound ? 3 / 8 : 1 / ts.Denominator;
       }
     } catch (e) { barPos = null; }
-    events.push({ tWhole, x, notes, arpCount, arpGapBeforeWhole, arpGapAfterWhole: null, arpPrevDurWhole, barPos, beatLen, barLen, srcT, mIdx });
+    events.push({ tWhole, x, notes, arpCount, arpGapBeforeWhole, arpGapAfterWhole: null, arpPrevDurWhole, arpLHAlone, barPos, beatLen, barLen, srcT, mIdx });
     cursor.next();
   }
   // 補上每個事件跟下一個事件的全音符間距,琶音邊界偵測要用(前面那一步只知道跟前一個事件的間距)
@@ -4905,7 +4913,7 @@ function buildTimeline(){
   // 譜上有和弦記號時(使用者要求,2026-10):和弦記號的時間優先於「重複分解和弦音型」的和聲判斷——
   //   ① 和弦記號一換就換踏板(沒有踏板記號時的自動踏板)② 音符的和聲延長不跨過下一個和弦記號
   //   ③ 和弦區段裡的音都照區段延長(同樣不超過 RING_CAP_WHOLE)。第一個和弦記號之前照原本的和聲判斷
-  //   譜上的踏板記號在載入時已經在每個和弦記號切開(splitRangesAt),一樣跟著換
+  //   譜上有踏板記號:踩著踏板記號的音完全照記號(使用者要求,2026-10),和弦記號只管沒踩踏板的音
   let srcEndWhole = 0;
   for (const ev of events) {
     const sT = ev.srcT != null ? ev.srcT : ev.tWhole;
@@ -4933,16 +4941,18 @@ function buildTimeline(){
         if (sT >= r.start && sT < r.end) { rangeEnd = toPerf(r.end); break; }
       }
     }
+    const pedalEnd = ev.pedalOn ? rangeEnd : null;
     // 左手(或任一手)重複分解和弦音型偵測到的範圍,也當作和聲延伸的依據。這個延長本身就是
     // 讓聲音變豐滿的來源,所以有標踏板時照樣套用,只是不能無限延長——夾在 RING_CAP_WHOLE 以內,
     // 避免像先前那樣一路響過好幾個小節、把不同和聲全疊在一起
-    const chordSeg = sT >= firstChordT - 1e-6 ? chordSegs.find(c => sT >= c.start - 1e-6 && sT < c.end - 1e-6) : null;
+    // 踩著譜上踏板記號的音:照踏板記號延長(使用者要求,2026-10:「有踏板記號還是要跟著踏板記號走」),和弦記號不介入
+    const chordSeg = !ev.pedalOn && sT >= firstChordT - 1e-6 ? chordSegs.find(c => sT >= c.start - 1e-6 && sT < c.end - 1e-6) : null;
     if (chordSeg) {
       // 和弦記號區段:延長到這個和弦結束(下一個和弦記號),最多 RING_CAP_WHOLE
       const capped = Math.min(toPerf(chordSeg.end), ev.tWhole + RING_CAP_WHOLE);
       rangeEnd = rangeEnd != null ? Math.max(rangeEnd, capped) : capped;
     } else {
-      for (const r of (chordSegs.length ? preChordRepeat : repeatChordRanges)) {
+      for (const r of (chordSegs.length && !ev.pedalOn ? preChordRepeat : repeatChordRanges)) {
         if (sT >= r.start && sT < r.end) {
           const capped = Math.min(toPerf(r.end), ev.tWhole + RING_CAP_WHOLE);
           rangeEnd = rangeEnd != null ? Math.max(rangeEnd, capped) : capped;
@@ -4950,8 +4960,8 @@ function buildTimeline(){
         }
       }
     }
-    // 踏板記號/圓滑線/和聲的延長都不跨過下一個和弦記號(換和弦 = 換踏板)
-    if (rangeEnd != null && chordSegs.length) {
+    // 沒踩踏板記號的音:圓滑線/和聲的延長不跨過下一個和弦記號(換和弦 = 換踏板)
+    if (rangeEnd != null && chordSegs.length && !ev.pedalOn) {
       const nc = nextChordAfter(sT);
       if (nc < Infinity) rangeEnd = Math.min(rangeEnd, Math.max(toPerf(nc), ev.tWhole));
     }
@@ -4960,6 +4970,9 @@ function buildTimeline(){
     const maxDurWhole = ev.notes.length ? Math.max(...ev.notes.map(n => n.durWhole)) : 0;
     const coChordEnd = ev.tWhole + maxDurWhole;
     ev.harmonyEndWhole = rangeEnd != null ? Math.max(rangeEnd, coChordEnd) : coChordEnd;
+    // 樂譜有踏板記號:聲音完全照踏板走(使用者要求,2026-10:「和弦中間踏板有放開,但聽起來聲音一直延續」)——
+    // 踩著踏板的音響到踏板放開,沒踩踏板的音只響自己的時值;上面的和聲延長(同時最長的音、重複音型、和弦記號、圓滑線)都不用
+    if (pedalRanges.length) ev.harmonyEndWhole = pedalEnd;
     ev.artic = findNearestEntry(articEntries, sT, MARK_MATCH_EPSILON) || null;
     // 每個音自己那一手的記號(n.artic);延長記號整個時間點都算(常常只寫在一個譜表)
     // (譜表編號對不上——例如多聲部檔案——就退回整個時間點的記號)
@@ -5702,6 +5715,7 @@ function warpMapFrom(mult){
 }
 function buildRubatoMap(){
   rubatoMap = []; tempoWordMap = [];
+  showRubatoStyle(null);
   if (events.length < 2) return;
   // 譜上的 rit./rall./accel.(tempoWordFactor):彈性速度關掉、鼓組也照做(tempoWordMap);彈性速度開著時併進模型的倍率
   const wf = events.map(ev => tempoWordFactor(ev.srcT != null ? ev.srcT : ev.tWhole));
@@ -5722,8 +5736,12 @@ function buildRubatoMap(){
   }
   const sorted = [...y].sort((a, b) => a - b), med = sorted[Math.floor(n / 2)];
   // 古典 / 非古典(scoreClassicalProb):非古典的模型起伏縮到 RUBATO_NONCLASSICAL,中間照機率內插
-  const style = RUBATO_NONCLASSICAL + (1 - RUBATO_NONCLASSICAL) * scoreClassicalProb();
-  const mult = y.map(v => Math.exp((v - med) * (v < med ? RUBATO_AMOUNT.slow : RUBATO_AMOUNT.fast) * style));
+  // 加快的部分也照機率縮:非古典完全不加快(使用者反映,2026-10:「非古典的連續十六分音符不需要突然加快」——
+  // 模型學到古典鋼琴家在密集的音符往前推,流行/抒情伴奏的十六分音符要穩)
+  const cp = scoreClassicalProb();
+  const style = RUBATO_NONCLASSICAL + (1 - RUBATO_NONCLASSICAL) * cp;
+  const fastStyle = Math.max(0, (cp - 0.25) / 0.75);   // p ≤ 0.25 不加快,p = 1 跟以前一樣
+  const mult = y.map(v => Math.exp((v - med) * (v < med ? RUBATO_AMOUNT.slow * style : RUBATO_AMOUNT.fast * fastStyle)));
   // 延長記號是罕見但明確的情況,模型會低估(訓練時佔比太小),照 ASAP 真人平均補:那一拍慢 42%、前一個音慢 38%
   // (以前最後一小節再 ×0.83,新倍率下會慢到 50%、真人 37%,拿掉)
   for (let i = 0; i < n; i++) {
