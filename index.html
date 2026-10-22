@@ -5385,12 +5385,15 @@ function harmonySymbolTimes(xmlText){
    這裡從樂譜找線索加減分(正 = 古典),scoreClassicalProb() 再加上音樂內容(切分音)換算成機率,
    buildRubatoMap 依機率縮放模型起伏(非古典約 30%);譜上的 rit./延長記號照做。沒有線索時偏古典(維持以前的行為) */
 const CLASSICAL_COMPOSERS = /\b(bach|mozart|beethoven|chopin|haydn|schubert|schumann|liszt|brahms|debussy|ravel|rachmaninoff|rachmaninov|rakhmaninov|mendelssohn|clementi|scarlatti|handel|händel|haendel|grieg|tchaikovsky|tschaikowsky|satie|czerny|burgm[uü]ller|kuhlau|prokofiev|scriabin|skryabin|faur[eé]|glinka|mussorgsky|alb[eé]niz|granados|bart[oó]k|couperin|rameau|diabelli|field|hummel|dvo[rř][aá]k|jan[aá][cč]ek|franck|saint-sa[eë]ns|chaminade|balakirev|borodin|rimsky|mompou|telemann|vivaldi|pachelbel|purcell|byrd|gibbons|soler|cimarosa|dussek|weber|alkan|godowsky|medtner|lyapunov|busoni|reger|elgar|sibelius|nielsen|poulenc|milhaud|honegger|shostakovich|kabalevsky|khachaturian|gretchaninov|heller|streabbog|lemoine|duvernoy|bertini|cramer|moszkowski|paderewski|szymanowski|rubinstein|gottschalk|joplin)\b/i;
-const CLASSICAL_TITLE = /\b(op\.?\s*\d|opus\s*\d|bwv|hwv|hob\.?|kv?\.?\s*\d|woo\s*\d|d\.\s*\d|l\.\s*\d|s\.\s*\d|sonat(a|e|ina|ine)|[eé]tudes?|studie|prelude|pr[eé]lude|praeludium|fugue?|nocturnes?|mazurkas?|polonaises?|ballade|scherzo|impromptus?|inventions?|sinfonia|partita|variations?|variationen|rondo|minuet|menuett?|concerto|fantasi[ae]|fantaisie|bagatelles?|moments? musicaux|lieder ohne worte|songs without words|gymnop[eé]die|gnossienne|arabesque|berceuse|barcarolle|toccata|allemande|courante|sarabande|gigue|gavotte|bourr[eé]e|chaconne|passacaglia|suite bergamasque|kinderszenen|album f[uü]r die jugend|well-tempered|wohltemperierte)\b/i;
+const CLASSICAL_TITLE = /\b(op\.?\s*\d|opus\s*\d|bwv|hwv|hob\.?|kv?\.?\s*\d|woo\s*\d|d\.\s*\d|l\.\s*\d|s\.\s*\d|sonat(a|e|ina|ine)|[eé]tudes?|studie|prelude|pr[eé]lude|praeludium|fugue?|nocturnes?|mazurkas?|polonaises?|ballade|scherzo|impromptus?|inventions?|sinfonia|partita|variations?|variationen|rondo|minuet|menuett?|concerto|fantasi[ae]|fantaisie|bagatelles?|moments? musicaux|lieder ohne worte|songs without words|gymnop[eé]die|gnossienne|arabesque|berceuse|barcarolle|toccata|allemande|courante|sarabande|gigue|gavotte|bourr[eé]e|chaconne|passacaglia|suite bergamasque|kinderszenen|arabeske|kreisleriana|novellet(te|ten)|papillons|carnaval|davidsb[uü]ndler|humoreske|intermezz[oi]|capriccio|rhapsod(y|ie|ies)|r[eê]verie|valse|walzer|album f[uü]r die jugend|well-tempered|wohltemperierte)\b/i;
+/* 中文/日文寫的古典作曲者與曲名(\b 對中日文無效,另外一組) */
+const CLASSICAL_COMPOSERS_CJK = /巴哈|巴赫|莫札特|莫扎特|貝多芬|贝多芬|蕭邦|肖邦|舒伯特|舒曼|李斯特|布拉姆斯|勃拉姆斯|德布西|德彪西|拉威爾|拉威尔|拉赫曼尼諾夫|拉赫玛尼诺夫|孟德爾頌|门德尔松|海頓|海顿|韓德爾|亨德尔|柴可夫斯基|葛利格|格里格|薩提|萨蒂|徹爾尼|車爾尼|车尔尼|布爾格彌勒|布格缪勒|克萊曼蒂|克列门蒂|史卡拉第|斯卡拉蒂|普羅高菲夫|普罗科菲耶夫|史克里亞賓|斯克里亚宾|佛瑞|福雷|德弗札克|德沃夏克|バッハ|モーツァルト|ベートーヴェン|ベートーベン|ショパン|シューベルト|シューマン|リスト|ブラームス|ドビュッシー|ラヴェル|ラフマニノフ|メンデルスゾーン|ハイドン|チャイコフスキー|ブルグミュラー|ツェルニー|サティ/;
+const CLASSICAL_TITLE_CJK = /奏鳴曲|奏鸣曲|練習曲|练习曲|夜曲|前奏曲|賦格|赋格|圓舞曲|圆舞曲|敘事曲|叙事曲|即興曲|即兴曲|變奏曲|变奏曲|協奏曲|协奏曲|小步舞曲|幻想曲|詼諧曲|谐谑曲|波蘭舞曲|波兰舞曲|馬厝卡|玛祖卡|搖籃曲|摇篮曲|船歌|觸技曲|托卡塔|組曲|组曲|創意曲|创意曲|平均律|作品\s*\d|ソナタ|ソナチネ|エチュード|ノクターン|ワルツ|バラード|即興曲|変奏曲|協奏曲|インヴェンション|メヌエット/;
 const CLASSICAL_TEMPO = /\b(allegro|allegretto|andante|andantino|adagio|adagietto|largo|larghetto|lento|presto|prestissimo|vivace|vivacissimo|moderato|maestoso|grave|sostenuto|cantabile|con moto|tempo di|scherzando|leggiero|leggero|agitato|animato|tranquillo|espressivo|grazioso)\b/i;
 const POP_TEMPO = /\b(moderately|moderate|ballad|swing|swung|shuffle|rock|groove|funk|funky|pop|bossa|latin|reggae|gospel|blues|bluesy|laid back|easy|medium|slowly|brightly|bright|freely|straight|half[- ]time|double[- ]time|with feeling|steady|driving|upbeat|r&b|soul|jazz waltz|country|folk|bpm)\b/i;
 const POP_SECTION = /^\s*(intro|verse|pre[- ]?chorus|chorus|refrain|bridge|outro|interlude|hook|solo|break|instrumental|tag|vamp|coda\s*\d?|v\d|ch\d?)\b|主歌|副歌|前奏|間奏|间奏|尾奏|橋段|桥段|導歌|预副歌|サビ|Aメロ|Bメロ/i;
 function detectScoreStyleMeta(xmlText, fileName){
-  let score = 0.5;   // 沒有線索時偏古典(以前一律照古典模型)
+  let score = 0.5;   // 有古典線索時照以前從 +0.5 起算;完全沒有古典線索時最後再 −0.8(見下面「沒有古典線索」)
   const reasons = [];
   const add = (v, why) => { score += v; reasons.push((v > 0 ? "+" : "") + v + " " + why); };
   let doc;
@@ -5398,8 +5401,15 @@ function detectScoreStyleMeta(xmlText, fileName){
   if (!doc || doc.getElementsByTagName("parsererror")[0]) return { score, reasons };
   const texts = tag => Array.from(doc.getElementsByTagName(tag)).map(e => e.textContent.trim()).filter(Boolean);
   const meta = [...texts("work-title"), ...texts("movement-title"), ...texts("creator"), ...texts("credit-words"), fileName || ""].join(" | ");
-  if (CLASSICAL_COMPOSERS.test(meta)) add(2.5, "作曲者");
-  if (CLASSICAL_TITLE.test(meta)) add(2, "標題");
+  const cComp = CLASSICAL_COMPOSERS.test(meta) || CLASSICAL_COMPOSERS_CJK.test(meta), cTitle = CLASSICAL_TITLE.test(meta) || CLASSICAL_TITLE_CJK.test(meta);
+  if (cComp) add(2.5, "作曲者");
+  if (cTitle) add(2, "標題");
+  // 中文/日文/韓文標題、沒有古典作曲者或曲名字眼 → 多半是流行歌(華語/日韓歌曲改編);作詞者 → 歌曲
+  const titleText = [...texts("work-title"), ...texts("movement-title"), (fileName || "").replace(/\.[^.]+$/, "")].join(" ");
+  if (!cComp && !cTitle && /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/.test(titleText)) add(-1.5, "中日韓文標題");
+  const lyricist = Array.from(doc.getElementsByTagName("creator")).some(e => (e.getAttribute("type") || "").toLowerCase() === "lyricist" && e.textContent.trim())
+    || texts("credit-words").some(w => /作詞|作词|作詞者|lyrics\s*(by)?\s*[:：]|lyricist|詞\s*[:：]|词\s*[:：]/i.test(w));
+  if (lyricist) add(-1.5, "作詞者");
   const harm = doc.getElementsByTagName("harmony").length;
   if (harm >= 4) add(-3, "和弦記號 " + harm);
   const words = [...texts("words"), ...texts("rehearsal")];
@@ -5413,6 +5423,10 @@ function detectScoreStyleMeta(xmlText, fileName){
   const perc = Array.from(doc.getElementsByTagName("sign")).some(e => e.textContent.trim().toLowerCase() === "percussion");
   if (perc || /drum|guitar|bass|vocal|voice|吉他|鼓|貝斯|人聲/.test(partNames)) add(-2, "鼓/吉他/貝斯/人聲聲部");
   if (/\.(gp|gpx|gp3|gp4|gp5)$/i.test(fileName || "") || /id="gp-/.test(xmlText)) add(-2, "Guitar Pro 檔");
+  // 完全沒有古典線索(作曲者、古典曲名、義大利文速度)時偏流行(使用者 2026-10 選的:作品大多是非古典。以前從 +0.5 起算一律偏古典,
+  // 沒有和弦記號/段落/歌詞/英文風格字的流行譜 p 0.65 被當古典彈)。只要有一個古典線索就跟以前完全一樣;
+  // ASAP 235 首古典裡沒有任何線索的(檔名也沒有作曲者)約 3% 會當流行彈
+  if (!cComp && !cTitle && !CLASSICAL_TEMPO.test(tempoText)) add(-0.8, "沒有古典線索");
   return { score, reasons };
 }
 /* 加上音樂內容:切分音(反拍起音、延續過下一拍)比例。流行/爵士伴奏與旋律常見(> 15%),古典鋼琴曲多半 < 5% */
