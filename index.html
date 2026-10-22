@@ -5759,6 +5759,46 @@ function rubatoPredict(x){
   for (const [f, thr, L, R, val] of M.trees) { let k = 0; while (L[k] !== -1) k = x[f[k]] <= thr[k] ? L[k] : R[k]; v += val[k]; }
   return v;
 }
+/* 流行抒情的呼吸(使用者:「感情不夠!」,2026-10;非古典才用,只放慢不加快——非古典的連續十六分音符不能突然加快):
+   ① 段落結尾最後一拍漸慢到 sectionEnd(進副歌前 toChorus,多吸一口氣)② 每 4 小節一個樂句(從段落開頭起算,沒有段落記號就從第一小節):
+   樂句最後半拍拉寬到 phraseEnd ③ 樂句裡旋律(右手最高音)的最高點停留 peak、前一個音 peakPrev ④ 最後一段的最後 endBars 小節漸慢到 end
+   (譜上已經有 rit./rall. 的地方取較慢的,不疊加)。回傳每個事件的倍率(1 = 原速) */
+const POP_BREATH = { sectionEnd: 0.88, toChorus: 0.85, phraseEnd: 0.94, peak: 0.93, peakPrev: 0.97, endBars: 2, end: 0.85 };
+function popBreathFactors(){
+  const n = events.length, f = new Array(n).fill(1), eps = 1e-6;
+  const src = events.map(ev => ev.srcT != null ? ev.srcT : ev.tWhole);
+  const barLen = events.find(ev => ev.barLen > 0)?.barLen || 1, beat = events.find(ev => ev.beatLen > 0)?.beatLen || 0.25;
+  const endT = Math.max(...src) + 1e-3;
+  const slowTo = (t0, t1, target) => {   // [t0, t1) 線性放慢到 target(用每個音到下一個音這段的中點算進度)
+    for (let i = 0; i < n; i++) if (src[i] >= t0 - eps && src[i] < t1 - eps) {
+      const nx = i + 1 < n && src[i + 1] > src[i] ? Math.min(src[i + 1], t1) : t1;
+      const p = ((src[i] + nx) / 2 - t0) / Math.max(eps, t1 - t0);
+      f[i] = Math.min(f[i], 1 + (target - 1) * Math.max(0, Math.min(1, p)));
+    }
+  };
+  const S = scoreSections;
+  // ① 段落交界
+  for (let k = 1; k < S.length; k++) slowTo(S[k].t - beat, S[k].t, S[k].kind === "chorus" ? POP_BREATH.toChorus : POP_BREATH.sectionEnd);
+  // ② ③ 樂句(4 小節)
+  const starts = S.length ? S.map(x => x.t) : [0];
+  const phrases = [];
+  starts.forEach((st, k) => { const en = k + 1 < starts.length ? starts[k + 1] : endT; for (let a = st; a < en - eps; a += 4 * barLen) phrases.push([a, Math.min(en, a + 4 * barLen)]); });
+  if (S.length && S[0].t > eps) phrases.unshift([0, S[0].t]);
+  for (const [a, b] of phrases) {
+    if (b - a >= 2 * barLen - eps) slowTo(b - beat / 2, b, POP_BREATH.phraseEnd);
+    let best = -1, bi = -1;
+    for (let i = 0; i < n; i++) if (src[i] >= a - eps && src[i] < b - eps) {
+      const rh = events[i].notes.filter(x => !x.drum && x.freq && (x.staff || 1) === 1);
+      if (!rh.length) continue;
+      const top = Math.max(...rh.map(x => x.freq));
+      if (top > best + 1e-6) { best = top; bi = i; }
+    }
+    if (bi >= 0) { f[bi] = Math.min(f[bi], POP_BREATH.peak); if (bi > 0 && src[bi - 1] >= a - eps) f[bi - 1] = Math.min(f[bi - 1], POP_BREATH.peakPrev); }
+  }
+  // ④ 曲尾
+  slowTo(endT - POP_BREATH.endBars * barLen, endT, POP_BREATH.end);
+  return f;
+}
 /* 每個事件的速度倍率 → 等效全音符座標表(rubatoMap / tempoWordMap 共用) */
 function warpMapFrom(mult){
   const n = events.length, T = events.map(ev => ev.tWhole), map = [];
@@ -5802,6 +5842,7 @@ function buildRubatoMap(){
   // 加快的部分也照機率縮:非古典完全不加快(使用者反映,2026-10:「非古典的連續十六分音符不需要突然加快」——
   // 模型學到古典鋼琴家在密集的音符往前推,流行/抒情伴奏的十六分音符要穩)
   const cp = scoreClassicalProb();
+  const popBreath = cp < 0.5 ? popBreathFactors() : null;   // 非古典:流行抒情的呼吸(只放慢,見 POP_BREATH)
   const style = RUBATO_NONCLASSICAL + (1 - RUBATO_NONCLASSICAL) * cp;
   const fastStyle = Math.max(0, (cp - 0.25) / 0.75);   // p ≤ 0.25 不加快,p = 1 跟以前一樣
   const mult = y.map(v => Math.exp((v - med) * (v < med ? RUBATO_AMOUNT.slow * style : RUBATO_AMOUNT.fast * fastStyle)));
@@ -5813,6 +5854,7 @@ function buildRubatoMap(){
     else if (an.fermata) mult[i] = Math.min(mult[i], 0.62);
     // 譜上的 rit./accel.:至少慢/快到速度文字的曲線(模型本身也有 rit. 特徵,取較明顯的,不重複疊加)
     if (wf[i] < 1) mult[i] = Math.min(mult[i], wf[i]); else if (wf[i] > 1) mult[i] = Math.max(mult[i], wf[i]);
+    if (popBreath) mult[i] *= popBreath[i];
     mult[i] = Math.max(RUBATO_MULT_RANGE[0], Math.min(RUBATO_MULT_RANGE[1], mult[i]));
   }
   rubatoMap = warpMapFrom(mult);
@@ -7307,7 +7349,9 @@ function pianoEndContour(nb, multiStaff){
    做法:非古典(classicalProbInfo().p < 0.5)時,旋律(右手最高音)再 +PIANO_POP.melody、右手內聲部與左手再 −PIANO_POP.accomp;
    有段落記號就照 PIANO_SECTION 加段落力度(導歌從 from 漸強到 to),段落開頭一拍內接上;依織度估的段落大小聲(pianoAutoMacro)
    改成 ×PIANO_POP.macroWithSections,以段落記號為主。譜上有力度記號時段落力度只用一半(以譜為主) */
-const PIANO_POP = { melody: 4, accomp: 3, macroWithSections: 0.5 };
+/* 2026-10 第二版(使用者:「感情不夠!」):POP909 是電腦編曲檔,大小聲保守;真人彈抒情流行段落差距大得多 →
+   段落力度 ×sectionGain 2、旋律起伏(往上漸強、往下漸弱)每半音 contour 0.6 力度、上限 ±contourMax 7(古典 0.35、±4) */
+const PIANO_POP = { melody: 4, accomp: 3, macroWithSections: 0.5, sectionGain: 2, contour: 0.6, contourMax: 7 };
 const PIANO_SECTION = { intro: -7, verse: -1.5, prechorus: [-1, 1.5], chorus: 2.5, bridge: 1.5, interlude: -2, solo: 0, outro: -5 };
 function sectionKind(text){
   const s = String(text || "").toLowerCase().replace(/[\s._\-–—]+/g, " ").trim();
@@ -7374,7 +7418,7 @@ function computePianoDynamics(){
       // 段落力度(每小節一個值,換小節會整個跳)在這兩小節固定成開頭那小節的值,大小聲變化全交給旋律線條
       const macroBar = fromEnd < PIANO_END.bars ? Math.max(0, Math.min(bar, auto.nb - PIANO_END.bars)) : bar;
       let m = (auto.macro[macroBar] || 0) * (popSections ? PIANO_POP.macroWithSections : 1) + archW * (arch(4, 4) + arch(8, 5));
-      if (popSections) base += pianoSectionOffset(ev.srcT, ev.beatLen) * (hasMarks ? 0.5 : 1);
+      if (popSections) base += pianoSectionOffset(ev.srcT, ev.beatLen) * PIANO_POP.sectionGain * (hasMarks ? 0.5 : 1);
       if (fromEnd < PIANO_END.bars) m += endContour(bar + pos);
       base += m * auto.scale;
     }
@@ -7395,7 +7439,7 @@ function computePianoDynamics(){
         if (rh) {
           if (n === top) {
             v += (ns.length > 1 ? 6 : 4) + (pop ? PIANO_POP.melody : 0);
-            if (melodyHist.length) v += Math.max(-4, Math.min(4, (m - melodyHist.reduce((s, x) => s + x, 0) / melodyHist.length) * 0.35));
+            if (melodyHist.length) { const cmax = pop ? PIANO_POP.contourMax : 4; v += Math.max(-cmax, Math.min(cmax, (m - melodyHist.reduce((s, x) => s + x, 0) / melodyHist.length) * (pop ? PIANO_POP.contour : 0.35))); }
             melodyHist.push(m); if (melodyHist.length > 8) melodyHist.shift();
           } else v -= 5 + (pop ? PIANO_POP.accomp : 0);
         } else {
