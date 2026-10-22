@@ -1959,6 +1959,7 @@ function metronomeUnitLabel(beatUnit, dotCount){
 let scoreDynMarks = [], scoreWedges = []; // 力度記號與髮夾(記譜位置),鼓的整首力度用
 let scoreDynOffsets = [];
 let scoreChokeTimes = [];   // 鼓譜的止音文字(Mute / Choke…)位置(記譜位置),見 markDrumChokes   // una corda 等整段力度偏移 {start, end, delta}(記譜位置)
+let scoreSections = [];     // 段落 {t: 記譜位置, kind}(sectionKind;非古典的段落力度用,見 PIANO_SECTION)
 let scoreTempoSpans = [];   // rit./rall./accel. 的範圍 {start, end, hold, kind, target}(resolveTempoWordSpans,一定照做的速度曲線)
 let scoreTempoWords = [];   // 速度文字 {t: 記譜位置, kind: "rit" | "accel" | "atempo"}(rit./rall./a tempo…,彈性速度模型用)
 let ghostNoteheadEntries = {}; // 同上,記錄括號符頭(鬼音 ghost note,輕輕帶過的小鼓等),播放時用最輕的力度層
@@ -2463,6 +2464,7 @@ async function loadScoreFile(file){
     scoreDynMarks = parsed.dynMarks || [];
     scoreTempoWords = parsed.tempoWords || [];
     scoreTempoSpans = parsed.tempoSpans || [];
+    scoreSections = (parsed.sections || []).map(x => ({ t: x.t, kind: sectionKind(x.text) })).filter(x => x.kind).sort((a, b) => a.t - b.t);
     scoreWedges = parsed.wedges || [];
     scoreDynOffsets = parsed.dynOffsets || [];
     scoreChokeTimes = parsed.chokeTimes || [];
@@ -3932,6 +3934,7 @@ function parseXmlTimeline(xmlText){
     const wordActs = [];   // 力度文字 {t, a: dynamicWordActions(), dash: 虛線編號}(soft、dolce、cresc.…,見 resolveScoreDynamicWords)
     const dashStops = [];  // 虛線結束 {t, num}
     const chokeTimes = []; // 止音文字 Mute / Choke 的位置(鼓譜用)
+    const sections = [];   // 段落記號/段落文字 {t, text}(Intro / Verse / Chorus / 主歌 / 副歌…,sectionKind)
     const staffOnsets = {}; // staffNum -> [{tWhole, durWhole, pcs:Set}], 給重複音型偵測用
     const articMap = {}; // tWhole(定點字串) -> {accent,strongAccent,staccato,staccatissimo,tenuto,detachedLegato,spiccato,softAccent,fermata}
     const arpMap = {}; // tWhole(定點字串) -> "up"/"down",分解和弦(琶音)標記
@@ -4000,7 +4003,9 @@ function parseXmlTimeline(xmlText){
           const dynEl = child.getElementsByTagName("dynamics")[0];
           // gp-default-dynamics:Guitar Pro 匯入時第一個預設 f 只是顯示(見 gpToMusicXML),不當成力度記號
           if (dynEl && dynEl.children[0] && child.getAttribute("id") !== "gp-default-dynamics") dynMarks.push({ t: cursor, mark: dynEl.children[0].tagName.toLowerCase() });
+          for (const rEl of Array.from(child.getElementsByTagName("rehearsal"))) sections.push({ t: cursor, text: rEl.textContent.trim() });
           for (const wEl of Array.from(child.getElementsByTagName("words"))) {
+            if (sectionKind(wEl.textContent)) sections.push({ t: cursor, text: wEl.textContent.trim() });
             const kind = tempoWordKind(wEl.textContent);
             if (kind) {
               const dsh = Array.from(child.getElementsByTagName("dashes")).find(d => d.getAttribute("type") === "start");
@@ -4212,7 +4217,7 @@ function parseXmlTimeline(xmlText){
     const measureRanges = measureBoundaries.map((start, i) => ({
       start, end: i + 1 < measureBoundaries.length ? measureBoundaries[i + 1] : cursor
     }));
-    return { slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges, articMap, arpMap, soundTempo, metronomeDisplay, timeSig, isDrumScore, crossNoteheadMap, ghostNoteheadMap, dynMarks, dynOffsets, chokeTimes, tempoWords, tempoSpans, wedges, measureRanges, guitarTechMap, vibratoRanges: outWavyLines, scoreTitle };
+    return { slurRanges: outSlurs, pedalRanges: outPedals, repeatRanges, articMap, arpMap, soundTempo, metronomeDisplay, timeSig, isDrumScore, crossNoteheadMap, ghostNoteheadMap, dynMarks, dynOffsets, chokeTimes, tempoWords, tempoSpans, sections, wedges, measureRanges, guitarTechMap, vibratoRanges: outWavyLines, scoreTitle };
   } catch (e) {
     console.error("讀取踏板/圓滑線資訊失敗:", e);
     return { slurRanges: [], pedalRanges: [], repeatRanges: [], articMap: {}, arpMap: {}, soundTempo: null, metronomeDisplay: null, timeSig: null, isDrumScore: false, crossNoteheadMap: {}, measureRanges: [], guitarTechMap: {}, vibratoRanges: [], scoreTitle: null };
@@ -7293,9 +7298,50 @@ function pianoEndContour(nb, multiStaff){
     return w * Math.max(-PIANO_END.max, Math.min(PIANO_END.max, (sm[i] - p0) * k));
   };
 }
+/* ── 非古典(流行/抒情)的彈法(使用者要求,2026-10:「改進情感的部分」「幫我判斷非古典音樂通常怎麼彈,先規劃再做」)──
+   依 POP909(909 首華語流行歌的鋼琴編曲 MIDI,MIT;段落用 Dai et al. 2020 的人工標注,只拿來量數字、不放 repo)量出來:
+   ① 旋律比伴奏大聲:旋律軌平均力度比伴奏軌高 15(中位數,四分位 5~22)——最明顯的特徵;App 原本旋律只比左手大約 8~10、
+      右手和弦內音 −5,實測〈甲乙丙丁〉右手平均只比左手大 5 ② 段落(相對整首平均力度):前奏 −7、主歌 −1、副歌 +2、
+      副旋律/橋段 +1.5~2、間奏 −1.5、尾奏 −4;最後一次副歌跟第一次一樣大(中位數 0),不用越來越大 ③ 時間對齊格子(離 16 分格 < 1ms),
+      沒有速度起伏的資訊,所以速度不另外加(維持穩定拍子 + 譜上 rit.)。
+   做法:非古典(classicalProbInfo().p < 0.5)時,旋律(右手最高音)再 +PIANO_POP.melody、右手內聲部與左手再 −PIANO_POP.accomp;
+   有段落記號就照 PIANO_SECTION 加段落力度(導歌從 from 漸強到 to),段落開頭一拍內接上;依織度估的段落大小聲(pianoAutoMacro)
+   改成 ×PIANO_POP.macroWithSections,以段落記號為主。譜上有力度記號時段落力度只用一半(以譜為主) */
+const PIANO_POP = { melody: 4, accomp: 3, macroWithSections: 0.5 };
+const PIANO_SECTION = { intro: -7, verse: -1.5, prechorus: [-1, 1.5], chorus: 2.5, bridge: 1.5, interlude: -2, solo: 0, outro: -5 };
+function sectionKind(text){
+  const s = String(text || "").toLowerCase().replace(/[\s._\-–—]+/g, " ").trim();
+  if (!s || s.length > 24) return null;
+  if (/^(intro|introduction|prelude)\b|前奏|イントロ/.test(s)) return "intro";
+  if (/^(pre ?chorus|pre ?hook|build ?up|lift|channel)\b|導歌|导歌|預副歌|预副歌|bメロ/.test(s)) return "prechorus";
+  if (/^(chorus|refrain|hook)\b|副歌|サビ/.test(s)) return "chorus";
+  if (/^(verse)\b|^v\d\b|主歌|aメロ/.test(s)) return "verse";
+  if (/^(bridge|middle 8|cメロ)\b|橋段|桥段|cメロ|大サビ前/.test(s)) return "bridge";
+  if (/^(interlude|instrumental|break|inst)\b|間奏|间奏/.test(s)) return "interlude";
+  if (/^(solo)\b|獨奏|独奏|ソロ/.test(s)) return "solo";
+  if (/^(outro|ending|coda|tag|fine)\b|尾奏|結尾|结尾|アウトロ/.test(s)) return "outro";
+  return null;
+}
+/* 記譜位置 → 段落力度(力度單位);段落開頭一拍內從前一段接過來,導歌整段線性漸強 */
+function pianoSectionOffset(srcT, beatLen){
+  const S = scoreSections;
+  if (!S.length || srcT == null || srcT < S[0].t - 1e-6) return 0;
+  let i = 0; for (let j = 0; j < S.length; j++) if (S[j].t <= srcT + 1e-6) i = j;
+  const val = (k, t) => {
+    const v = PIANO_SECTION[S[k].kind];
+    if (!Array.isArray(v)) return v || 0;
+    const end = k + 1 < S.length ? S[k + 1].t : totalWhole;
+    const p = Math.max(0, Math.min(1, (t - S[k].t) / Math.max(1e-6, end - S[k].t)));
+    return v[0] + (v[1] - v[0]) * p;
+  };
+  const cur = val(i, srcT), fade = Math.max(0.0625, beatLen || 0.25);
+  if (i > 0 && srcT - S[i].t < fade) { const w = (srcT - S[i].t) / fade; return val(i - 1, S[i].t) * (1 - w) + cur * w; }
+  return cur;
+}
 function computePianoDynamics(){
   const multiStaff = events.some(ev => ev.notes.some(n => !n.drum && n.freq && (n.staff || 1) > 1));
   const hasMarks = scoreDynMarks.length > 0;
+  const pop = classicalProbInfo().p < 0.5, popSections = pop && scoreSections.length > 0;   // 非古典的彈法(PIANO_POP)
   const auto = pianoAutoMacro(hasMarks);
   const endContour = pianoEndContour(auto.nb, multiStaff);
   const drift = { 1: 0, 2: 0 };
@@ -7327,7 +7373,8 @@ function computePianoDynamics(){
       const archW = fromEnd < PIANO_END.bars ? fromEnd / PIANO_END.bars : 1;
       // 段落力度(每小節一個值,換小節會整個跳)在這兩小節固定成開頭那小節的值,大小聲變化全交給旋律線條
       const macroBar = fromEnd < PIANO_END.bars ? Math.max(0, Math.min(bar, auto.nb - PIANO_END.bars)) : bar;
-      let m = (auto.macro[macroBar] || 0) + archW * (arch(4, 4) + arch(8, 5));
+      let m = (auto.macro[macroBar] || 0) * (popSections ? PIANO_POP.macroWithSections : 1) + archW * (arch(4, 4) + arch(8, 5));
+      if (popSections) base += pianoSectionOffset(ev.srcT, ev.beatLen) * (hasMarks ? 0.5 : 1);
       if (fromEnd < PIANO_END.bars) m += endContour(bar + pos);
       base += m * auto.scale;
     }
@@ -7347,12 +7394,12 @@ function computePianoDynamics(){
         const accDb = (na ? (na.strongAccent ? PIANO_ACCENT_DB.strong : na.accent ? PIANO_ACCENT_DB.accent : na.softAccent ? PIANO_ACCENT_DB.soft : 0) : 0) + momDb;
         if (rh) {
           if (n === top) {
-            v += ns.length > 1 ? 6 : 4;
+            v += (ns.length > 1 ? 6 : 4) + (pop ? PIANO_POP.melody : 0);
             if (melodyHist.length) v += Math.max(-4, Math.min(4, (m - melodyHist.reduce((s, x) => s + x, 0) / melodyHist.length) * 0.35));
             melodyHist.push(m); if (melodyHist.length > 8) melodyHist.shift();
-          } else v -= 5;
+          } else v -= 5 + (pop ? PIANO_POP.accomp : 0);
         } else {
-          v -= 4;
+          v -= 4 + (pop ? PIANO_POP.accomp : 0);
           if (ns.length > 1) v += n === bottom ? 3 : -3;
         }
         if (n.durWhole >= 0.5) v += 2; else if (n.durWhole <= 1 / 16 + 1e-6) v -= 2;
