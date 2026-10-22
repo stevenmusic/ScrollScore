@@ -3730,10 +3730,10 @@ function roundRehearsalBoxes(root){
 function extendLedgerLineStems(root){
   const svg = (root || $("score")).querySelector("svg");
   if (!svg) return;
-  const beamRanges = Array.from(svg.querySelectorAll(".vf-beam")).map(b => {
-    const bbox = b.getBBox();
-    return [bbox.x, bbox.x + bbox.width];
-  });
+  // 符尾(beam)的範圍要連高度一起比:以前只比 x,另一個譜表剛好有符尾經過的音(〈甲乙丙丁〉第 45 小節左手 A4,上面右手是十六分音符)
+  // 被當成「屬於符尾」跳過,符桿沒有接到中線(使用者反映 2026-10)
+  const beamBoxes = Array.from(svg.querySelectorAll(".vf-beam")).map(b => b.getBBox());
+  const onBeam = (x, tip) => beamBoxes.some(bb => x >= bb.x - 2 && x <= bb.x + bb.width + 2 && tip >= bb.y - 3 && tip <= bb.y + bb.height + 3);
   for (const staffGroup of Array.from(svg.querySelectorAll(".staffline"))) {
     // 這個staffline底下所有量測用的5條譜線是「水平、貫穿整個系統寬度」的path,
     // 用這個特徵跟同樣是水平線但很短的加線(ledger line,只有音符頭寬度)區分開來,
@@ -3751,19 +3751,28 @@ function extendLedgerLineStems(root){
     const middleY = (topY + bottomY) / 2;
     const halfGap = (bottomY - topY) / 8; // 5條線4個間隔,取半個間隔當「還在譜表內」的容許範圍
     for (const sn of Array.from(staffGroup.querySelectorAll(".vf-stavenote"))) {
-      if (sn.querySelectorAll(".vf-notehead").length !== 1) continue; // 和弦跳過,只處理單音
       const stemPath = sn.querySelector(".vf-stem path");
       if (!stemPath) continue;
       const m = (stemPath.getAttribute("d") || "").match(/^M([\d.]+) ([\d.]+)L[\d.]+ ([\d.]+)$/);
       if (!m) continue;
-      const x = parseFloat(m[1]), noteheadY = parseFloat(m[2]), tipY = parseFloat(m[3]);
-      const hasLedger = noteheadY < topY - halfGap || noteheadY > bottomY + halfGap;
+      const heads = Array.from(sn.querySelectorAll(".vf-notehead")).map(h => { const bb = h.getBBox(); return bb.y + bb.height / 2; });
+      if (!heads.length) continue;
+      const x = parseFloat(m[1]), y0 = parseFloat(m[2]), y1 = parseFloat(m[3]);
+      const hMid = (Math.min(...heads) + Math.max(...heads)) / 2;
+      const tipIs1 = Math.abs(y1 - hMid) >= Math.abs(y0 - hMid), tipY = tipIs1 ? y1 : y0;
+      const up = tipY < hMid;
+      // 離符桿尾端最近的符頭(和弦也算,以前和弦整個跳過):它在譜表外(有加線)時,符桿要接到中線
+      const near = up ? Math.min(...heads) : Math.max(...heads);
+      const hasLedger = near < topY - halfGap || near > bottomY + halfGap;
       if (!hasLedger) continue;
       // 只延長「往中線方向」而且還沒到中線的符桿。往譜表外的符桿(下加線的音符桿朝下、上加線的朝上)不動——
       // 以前不分方向一律接到中線,朝下的符桿被翻成往上、接在符頭左側(使用者反映鼓譜踏板 hi-hat,2026-10)
-      if ((tipY - noteheadY) * (middleY - noteheadY) <= 0 || Math.abs(tipY - noteheadY) >= Math.abs(middleY - noteheadY)) continue;
-      if (beamRanges.some(([lo, hi]) => x >= lo - 2 && x <= hi + 2)) continue; // 屬於符尾,跳過避免弄亂角度
-      stemPath.setAttribute("d", `M${x} ${noteheadY}L${x} ${middleY}`);
+      if ((tipY - near) * (middleY - near) <= 0 || Math.abs(tipY - near) >= Math.abs(middleY - near)) continue;
+      if (onBeam(x, tipY)) continue; // 屬於符尾,跳過避免弄亂角度
+      stemPath.setAttribute("d", tipIs1 ? `M${x} ${y0}L${x} ${middleY}` : `M${x} ${middleY}L${x} ${y1}`);
+      // 單音的符尾旗(八分/十六分音符)跟著符桿尾端移動
+      const flag = sn.querySelector(".vf-flag");
+      if (flag) { const dy = middleY - tipY, t = flag.getAttribute("transform") || ""; flag.setAttribute("transform", `translate(0 ${dy.toFixed(2)}) ${t}`.trim()); }
     }
   }
 }
@@ -3778,6 +3787,60 @@ function extendLedgerLineStems(root){
    的最小拱高,不比原本高、也不低於 min(SLUR_FLAT.minH, 寬度 × SLUR_FLAT.minRatio),再用新的曲線更新輪廓線。
    兩端各 SLUR_FLAT.endSkip 格內不檢查(端點本來就貼著音符)。不會跟任何東西重疊(檢查的就是 OSMD 用來排距離的輪廓線) */
 const SLUR_FLAT = { clear: 0.6, minH: 1.2, minRatio: 0.2, endSkip: 1, minLen: 6, shapes: [0.25, 0.18, 0.12, 0.07] };
+/* 跨兩個譜表的琶音(使用者反映 2026-10:第 28 小節琶音從左手延伸到右手,網頁上左手那段不見了)。MuseScore 匯出跨譜表琶音時
+   兩個譜表各寫一個 <arpeggiate>(編號不同),只有一個音的那一手 OSMD 不畫(VexFlow 的 Stroke 只畫兩個音以上的和弦)。
+   這裡把「同一個時間點、另一個譜表也有琶音」的單音琶音接到那一條線上:畫的時候把線延長到單音那一手的符頭。
+   兩個譜表都是和弦(各自兩個音以上)時照原檔分開畫 */
+const crossArp = { single: new Map(), strokes: new Map() };
+function installCrossStaffArpeggio(){
+  const M = window.opensheetmusicdisplay && opensheetmusicdisplay.VexFlowMeasure;
+  if (!M || !M.prototype.createArpeggio || M.prototype.__ssArp) return;
+  const orig = M.prototype.createArpeggio;
+  M.prototype.__ssArp = true;
+  let patched = false;
+  const patchDraw = st => {
+    if (patched) return;
+    patched = true;
+    const P = Object.getPrototypeOf(st), draw = P.draw;
+    P.draw = function(){
+      const others = this.__ssArpOthers;
+      if (!others || !others.length) return draw.call(this);
+      const mc = this.getModifierContext(), prevAll = this.all_voices;
+      // 畫右手時左手那一行的 stave 可能還沒定位(OSMD 畫到哪一小節才設座標),所以左手音的高度改用
+      // 「相對自己譜表的位置 + 兩個譜表在 OSMD 版面上的距離」換算
+      let myM, myY; try { myM = this.__ssArpMeasure; myY = this.note.stave.y; } catch (e) { return draw.call(this); }
+      const fake = others.map(o => ({ getYs: () => { try {
+        const dy = (o.measure.PositionAndShape.AbsolutePosition.y - myM.PositionAndShape.AbsolutePosition.y) * 10;
+        const r = o.note.getYs().map(y => y - o.note.stave.y + myY + dy); return r;
+      } catch (e) { return []; } } }));
+      this.getModifierContext = () => ({ getModifiers: cat => mc.getModifiers(cat).concat(fake) });
+      this.all_voices = true;
+      try { return draw.call(this); }
+      finally { delete this.getModifierContext; this.all_voices = prevAll; }
+    };
+  };
+  const link = (st, rec) => { if (st.__ssArpStaff !== rec.staff) (st.__ssArpOthers || (st.__ssArpOthers = [])).push(rec); };
+  M.prototype.createArpeggio = function(gve){
+    orig.call(this, gve);
+    try {
+      if (!gve || !gve.parentVoiceEntry || !gve.parentVoiceEntry.Arpeggio || !gve.vfStaveNote || !gve.notes) return;
+      const se = gve.parentStaffEntry;
+      const key = this.MeasureNumber + "@" + se.getAbsoluteTimestamp().RealValue.toFixed(6);
+      const staff = this.ParentStaff ? this.ParentStaff.idInMusicSheet : 0;
+      if (gve.notes.length === 1) {
+        const rec = { note: gve.vfStaveNote, staff, measure: this };
+        (crossArp.single.get(key) || crossArp.single.set(key, []).get(key)).push(rec);
+        for (const st of crossArp.strokes.get(key) || []) link(st, rec);
+        return;
+      }
+      const st = (gve.vfStaveNote.modifiers || []).find(x => x && x.getCategory && x.getCategory() === "strokes");
+      if (!st) return;
+      st.__ssArpStaff = staff; st.__ssArpMeasure = this; patchDraw(st);
+      (crossArp.strokes.get(key) || crossArp.strokes.set(key, []).get(key)).push(st);
+      for (const r of crossArp.single.get(key) || []) link(st, r);
+    } catch (e) {}
+  };
+}
 function installSlurFlattening(){
   const G = window.opensheetmusicdisplay && opensheetmusicdisplay.GraphicalSlur;
   if (!G || !G.prototype.calculateCurve || G.prototype.__ssFlat) return;
@@ -3872,6 +3935,7 @@ async function renderScore(xmlText){
   });
   osmd.EngravingRules.RenderSingleHorizontalStaffline = true;
   installSlurFlattening();
+  installCrossStaffArpeggio(); crossArp.single.clear(); crossArp.strokes.clear();
   // OSMD 預設把整行寬度上限設在 32767(canvas 的限制),長曲子(例如蕭邦敘事曲 264 小節)超過就會被折成第二行,
   // 橫向捲動整個錯掉。這裡用 SVG,沒有這個限制;匯出影片點陣化本來就切成 4000px 的 tile
   osmd.EngravingRules.SheetMaximumWidth = 1e7;
@@ -3897,11 +3961,11 @@ async function renderScore(xmlText){
   // VexFlow 卻照符桿頂端算,會被下面大鼓/小鼓的高低帶歪(三個同高的 hi-hat 符尾斜將近一格)。鼓譜教材多用水平符尾
   if (osmd.EngravingRules) osmd.EngravingRules.FlatBeams = DRUM_ENGRAVING_RULES && /sign>\s*percussion/.test(finalXml);
   osmd.EngravingRules.RenderPedals = $("showPedalMarks").checked;   // 預設不畫(很佔空間);播放照樣依譜上踏板
-  osmd.render();
+  crossArp.single.clear(); crossArp.strokes.clear(); osmd.render();
   // 單行橫向排版時,一個地方的記號太遠,整首曲子的譜表間距都會被撐開。OSMD 的踏板記號在某些檔案會一層層往下疊
   // (蕭邦第一號敘事曲 465 個踏板記號,疊到譜表下方 140 格,畫面上看不到譜表)。排出來太誇張時改成不畫踏板記號
   // (踏板的播放照樣依原檔),一般曲子不受影響
-  if (osmd.EngravingRules.RenderPedals && scoreLayoutTooTall()) { osmd.EngravingRules.RenderPedals = false; osmd.render(); }
+  if (osmd.EngravingRules.RenderPedals && scoreLayoutTooTall()) { osmd.EngravingRules.RenderPedals = false; crossArp.single.clear(); crossArp.strokes.clear(); osmd.render(); }
   if (finalXml.includes('id="gp-hide-clef-octave"')) hideClefOctaveMarks();
   roundRehearsalBoxes();
   extendLedgerLineStems(); // OSMD符桿長度是固定值,不會因為加線音符離譜表遠就自動加長,這裡渲染完手動補上
@@ -5116,6 +5180,14 @@ function buildTimeline(){
         for (const gn of groupNums) {
           if (arpInfo.groups[gn].notes.has(noteKey)) { byGroup[gn].push(n); break; }
         }
+      }
+      // 跨譜表琶音(MuseScore 兩手各寫一個編號):只有一個音的那組接到另一手的琶音裡一起滾(第 28 小節左手 C4 → 右手 G4 B♭4 E5),
+      // 以前單音那組被略過、在拍點上跟最後一個音一起彈
+      for (const gn of groupNums) {
+        if (byGroup[gn].length !== 1) continue;
+        const st = byGroup[gn][0].staff || 1;
+        const host = groupNums.find(g2 => g2 !== gn && byGroup[g2].length > 1 && byGroup[g2].every(x => (x.staff || 1) !== st));
+        if (host) { byGroup[host].push(byGroup[gn][0]); byGroup[gn] = []; }
       }
       const activeGroups = groupNums.filter(gn => byGroup[gn].length > 1);
       if (activeGroups.length === 1) {
@@ -7595,7 +7667,7 @@ function pianoEndContour(nb, multiStaff){
 /* 2026-10 第二版(使用者:「感情不夠!」):POP909 是電腦編曲檔,大小聲保守;真人彈抒情流行段落差距大得多 →
    段落力度 ×sectionGain 2、旋律起伏(往上漸強、往下漸弱)每半音 contour 0.6 力度、上限 ±contourMax 7(古典 0.35、±4) */
 const PIANO_POP = { melody: 4, accomp: 3, macroWithSections: 0.5, sectionGain: 2, contour: 0.6, contourMax: 6, contourNear: 1, contourFar: 2, lineWin: 1, lineGap: 3, lhFiller: 8 };
-const PIANO_SECTION = { intro: -7, verse: -1.5, prechorus: [-1, 1.5], chorus: 2.5, bridge: 1.5, interlude: -2, solo: 0, outro: -5 };
+const PIANO_SECTION = { intro: -7, verse: -1.5, prechorus: [0.5, 2], chorus: 2.5, bridge: 1.5, interlude: -2, solo: 0, outro: -5 };
 function sectionKind(text){
   const s = String(text || "").toLowerCase().replace(/[\s._\-–—]+/g, " ").trim();
   if (!s || s.length > 24) return null;
@@ -7613,8 +7685,10 @@ function sectionKind(text){
 /* 段落的力度倍率(第三版,使用者:「前奏的旋律聽起來也很用力!不是音量,是音色」):Salamander 每種力度是分開錄的,
    前奏/主歌旋律 60~71 用的是中強那幾層錄音(亮、有敲擊感),之後被壓縮器/限幅器拉成小音量,聽起來就是「小聲但每個音都很用力」。
    輕的段落要真的用小力度彈才會換到柔和的錄音:最後的力度依段落乘倍率(伴奏同比例,旋律與伴奏的比例不變)。
-   〈甲乙丙丁〉旋律 前奏 60 → 45、主歌 71 → 57、導歌 74 → 60 漸強到 74、副歌 71 → 76 */
-const PIANO_SECTION_MUL = { intro: 0.75, verse: 0.8, prechorus: [0.81, 1.0], chorus: 1.07, bridge: 1.0, interlude: 0.8, solo: 0.9, outro: 0.75 };
+   〈甲乙丙丁〉旋律 前奏 60 → 45、主歌 71 → 57、導歌 74 → 60 漸強到 74、副歌 71 → 76。
+   導歌一開始就比主歌明顯(使用者 2026-10:「導歌也聽起來那麼弱」;以前從 0.81 = 主歌的大小開始,第 13~14 小節旋律 48/56 比主歌還輕):
+   導歌 0.9 → 1.02、段落力度 +0.5 → +2 */
+const PIANO_SECTION_MUL = { intro: 0.75, verse: 0.8, prechorus: [0.9, 1.02], chorus: 1.07, bridge: 1.0, interlude: 0.8, solo: 0.9, outro: 0.75 };
 function pianoSectionOffset(srcT, beatLen, table, barLen){
   const S = scoreSections, T = table || PIANO_SECTION, none = table ? 1 : 0;
   if (!S.length || srcT == null || srcT < S[0].t - 1e-6) return none;
@@ -11828,7 +11902,7 @@ async function renderPageOsmd(contentW, sp){
   o.zoom = sp / 10;
   R.FlatBeams = M.FlatBeams;
   R.RenderPedals = M.RenderPedals;
-  o.render();
+  installCrossStaffArpeggio(); crossArp.single.clear(); crossArp.strokes.clear(); o.render();
   if (lastRenderedXml.includes('id="gp-hide-clef-octave"')) hideClefOctaveMarks(host);
   roundRehearsalBoxes(host);
   extendLedgerLineStems(host);
