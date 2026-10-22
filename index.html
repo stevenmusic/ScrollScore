@@ -4899,7 +4899,7 @@ function harmonySymbols(xmlText){
           if (pi === 0 && f) {
             const fifths = parseInt(f.textContent, 10) || 0, modeEl = key.getElementsByTagName("mode")[0], minor = !!modeEl && /minor/i.test(modeEl.textContent);
             const majTonic = ((fifths * 7) % 12 + 12) % 12;
-            out.keys.push({ t: cur, tonic: minor ? (majTonic + 9) % 12 : majTonic, minor });
+            out.keys.push({ t: cur, tonic: minor ? (majTonic + 9) % 12 : majTonic, minor, explicit: !!modeEl && /major|minor/i.test(modeEl.textContent), majTonic });
           }
         } else if (tag === "harmony") {
           const off = child.getElementsByTagName("offset")[0], t = cur + (off ? (parseFloat(off.textContent) || 0) / divisions / 4 : 0);
@@ -4934,7 +4934,38 @@ function harmonySymbols(xmlText){
   out.chords.sort((a, b) => a.t - b.t);
   out.chords = out.chords.filter((c, i, a) => i === 0 || c.t - a[i - 1].t > 1e-6);
   out.keys.sort((a, b) => a.t - b.t);
+  inferKeyModes(out);
   return out;
+}
+/* 調號沒寫大調/小調(流行譜幾乎都沒寫)時從和弦記號判斷(使用者同意 2026-10,漏洞檢查第 1 項:以前一律當大調,
+   D 小調〔一個降記號〕被當成 F 大調,主和弦 Dm 當成 vi、屬和弦 A7 當成離調和弦,整首和聲張力都歪)。
+   這個調號範圍內:關係小調主和弦(小三和弦)的時間 + 它的屬和弦(大三/屬七,例如 A 小調的 E7)× 1.5,跟大調主和弦 + 大調屬和弦比;
+   第一個與最後一個和弦是哪一邊的主和弦再各加權。小調那邊明顯多(> 1.3 倍)才改成小調,證據不足維持大調 */
+const KEY_MINOR_RATIO = 1.3;
+function inferKeyModes(out){
+  const C = out.chords;
+  if (!C.length) return;
+  out.keys.forEach((k, ki) => {
+    if (k.explicit) return;
+    const t0 = k.t, t1 = ki + 1 < out.keys.length ? out.keys[ki + 1].t : Infinity;
+    const inK = C.map((c, i) => ({ c, d: (i + 1 < C.length ? C[i + 1].t : c.t + 1) - c.t })).filter(x => x.c.t >= t0 - 1e-6 && x.c.t < t1 - 1e-6);
+    if (!inK.length) return;
+    const maj = k.majTonic, rel = (maj + 9) % 12;
+    const isMinorTri = q => ["min", "min7", "min6", "minmaj7"].includes(q), isMajorTri = q => ["maj", "maj7", "six", "dom"].includes(q);
+    let sMaj = 0, sMin = 0;
+    for (const { c, d } of inK) {
+      if (c.root === maj && isMajorTri(c.q) && c.q !== "dom") sMaj += d;
+      if (c.root === rel && isMinorTri(c.q)) sMin += d;
+      if (c.root === (maj + 7) % 12 && isMajorTri(c.q)) sMaj += 0.5 * d;          // 大調的 V
+      if (c.root === (rel + 7) % 12 && isMajorTri(c.q)) sMin += 1.5 * d;          // 小調的 V(升了導音,大調裡不會有)
+    }
+    const tot = inK.reduce((a, x) => a + x.d, 0) || 1, ends = [inK[0].c, inK[inK.length - 1].c];
+    for (const c of ends) {
+      if (c.root === maj && isMajorTri(c.q) && c.q !== "dom") sMaj += 0.15 * tot;
+      if (c.root === rel && isMinorTri(c.q)) sMin += 0.15 * tot;
+    }
+    if (sMin > KEY_MINOR_RATIO * sMaj && sMin > 0) { k.minor = true; k.tonic = rel; k.inferred = true; }
+  });
 }
 function harmonySymbolTimes(xmlText){
   let doc;
@@ -7689,36 +7720,53 @@ function sectionKind(text){
    導歌一開始就比主歌明顯(使用者 2026-10:「導歌也聽起來那麼弱」;以前從 0.81 = 主歌的大小開始,第 13~14 小節旋律 48/56 比主歌還輕):
    導歌 0.9 → 1.02、段落力度 +0.5 → +2 */
 const PIANO_SECTION_MUL = { intro: 0.75, verse: 0.8, prechorus: [0.9, 1.02], chorus: 1.07, bridge: 1.0, interlude: 0.8, solo: 0.9, outro: 0.75 };
-function pianoSectionOffset(srcT, beatLen, table, barLen){
-  const S = scoreSections, T = table || PIANO_SECTION, none = table ? 1 : 0;
-  if (!S.length || srcT == null || srcT < S[0].t - 1e-6) return none;
-  let i = 0; for (let j = 0; j < S.length; j++) if (S[j].t <= srcT + 1e-6) i = j;
-  const val = (k, t) => {
-    const v = T[S[k].kind];
+/* 演奏順序的段落(使用者同意 2026-10,漏洞檢查第 3 項):段落記號是記譜位置,有反覆記號/D.S./Coda 時演奏順序不一樣——
+   副歌反覆回主歌,以前結尾照樂譜順序往下一段(例如橋段)銜接。這裡照 events 的演奏順序切段:記譜位置落在哪個段落記號後面就算哪段,
+   段落換了才開新的一段(同一段反覆回自己的開頭仍算同一段,導歌的漸強照樣一路推上去) */
+let perfSectionsCache = null;
+function perfSections(){
+  if (perfSectionsCache && perfSectionsCache.events === events && perfSectionsCache.S === scoreSections) return perfSectionsCache.segs;
+  const S = scoreSections, segs = [];
+  const idxAt = t => { let k = -1; for (let j = 0; j < S.length; j++) if (S[j].t <= t + 1e-6) k = j; return k; };
+  let last = null;
+  for (const ev of events) {
+    const k = idxAt(ev.srcT != null ? ev.srcT : ev.tWhole);
+    if (!last || last.k !== k) { last = { k, kind: k >= 0 ? S[k].kind : null, t: ev.tWhole }; segs.push(last); }
+  }
+  segs.forEach((g, n) => { g.end = n + 1 < segs.length ? segs[n + 1].t : Math.max(totalWhole, g.t + 1e-6); });
+  perfSectionsCache = { events, S, segs };
+  return segs;
+}
+function pianoSectionOffset(t, beatLen, table, barLen){
+  const G = perfSections(), T = table || PIANO_SECTION, none = table ? 1 : 0;
+  if (!G.length || t == null) return none;
+  let i = 0; for (let j = 0; j < G.length; j++) if (G[j].t <= t + 1e-6) i = j;
+  if (G[i].t > t + 1e-6) return none;
+  const val = (k, x) => {
+    const v = G[k].kind ? T[G[k].kind] : null;
     if (!Array.isArray(v)) return v != null ? v : none;
-    const end = k + 1 < S.length ? S[k + 1].t : totalWhole;
-    const p = Math.max(0, Math.min(1, (t - S[k].t) / Math.max(1e-6, end - S[k].t)));
+    const p = Math.max(0, Math.min(1, (x - G[k].t) / Math.max(1e-6, G[k].end - G[k].t)));
     return v[0] + (v[1] - v[0]) * p;
   };
   // 段落之間銜接(使用者 2026-10:「每個段落的情感應該銜接上,而不是像階梯式的直接進入另一個力度」「固定一小節變強變弱還是很不正常」):
-  // 銜接長度跟著段落長度走——下一段比較大聲:在這一段的後半段慢慢漸強(最多 SECTION_JOIN.upBars 小節),到下一段第一拍剛好到位;
-  // 下一段比較小聲:在這一段最後四分之一慢慢收(最多 downBars 小節)。S 形曲線,開頭結尾都不突兀
-  const cur = val(i, srcT);
-  if (i + 1 < S.length) {
-    const next = val(i + 1, S[i + 1].t), len = S[i + 1].t - S[i].t, bl = barLen || 1;
+  // 下一段比較大聲:在這一段的後半段慢慢漸強(最多 SECTION_JOIN.upBars 小節),到下一段第一拍剛好到位;
+  // 下一段比較小聲:只在這一段最後 downBeats 拍收(4/4 = 最後一個長音或和弦稍微收,前面的旋律照段落的大小)(使用者同意,漏洞檢查第 2 項:以前副歌最後 3 小節就開始收,副歌最後一句
+  // 常常是整首最高潮,被削弱;真人是唱滿再在段落交界放輕)。S 形曲線,開頭結尾都不突兀
+  const cur = val(i, t);
+  if (i + 1 < G.length) {
+    const next = val(i + 1, G[i + 1].t), len = G[i + 1].t - G[i].t, bl = barLen || 1, bt = beatLen || bl / 4;
     const up = next > cur;
-    const w = Math.min((up ? SECTION_JOIN.upBars : SECTION_JOIN.downBars) * bl, len * (up ? SECTION_JOIN.upFrac : SECTION_JOIN.downFrac));
-    const t0 = S[i + 1].t - w;
-    if (w > 1e-6 && srcT > t0) {
-      const x = Math.min(1, (srcT - t0) / w), k = x * x * (3 - 2 * x);
-      // 段落內的漸變(導歌的漸強)到 t0 為止的值當起點,接到下一段開頭的值
-      const from = val(i, t0);
+    const w = up ? Math.min(SECTION_JOIN.upBars * bl, len * SECTION_JOIN.upFrac) : Math.min(SECTION_JOIN.downBeats * bt, len * SECTION_JOIN.downFrac);
+    const t0 = G[i + 1].t - w;
+    if (w > 1e-6 && t > t0) {
+      const x = Math.min(1, (t - t0) / w), k = x * x * (3 - 2 * x);
+      const from = val(i, t0);   // 段落內的漸變(導歌的漸強)到 t0 為止的值當起點
       return from + (next - from) * k;
     }
   }
   return cur;
 }
-const SECTION_JOIN = { upBars: 4, upFrac: 0.5, downBars: 3, downFrac: 0.25 };
+const SECTION_JOIN = { upBars: 4, upFrac: 0.5, downBeats: 3, downFrac: 0.25 };
 /* 和聲張力(0 = 最穩 ~ 1 = 最緊):依和弦根音在調裡的級數,再看和弦性質(屬七/掛留/減/增更緊、大七稍鬆;
    不在 V 的屬七 = 副屬和弦;主和弦第二轉位 I64 = 終止前的懸置) */
 const HARM_DEG_MAJ = { 0: 0, 2: 0.4, 4: 0.3, 5: 0.35, 7: 0.65, 9: 0.2, 11: 0.8, 10: 0.45, 3: 0.45, 8: 0.45, 1: 0.6, 6: 0.6 };
@@ -7913,7 +7961,7 @@ function computePianoDynamics(){
       const ho = hoSmooth ? hoSmooth[evIdx.get(ev)] : null;
       let m = (auto.macro[macroBar] || 0) * (popSections ? PIANO_POP.macroWithSections : 1) + (ho ? archW * ho.v : archW * (arch(4, 4) + arch(8, 5)));
       ev._chord = ho ? ho.chord : null;
-      if (popSections) base += pianoSectionOffset(ev.srcT, ev.beatLen, null, ev.barLen) * PIANO_POP.sectionGain * (hasMarks ? 0.5 : 1);
+      if (popSections) base += pianoSectionOffset(ev.tWhole, ev.beatLen, null, ev.barLen) * PIANO_POP.sectionGain * (hasMarks ? 0.5 : 1);
       if (fromEnd < PIANO_END.bars) m += endContour(bar + pos);
       base += m * auto.scale;
     }
@@ -7953,7 +8001,7 @@ function computePianoDynamics(){
         if (n.durWhole >= 0.5) v += 2; else if (n.durWhole <= 1 / 16 + 1e-6) v -= 2;
         v += (seededRand01(k * 7.31 + m * 0.137) - 0.5) * 5;
         let secMul = 1;
-        if (popSections) { secMul = Math.pow(pianoSectionOffset(ev.srcT, ev.beatLen, PIANO_SECTION_MUL, ev.barLen), hasMarks ? 0.5 : 1); v *= secMul; }   // 段落力度倍率(PIANO_SECTION_MUL)
+        if (popSections) { secMul = Math.pow(pianoSectionOffset(ev.tWhole, ev.beatLen, PIANO_SECTION_MUL, ev.barLen), hasMarks ? 0.5 : 1); v *= secMul; }   // 段落力度倍率(PIANO_SECTION_MUL)
         if (n._micro != null) { n._mul = secMul; n._t = ev.tWhole; n._bl = ev.barLen > 0 ? ev.barLen : 1; }
         n._v0 = v; n._accDb = accDb - momDb; n._momDb = momDb; n._role = rh ? (n === top && !n._inner ? 1 : 2) : 3; delete n._inner;
         n.pvel = Math.max(8, Math.min(124, v * Math.pow(10, accDb / 40)));
