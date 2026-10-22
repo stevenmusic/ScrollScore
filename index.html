@@ -8113,6 +8113,7 @@ function drawKeyboardSprites(ctx, x, y, w, h, activeMap, s = 1){
   const geo = [x, y, w, h, KB_LOW, KB_HIGH, s].join("|");
   if (!kbSpriteCache || kbSpriteCache.geo !== geo) kbSpriteCache = { geo, map: new Map(), base: null, full: null };
   const C = kbSpriteCache, M = KB_SPRITE.margin;
+  const snap = (v, dir) => (dir < 0 ? Math.floor(v * s + 1e-6) : Math.ceil(v * s - 1e-6)) / s;   // 對齊螢幕像素格(往下/往上)
   const whiteW = w / KB_WHITE_KEYS.length, blackH = h * 0.6, blackW = whiteW * 0.62;
   // 每個鍵:種類、編號、位置大小、在 activeMap 裡的音
   if (!C.keys) {
@@ -8124,14 +8125,16 @@ function drawKeyboardSprites(ctx, x, y, w, h, activeMap, s = 1){
       const li = KB_WHITE_IDX[leftWhite]; if (li === undefined) continue;
       C.keys.push({ kind: "b", idx: m, midi: m, kx: x + (li + 1) * whiteW - blackW / 2, kw: blackW, kh: blackH });
     }
-    for (const k of C.keys) { k.ox = Math.floor(k.kx) - M; k.oy = Math.floor(y) - M; k.sw = Math.ceil(k.kx + k.kw) + M - k.ox + 2; k.sh = Math.ceil(y + k.kh) + M - k.oy + 8; }
+    // 小圖的左上角與大小都對齊螢幕像素格(snap:× s 是整數)。以前只對齊 CSS 整數,放大 1.5 倍(或被降解析度、1.25 倍螢幕)時
+    // 小圖落在半個像素上,整張被重新取樣:鍵邊偏半格,發亮的鍵周圍還會出現重畫範圍邊界的細方格線(使用者反映,2026-10)
+    for (const k of C.keys) { k.ox = snap(k.kx - M, -1); k.oy = snap(y - M, -1); k.sw = snap(k.kx + k.kw + M + 2, 1) - k.ox; k.sh = snap(y + k.kh + M + 8, 1) - k.oy; }
   }
   const stateOf = info => !info || !info.staff ? (info && info.attack ? "a" : "") : info.staff + (info.attack ? "a" : "");
   const sprite = (tc, k, info) => {
     const key = k.kind + k.idx + "|" + stateOf(info);
     let sp = C.map.get(key);
     if (!sp) {
-      const cv = document.createElement("canvas"); cv.width = Math.ceil(k.sw * s); cv.height = Math.ceil(k.sh * s);
+      const cv = document.createElement("canvas"); cv.width = Math.round(k.sw * s); cv.height = Math.round(k.sh * s);
       const c2 = cv.getContext("2d"); c2.scale(s, s); c2.translate(-k.ox, -k.oy);
       kbShadowScale = s;
       (k.kind === "w" ? drawWhiteKey : drawBlackKey)(c2, k.kx, y, k.kw, k.kh, info);
@@ -8142,8 +8145,8 @@ function drawKeyboardSprites(ctx, x, y, w, h, activeMap, s = 1){
   };
   if (!C.base) {
     // 多留 2px:鍵的外框線(線寬 1)會畫到鍵盤上緣外半個像素
-    const fx = Math.floor(x) - 2, fy = Math.floor(y) - 2, bw = Math.ceil(x + w) - fx + 2, bh = Math.ceil(y + h) - fy + 2;
-    const mk = () => { const c = document.createElement("canvas"); c.width = Math.ceil(bw * s); c.height = Math.ceil(bh * s); const g = c.getContext("2d"); g.scale(s, s); g.translate(-fx, -fy); return [c, g]; };
+    const fx = snap(x - 2, -1), fy = snap(y - 2, -1), bw = snap(x + w + 2, 1) - fx, bh = snap(y + h + 2, 1) - fy;
+    const mk = () => { const c = document.createElement("canvas"); c.width = Math.round(bw * s); c.height = Math.round(bh * s); const g = c.getContext("2d"); g.scale(s, s); g.translate(-fx, -fy); return [c, g]; };
     const [b, bc] = mk();
     const g = bc.createLinearGradient(0, y, 0, y + h); g.addColorStop(0, "#050403"); g.addColorStop(1, "#0C0A07");
     bc.fillStyle = g; bc.fillRect(x, y, w, h);
