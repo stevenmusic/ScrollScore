@@ -7353,7 +7353,7 @@ function pianoEndContour(nb, multiStaff){
    改成 ×PIANO_POP.macroWithSections,以段落記號為主。譜上有力度記號時段落力度只用一半(以譜為主) */
 /* 2026-10 第二版(使用者:「感情不夠!」):POP909 是電腦編曲檔,大小聲保守;真人彈抒情流行段落差距大得多 →
    段落力度 ×sectionGain 2、旋律起伏(往上漸強、往下漸弱)每半音 contour 0.6 力度、上限 ±contourMax 7(古典 0.35、±4) */
-const PIANO_POP = { melody: 4, accomp: 3, macroWithSections: 0.5, sectionGain: 2, contour: 0.6, contourMax: 7, lineWin: 1, lineGap: 3 };
+const PIANO_POP = { melody: 4, accomp: 3, macroWithSections: 0.5, sectionGain: 2, contour: 0.6, contourMax: 7, lineWin: 1, lineGap: 3, lhFiller: 8 };
 const PIANO_SECTION = { intro: -7, verse: -1.5, prechorus: [-1, 1.5], chorus: 2.5, bridge: 1.5, interlude: -2, solo: 0, outro: -5 };
 function sectionKind(text){
   const s = String(text || "").toLowerCase().replace(/[\s._\-–—]+/g, " ").trim();
@@ -7404,6 +7404,17 @@ function computePianoDynamics(){
     for (let j = i - 1; j >= 0 && events[j].tWhole >= t - w - 1e-6; j--) if (rhTops[j] != null) mx = Math.max(mx, rhTops[j]);
     for (let j = i + 1; j < events.length && events[j].tWhole <= t + w + 1e-6; j++) if (rhTops[j] != null) mx = Math.max(mx, rhTops[j]);
     return mx - m >= PIANO_POP.lineGap;
+  };
+  // 左手同理(使用者反映 2026-10:「第 25、26 小節重複的低音太大聲,處理方式應該跟前奏一樣」):低音 Bb2 在拍點上、中間夾著
+  // F3-Bb3-F3-Bb3 十六分音符,以前都是 62~76 跟低音一樣重。左手單音比前後一拍內左手最低音高 ≥ lineGap 半音 = 夾在中間的伴奏音,
+  // 跟右手的內聲部一樣彈輕;拍點上的低音照常
+  const lhLows = events.map(ev => { const r = ev.notes.filter(n => !n.drum && n.freq && multiStaff && (n.staff || 1) > 1); return r.length ? Math.min(...r.map(n => freqToMidi(n.freq))) : null; });
+  const isLHFiller = (ev, m) => {
+    const i = evIdx.get(ev), t = ev.tWhole, w = (ev.beatLen || 0.25) * PIANO_POP.lineWin;
+    let mn = Infinity;
+    for (let j = i - 1; j >= 0 && events[j].tWhole >= t - w - 1e-6; j--) if (lhLows[j] != null) mn = Math.min(mn, lhLows[j]);
+    for (let j = i + 1; j < events.length && events[j].tWhole <= t + w + 1e-6; j++) if (lhLows[j] != null) mn = Math.min(mn, lhLows[j]);
+    return m - mn >= PIANO_POP.lineGap;
   };
   const auto = pianoAutoMacro(hasMarks);
   const endContour = pianoEndContour(auto.nb, multiStaff);
@@ -7465,6 +7476,7 @@ function computePianoDynamics(){
           } else v -= 5 + (pop ? PIANO_POP.accomp : 0);
         } else {
           v -= 4 + (pop ? PIANO_POP.accomp : 0);
+          if (pop && ns.length === 1 && isLHFiller(ev, m)) v -= PIANO_POP.lhFiller;   // 左手夾在中間的伴奏音(isLHFiller)
           if (ns.length > 1) v += n === bottom ? 3 : -3;
         }
         if (n.durWhole >= 0.5) v += 2; else if (n.durWhole <= 1 / 16 + 1e-6) v -= 2;
