@@ -12021,9 +12021,19 @@ document.addEventListener("visibilitychange", async () => {
 /* 匯出畫面版面計算,匯出跟預覽共用同一套邏輯,確保預覽看到的就是實際匯出的樣子 */
 /* 頻道名稱(浮水印)的位置:鍵盤/鼓組面板上方(沒有面板就是畫面底部)固定留一條,樂譜不會擠進來。
    2026-10 使用者截圖:樂譜照音符大小放大後,樂譜下緣幾乎貼到鍵盤,以前「不壓到音符」的規則把文字往下推,反而疊到鍵盤上 */
+/* 匯出影片的標題/副標題/頻道名稱字級(× min(畫面寬, 高);2026-10 使用者要求確認大小):以前 5.5% / 3% / 3.2%,頻道名稱比副標題還大、
+   副標題在手機上看 YouTube(1080p 縮成約 390pt 寬)只剩約 6pt。現在 標題 6%(1080p 65px)、副標題 3.6%(39px,標題的 0.6 倍,手機上約 8pt)、
+   頻道名稱 2.6%(28px,比副標題小,是簽名不是標題)。太長放不下時照畫面寬 90% 縮小(fitTextFont) */
+const EXPORT_TEXT = { title: 0.06, subtitle: 0.036, channel: 0.026, maxW: 0.9 };
+function fitTextFont(ctx, text, weight, size, maxW){
+  ctx.font = weight + " " + size + "px '" + EXPORT_FONT_FAMILY + "', 'Noto Serif TC', serif";
+  const w = ctx.measureText(text).width;
+  if (w > maxW && w > 0) { size = Math.max(10, Math.floor(size * maxW / w)); ctx.font = weight + " " + size + "px '" + EXPORT_FONT_FAMILY + "', 'Noto Serif TC', serif"; }
+  return size;
+}
 function exportChannelBand(cfg){
   if (!cfg.watermarkEnabled || !cfg.channel) return { h: 0, font: 0 };
-  const font = Math.round(Math.min(cfg.W, cfg.H) * 0.032);
+  const font = Math.round(Math.min(cfg.W, cfg.H) * EXPORT_TEXT.channel);
   return { h: font + 2 * Math.round(font * 0.45), font };
 }
 /* 樂譜圖裡真的有畫東西的上下範圍(0~1,相對整張樂譜圖的高度)。OSMD 的 SVG 下方常留一段空白
@@ -12068,8 +12078,8 @@ function computeExportLayout(cfg){
   let titleBlockBottom = 0;
   if (cfg.watermarkEnabled && (cfg.title || cfg.subtitle)) {
     const wmRef = Math.min(W, H);
-    const titleFontSize = Math.round(wmRef * 0.055);
-    const subtitleFontSize = Math.round(wmRef * 0.03);
+    const titleFontSize = Math.round(wmRef * EXPORT_TEXT.title);
+    const subtitleFontSize = Math.round(wmRef * EXPORT_TEXT.subtitle);
     const wmPadY = Math.max(Math.round(titleFontSize * 0.55), 16);
     titleBlockBottom = cfg.title
       ? (cfg.subtitle ? wmPadY + Math.round(titleFontSize * 1.08) + subtitleFontSize : wmPadY + titleFontSize)
@@ -12260,15 +12270,15 @@ function drawExportTexts(ctx, layout, cfg){
   const { W, H } = layout;
   {
     const wmRef = Math.min(W, H);
-    const titleFontSize = Math.round(wmRef * 0.055);
-    const subtitleFontSize = Math.round(wmRef * 0.03);
-    const channelFontSize = Math.round(wmRef * 0.032);
+    const titleFontSize = Math.round(wmRef * EXPORT_TEXT.title);
+    const subtitleFontSize = Math.round(wmRef * EXPORT_TEXT.subtitle);
+    const channelFontSize = Math.round(wmRef * EXPORT_TEXT.channel);
     const wmPadX = Math.round(W * 0.02);
     const wmPadY = Math.max(Math.round(titleFontSize * 0.55), 16);
     ctx.save();
     if (cfg.title) {
       ctx.textBaseline = "top";
-      ctx.font = "700 " + titleFontSize + "px '" + EXPORT_FONT_FAMILY + "', 'Noto Serif TC', serif"; // 優先用 ensureTitleFontsLoaded 註冊的專屬字族,避免撞到原本兩百多條分片規則
+      fitTextFont(ctx, cfg.title, "700", titleFontSize, W * EXPORT_TEXT.maxW); // 優先用 ensureTitleFontsLoaded 註冊的專屬字族,避免撞到原本兩百多條分片規則
       // 主標題跟著游標顏色走(同一個色相、同一個深度),整張匯出畫面才是一套配色。
       // 濃度層級的設計(由重到輕):
       //   主標題       墨色 100%,而且刻意「不」乘上游標濃度——它是畫面的錨點,
@@ -12282,7 +12292,7 @@ function drawExportTexts(ctx, layout, cfg){
     }
     if (cfg.subtitle) {
       ctx.textBaseline = "top";
-      ctx.font = "600 " + subtitleFontSize + "px '" + EXPORT_FONT_FAMILY + "', 'Noto Serif TC', serif"; // 同上
+      fitTextFont(ctx, cfg.subtitle, "600", subtitleFontSize, W * EXPORT_TEXT.maxW); // 同上
       ctx.fillStyle = "rgba(42,42,42,0.85)"; // 深炭灰,比標題低調,對比度依然夠高(8.7:1)
       ctx.textAlign = "center";
       const subtitleY = cfg.title ? wmPadY + Math.round(titleFontSize * 1.08) : wmPadY;
