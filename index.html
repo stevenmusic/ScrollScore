@@ -5459,7 +5459,7 @@ function resolveTempoWordSpans(words, dashStops, bars, endT){
 const FERMATA = { short: 0.75, normal: 0.58, long: 0.45, verylong: 0.33 };
 /* 延長那個音的放鍵倍數(音長已經照延長放慢過,這裡是延長音比時值多響一點);短音被拉長到最少拍數時按比例縮、至少 1 */
 function fermataHoldMul(artic){ return Math.max(1, 1.8 * FERMATA.normal / FERMATA[artic.fermataLen || "normal"] * (artic.fermataScale != null ? artic.fermataScale : 1)); }
-const FERMATA_MIN_BEATS = { short: 1, normal: 1.5, long: 2, verylong: 3 };   // 延長那個音至少停幾拍(短音上的延長)
+const FERMATA_MIN_BEATS = { short: 0.5, normal: 1, long: 1.25, verylong: 1.75 };   // 延長那個音至少停幾拍(短音上的延長)
 function fermataShapeLen(shape){
   const s = String(shape || "").trim().toLowerCase();
   if (s === "angled" || s === "double-angled") return "short";
