@@ -9446,6 +9446,28 @@ function pianoHandBalance(){
   for (const n of lo) n.pvel = Math.max(1, Math.min(127, n.pvel * k));
   console.log(`高低音區平衡:力度差 ${(mLo - mHi).toFixed(1)}、能量 ${edb.toFixed(1)}dB → 低音區力度 ×${k.toFixed(3)}`);
 }
+/* 旋律不要比同時彈的伴奏小聲(非古典,第四輪檢查 2026-10):同一個和弦裡旋律(n.pmel)比其他音小聲的少數例外——
+   旋律被 popDynamicsCalibrate 收窄、中間音的固定種子小起伏(popChordShape innerSd)和拍位置加減疊在一起,
+   例如旋律 A5 64、同一和弦的 A4 66。伴奏比旋律大聲聽起來是「旋律被蓋住」,真人不會這樣(同時彈的最高音比其他大 6.7)。
+   其他音超過「旋律 − margin」時,旋律往上補超出的 melShare 倍(最多 melMax;預設補到剛好比最大聲的伴奏大 margin),補不夠的部分其他音收到旋律 − margin;
+   沒有超過的完全不動。旋律往上補而不是伴奏往下收:少數幾個和弦的伴奏內聲部起伏(innerSd)與真人的分布不變 */
+const POP_ONTOP = Object.assign({ margin: 1, melShare: 1, melMax: 4 }, window.POP_ONTOP_OVERRIDE || {});
+function popMelodyOnTop(){
+  if (classicalProbInfo().p >= 0.5 || !POP_ONTOP) return;
+  const P = POP_ONTOP, clampV = v => Math.max(8, Math.min(124, v));
+  for (const ev of events) {
+    const ns = ev.notes.filter(n => !n.drum && n.freq && n.pvel != null);
+    if (ns.length < 2) continue;
+    const mels = ns.filter(n => n.pmel), others = ns.filter(n => !n.pmel);
+    if (!mels.length || !others.length) continue;
+    const mv = Math.max(...mels.map(n => n.pvel)), ov = Math.max(...others.map(n => n.pvel));
+    const excess = ov - (mv - P.margin);
+    if (!(excess > 0)) continue;
+    const up = Math.min(P.melMax, excess * P.melShare), cap = mv + up - P.margin;
+    for (const n of mels) n.pvel = clampV(n.pvel + up);
+    for (const n of others) if (n.pvel > cap) n.pvel = clampV(cap);
+  }
+}
 function pianoWideChordRoll(multiStaff){
   const F = PIANO_FEEL, nextOn = {};
   for (let i = events.length - 1; i >= 0; i--) {
@@ -9774,6 +9796,7 @@ function computePianoDynamics(){
   // 低音區整體拉高與和弦最低音收輕會互相影響(先後哪個都會讓另一個偏掉),交替做兩次讓兩項都落在真人範圍
   if (pop) for (let k = 0; k < 2; k++) { pianoHandBalance(); pianoBassNotHeavy(); }
   popBeatProfile();   // 拍位置放在低音區平衡之後(平衡會動低音區的力度、連帶改變各拍位置的平均)
+  popMelodyOnTop();   // 最後一道:旋律不要比同時彈的伴奏小聲(各條規則的亂數與加減疊起來的少數例外)
   pianoVelocityAsync();
   pianoWideChordRoll(multiStaff);
   if (pop) pianoHandDrift(multiStaff);
