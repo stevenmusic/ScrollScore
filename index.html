@@ -9356,6 +9356,78 @@ function pianoBassNotHeavy(){
     if (low.pvel > ref) low.pvel = Math.max(ref, low.pvel - F.bassMaxCut);
   }
 }
+/* 同時彈的音,上面比下面大多少照真人(和弦形狀,第三輪;使用者 2026-10「更像真人彈流行歌」,非古典):Pop1K7 慢歌(435 首)逐「同時起音群」量,
+   跟整體平均看不出來的差距:① 兩個音:上面的比下面大多少跟間隔、哪隻手有關(右手 ≤4 半音 +4.0、5~7 +4.9、8~11 +5.9、八度 +4.2〔雙音旋律不會比下面大很多〕、
+   13~19 +8.4;左手音域整體再小 2.6〔八度只 +1.2〕;跨手 5~7 +3.6、8~11 +4.8、八度 +4.4、13~19 +8.1、20~30 +10.4、>30 +11.1),
+   App〈甲乙丙丁〉右手八度 +11.1(真人 4.2)、左手八度 −3.5(低音比上面的音大聲,真人 +1.2)、跨手 13~19 只有 +2.8(真人 8.1)
+   ② 三個以上:最高音比中間的音平均大多少,3 個音 真人 4.8、4 個音 5.8、更多 6.0;App 7.6 / 9.6(中間的音比單音旋律輕太多,真人和弦平均力度跟單音旋律差不到 1,App 差 2~3)
+   ③ 四個以上:中間的音彼此力度差(標準差)真人 2.3,App 1.4(每個手指力量不同,App 中間音全部一樣)。
+   做法:兩個音往目標靠 strength 倍(最多 maxMove),上面的音負擔 topShare、其餘負擔其他(旋律音不要被收太多);三個以上超出目標的部分,最高音收 topShare、
+   其他(含最低音)加上其餘;四個以上中間音加固定種子的小起伏。譜上寫琶音的、鼓不動。window.POP_CHORD_OVERRIDE 可改參數 */
+const POP_CHORD = Object.assign({ strength: 0.7, maxMove: 8, topShare: 0.4,
+  top3: 4.8, top4: 5.8, top5: 6.0, innerSd: 2.6,
+  upper: [[4, 4.0], [7, 4.9], [11, 5.9], [12, 4.2], [19, 8.4], [999, 10.6]],
+  cross: [[4, 3.0], [7, 3.6], [11, 4.75], [12, 4.4], [19, 8.05], [30, 10.4], [999, 11.1]], lhOffset: -2.6 }, window.POP_CHORD_OVERRIDE || {});
+function popChordShape(){
+  if (classicalProbInfo().p >= 0.5) return;
+  const C = POP_CHORD, clampV = v => Math.max(8, Math.min(124, v));
+  const look = (tab, span) => { for (const [mx, t] of tab) if (span <= mx) return t; return tab[tab.length - 1][1]; };
+  let k = 0;
+  for (const ev of events) {
+    k++;
+    if (ev.arpCount) continue;
+    const ns = ev.notes.filter(n => !n.drum && n.freq && n.pvel != null && n.rollIndex == null);
+    if (ns.length < 2) continue;
+    ns.sort((a, b) => a.freq - b.freq);
+    const lo = ns[0], hi = ns[ns.length - 1], mlo = freqToMidi(lo.freq), mhi = freqToMidi(hi.freq), span = Math.round(mhi - mlo);
+    if (span < 1) continue;
+    const ts = C.topShare;
+    if (ns.length === 2) {
+      const t = mlo >= 60 ? look(C.upper, span) : mhi < 60 ? look(C.upper, span) + C.lhOffset : look(C.cross, span);
+      const d = hi.pvel - lo.pvel, mv = Math.max(-C.maxMove, Math.min(C.maxMove, (t - d) * C.strength));
+      hi.pvel = clampV(hi.pvel + mv * ts); lo.pvel = clampV(lo.pvel - mv * (1 - ts));
+      continue;
+    }
+    const mid = ns.slice(1, -1), mm = mid.reduce((a, n) => a + n.pvel, 0) / mid.length;
+    const T = ns.length === 3 ? C.top3 : ns.length === 4 ? C.top4 : C.top5;
+    const e = Math.min(C.maxMove, (hi.pvel - mm - T) * C.strength);
+    if (e > 0) {
+      hi.pvel = clampV(hi.pvel - e * ts);
+      for (const n of ns) if (n !== hi) n.pvel = clampV(n.pvel + e * (1 - ts));
+    }
+    if (mid.length >= 2) {
+      let j = 0;
+      for (const n of mid) {   // 常態分布(兩個均勻亂數相減 × √6 ≈ 標準差 1)、固定種子
+        const z = (seededRand01(ev.tWhole * 17.31 + j * 3.7 + k * 0.113) + seededRand01(ev.tWhole * 5.57 + j * 9.1 + k * 0.771) - 1) * Math.sqrt(6);
+        n.pvel = clampV(n.pvel + z * C.innerSd); j++;
+      }
+    }
+  }
+}
+/* 單音的低音與單音的旋律力度差照真人(第三輪,非古典):Pop1K7 慢歌真人「只有一個音的起音群」低音區(< C4)比高音區(≥ C4)輕 5.8
+   (四分位 4.2~7.6),而且多音群裡的低音區音跟單音低音差不多(+0.6)、高音區音比單音高音略大(+1.9)。App〈甲乙丙丁〉單音低音比單音高音輕 11.6
+   (多音群裡的低音 +4.8、高音 −1.0):整體低音區/高音區的力度差(pianoHandBalance)是對的,但單獨一個低音(根音、八度低音、分解和弦的最低音)被旋律 +4、伴奏 −3、
+   低音不加重…疊成比真人輕一倍,旋律單音則比和弦裡的高音大。做法:單音低音比單音高音輕超過 gapMax 時,超出的部分 strength 倍補回,
+   單音低音負擔 lowShare 往上、單音高音往下(整組一起加減,各最多 maxMove,保留各自的起伏)。本來就在範圍內的不動。window.POP_SINGLE_OVERRIDE 可改參數 */
+const POP_SINGLE = Object.assign({ gapMax: -6.5, strength: 0.85, lowShare: 0.6, maxMove: 8 }, window.POP_SINGLE_OVERRIDE || {});
+function popSingleBalance(){
+  if (classicalProbInfo().p >= 0.5) return;
+  const S = POP_SINGLE, lo = [], hi = [];
+  for (const ev of events) {
+    if (ev.arpCount) continue;
+    const ns = ev.notes.filter(n => !n.drum && n.freq && n.pvel != null);
+    if (ns.length !== 1 || ns[0].rollIndex != null) continue;
+    (freqToMidi(ns[0].freq) < 60 ? lo : hi).push(ns[0]);
+  }
+  if (lo.length < 20 || hi.length < 20) return;
+  const mean = a => a.reduce((s, n) => s + n.pvel, 0) / a.length;
+  const gap = mean(lo) - mean(hi), need = (S.gapMax - gap) * S.strength;
+  if (!(need > 0.2)) return;
+  const up = Math.min(S.maxMove, need * S.lowShare), down = Math.min(S.maxMove, need * (1 - S.lowShare));
+  for (const n of lo) n.pvel = Math.max(8, Math.min(124, n.pvel + up));
+  for (const n of hi) n.pvel = Math.max(8, Math.min(124, n.pvel - down));
+  console.log(`單音低音/高音力度差 ${gap.toFixed(1)} → 低音單音 +${up.toFixed(1)}、高音單音 −${down.toFixed(1)}`);
+}
 /* 低音區跟高音區的力度差照真人(pianoHandBalance,非古典;使用者 2026-10:「要接近真人!」):
    Pop1K7 慢歌(435 首)真人 中央 C 以下的音平均力度比中央 C 以上低 6.6(中位數,四分位 −7.7~−5.3),
    總能量(Σ(力度/127)²,跟音的數量有關)低 2.6dB(四分位 −3.9~−1.5)。App 的旋律 +4、伴奏 −3、低音不加重…疊起來,
@@ -9697,6 +9769,8 @@ function computePianoDynamics(){
   });
   pianoLineNuance();
   popDynamicsCalibrate();
+  popChordShape();   // 同時彈的音上下力度差照真人(非古典)
+  popSingleBalance();   // 單音的低音與旋律力度差照真人(非古典)
   // 低音區整體拉高與和弦最低音收輕會互相影響(先後哪個都會讓另一個偏掉),交替做兩次讓兩項都落在真人範圍
   if (pop) for (let k = 0; k < 2; k++) { pianoHandBalance(); pianoBassNotHeavy(); }
   popBeatProfile();   // 拍位置放在低音區平衡之後(平衡會動低音區的力度、連帶改變各拍位置的平均)
