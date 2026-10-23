@@ -9230,8 +9230,38 @@ function pianoHammerLagMs(v){
 /* 非古典的力度幅度校正(試驗中,window.POP_CAL = { bar, mel, contour }):
    bar = 小節平均力度離整首平均的幅度倍數(前後小節 1:2:1 平滑),mel = 同時彈的音裡最高音跟其他音差距的倍數,
    contour = 旋律音離前後 8 個旋律音平均的幅度倍數;沒設 = 不改 */
+const POP_BEAT = Object.assign({ down: -2, back: 1.5, beat: 0, off: 0 }, window.POP_BEAT_OVERRIDE || {});
+/* 非古典的大小聲幅度照真人(使用者 2026-10「要接近真人」,預設開啟;window.POP_CAL 可改):Pop1K7 慢歌真人每小節大小聲 p90−p10 13.6
+   (四分位 6.4~17.6)、同時彈的最高音比其他大 6.7、旋律每半音力度 0.47;App 以前 44.9、10.7、1.34(真人的 2~3 倍,
+   是之前「感情不夠」把段落/旋律起伏加大後累積的)。bar 縮每小節平均離整首平均的距離、mel 縮同時彈的最高音與其他音的差、
+   contour 縮旋律音離前後 8 個旋律音平均的距離。取真人較有情感那一端(四分位上緣附近),不是平均值 */
+const POP_CAL_DEFAULT = { bar: 0.33, mel: 0.65, contour: 0.3 };
+/* 拍位置的力度照真人(POP_BEAT_PROFILE,偶數拍子〔4/4、2/4〕的非古典):Pop1K7 慢歌真人各拍平均力度相對整首:第 1 拍 −2.6、第 2 拍 +0.4、
+   第 3 拍 +0.1、第 4 拍 +0.9、反拍 +0.1(第 1 拍反而輕、後拍略重)。整首算完後各拍位置的平均往真人拉近 strength、每個位置最多 ±max */
+const POP_BEAT_PROFILE = { target: [-2.6, 0.4, 0.1, 0.9], off: 0.1, strength: 0.7, max: 5 };
+function popBeatProfile(){
+  if (classicalProbInfo().p >= 0.5) return;
+  const P = POP_BEAT_PROFILE, groups = {}, all = [];
+  for (const ev of events) {
+    if (ev.barPos == null || !(ev.beatLen > 0) || !(ev.barLen > 0)) continue;
+    const nBeats = Math.round(ev.barLen / ev.beatLen);
+    if (nBeats !== 4 && nBeats !== 2) continue;
+    const bf = ev.barPos / ev.beatLen, frac = Math.abs(bf - Math.round(bf));
+    const key = frac < 0.02 ? (nBeats === 4 ? Math.round(bf) % 4 : (Math.round(bf) % 2) * 2) : frac > 0.2 ? "off" : null;
+    if (key == null) continue;
+    for (const n of ev.notes) if (!n.drum && n.freq && n.pvel != null) { (groups[key] = groups[key] || []).push(n); all.push(n); }
+  }
+  if (all.length < 100) return;
+  const mean = a => a.reduce((s, n) => s + n.pvel, 0) / a.length, M = mean(all);
+  for (const key of Object.keys(groups)) {
+    const g = groups[key]; if (g.length < 10) continue;
+    const tgt = key === "off" ? P.off : P.target[+key];
+    const d = Math.max(-P.max, Math.min(P.max, (tgt - (mean(g) - M)) * P.strength));
+    for (const n of g) n.pvel = Math.max(8, Math.min(124, n.pvel + d));
+  }
+}
 function popDynamicsCalibrate(){
-  const c = window.POP_CAL;
+  const c = window.POP_CAL || POP_CAL_DEFAULT;
   if (!c || classicalProbInfo().p >= 0.5) return;
   const notes = [];
   for (const ev of events) for (const n of ev.notes) if (!n.drum && n.freq && n.pvel != null) notes.push({ n, ev });
@@ -9510,7 +9540,11 @@ function computePianoDynamics(){
       // 拍子輕重:曲尾兩小節逐漸減半,不要蓋過旋律線條的漸強/漸弱
       beatW = fromEnd < PIANO_END.bars ? 0.35 + 0.65 * fromEnd / PIANO_END.bars : 1;
       const bf = ev.barPos / ev.beatLen, frac = Math.abs(bf - Math.round(bf));
-      const beatTerm = ev.barPos < 1e-4 ? 3 * beatW : frac < 0.02 ? (Math.round(bf) % 2 === 0 ? 1.5 : 0.5) * beatW : Math.abs(frac - 0.5) < 0.02 ? -1.5 * beatW : -3 * beatW;
+      // 非古典(POP_BEAT,使用者 2026-10「要接近真人」):Pop1K7 慢歌真人第 1 拍反而略輕、第 2、4 拍(後拍)略重、反拍不比正拍輕;
+      // 古典的「第 1 拍最重、反拍輕」用在流行歌像在打拍子
+      const PB = POP_BEAT, beatIdx = Math.round(bf), nBeats = ev.barLen > 0 ? Math.round(ev.barLen / ev.beatLen) : 4;
+      const beatTerm = (pop ? (ev.barPos < 1e-4 ? PB.down : frac < 0.02 ? (nBeats % 2 === 0 && beatIdx % 2 === 1 ? PB.back : PB.beat) : PB.off)
+        : ev.barPos < 1e-4 ? 3 : frac < 0.02 ? (beatIdx % 2 === 0 ? 1.5 : 0.5) : Math.abs(frac - 0.5) < 0.02 ? -1.5 : -3) * beatW;
       base += beatTerm; ev._beatTerm = beatTerm;
       const arch = (n, amp) => amp * (Math.sin(Math.PI * (((bar % n) + pos) / n)) - 2 / Math.PI);   // 平均為 0 的弧線
       // 曲尾兩小節:樂句弧線逐漸退出,改由旋律線條決定(往上漸強、往下漸弱)
@@ -9617,6 +9651,7 @@ function computePianoDynamics(){
   });
   pianoLineNuance();
   popDynamicsCalibrate();
+  popBeatProfile();
   // 低音區整體拉高與和弦最低音收輕會互相影響(先後哪個都會讓另一個偏掉),交替做兩次讓兩項都落在真人範圍
   if (pop) for (let k = 0; k < 2; k++) { pianoHandBalance(); pianoBassNotHeavy(); }
   pianoVelocityAsync();
