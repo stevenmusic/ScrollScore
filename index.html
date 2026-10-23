@@ -3933,6 +3933,62 @@ function drawWordDashes(o, root, xml){
     }
   } catch (e) { console.warn("drawWordDashes", e); }
 }
+/* 小節數字不跟任何符號重疊(使用者反映 2026-10:「有的地方跟圓滑線重疊了」;〈甲乙丙丁〉第 11、31 小節的數字壓在跨小節線的延音線上):
+   畫完後每個小節數字(OSMD MusicSystem.MeasureNumberLabels)跟 SVG 裡其他畫出來的東西比(譜線、小節線不算;大的路徑〔圓滑線、延音線〕
+   沿著線取點比,不是比外框),碰到就往上移到那些東西上面 MNUM_GAP(OSMD 單位,10 = 一格),再檢查一次(最多 8 次)。
+   畫面與翻頁式都用;檢查工具 tools/audiotest/measure_number_check.mjs */
+const MNUM_GAP = 2;
+function avoidMeasureNumberOverlap(o, root){
+  try {
+    const svg = (root || $("score")).querySelector("svg");
+    if (!svg || !o || !o.GraphicSheet) return 0;
+    const labels = [];
+    for (const page of o.GraphicSheet.MusicPages) for (const sys of page.MusicSystems) for (const l of sys.MeasureNumberLabels || []) if (l.SVGNode && l.SVGNode.getBBox) labels.push(l.SVGNode);
+    if (!labels.length) return 0;
+    const inLabel = el => labels.some(n => n === el || n.contains(el));   // SVGNode 是包著 <text> 的 <g>
+    const dyOf = el => { const m = /translate\(\s*[-\d.]+[ ,]+([-\d.]+)/.exec(el.getAttribute("transform") || ""); return m ? parseFloat(m[1]) : 0; };
+    const obs = [];
+    for (const el of svg.querySelectorAll("path, text, rect, line, polygon, polyline, ellipse, circle")) {
+      if (inLabel(el)) continue;
+      let b; try { b = el.getBBox(); } catch (e) { continue; }
+      if (!b || (b.width < 0.01 && b.height < 0.01)) continue;
+      if (b.height < 1.6 && b.width > 40) continue;    // 譜線
+      if (b.width < 2.2 && b.height > 30) continue;    // 小節線
+      const dy = dyOf(el);
+      obs.push({ x: b.x, y: b.y + dy, w: b.width, h: b.height, el, dy });
+    }
+    const hitY = (el, ob, R) => {   // 碰到的話回傳碰到的部分最上面的 y,沒碰到回傳 null
+      const big = el.tagName.toLowerCase() === "path" && (ob.w > R.width * 1.5 || ob.h > R.height * 1.5) && el.getTotalLength;
+      if (!big) return ob.y;
+      let top = null;
+      const L = el.getTotalLength(), step = Math.max(0.5, L / 1500);
+      for (let t = 0; t <= L; t += step) {
+        const p = el.getPointAtLength(t), y = p.y + ob.dy;
+        if (p.x > R.x && p.x < R.x + R.width && y > R.y && y < R.y + R.height) top = top == null ? y : Math.min(top, y);
+      }
+      return top;
+    };
+    let moved = 0;
+    for (const node of labels) {
+      let lift = 0;
+      for (let it = 0; it < 8; it++) {
+        const b0 = node.getBBox(), b = { x: b0.x, y: b0.y - lift, width: b0.width, height: b0.height };
+        const pad = 0.5, R = { x: b.x - pad, y: b.y - pad, width: b.width + 2 * pad, height: b.height + 2 * pad };
+        let top = null;
+        for (const ob of obs) {
+          if (ob.x > R.x + R.width || ob.x + ob.w < R.x || ob.y > R.y + R.height || ob.y + ob.h < R.y) continue;
+          const y = hitY(ob.el, ob, R);
+          if (y != null) top = top == null ? y : Math.min(top, y);
+        }
+        if (top == null) break;
+        lift += (b.y + b.height) - top + MNUM_GAP;
+        node.setAttribute("transform", `translate(0 ${(-lift).toFixed(2)})`);   // getBBox 不含自己的 transform,所以上面用 lift 自己算
+        if (!it) moved++;
+      }
+    }
+    return moved;
+  } catch (e) { console.warn("measure numbers", e); return 0; }
+}
 function roundRehearsalBoxes(root){
   const svg = (root || $("score")).querySelector("svg");
   if (!svg) return;
@@ -4079,6 +4135,41 @@ function prettyChordName(name){
     .replace(/\/([A-G])b/, "/$1♭").replace(/\/([A-G])#/, "/$1♯")
     .replace(/([(,\s]|\d)b(5|6|9|13)/g, "$1♭$2").replace(/([(,\s]|\d)#(5|9|11)/g, "$1♯$2");
 }
+/* 圓滑線端點貼回音符(使用者反映 2026-10:〈甲乙丙丁〉第 44 小節圓滑線接到跳音的地方,結尾沒有接在音符旁邊、掉到譜表第一線下面):
+   OSMD(依上下輪廓擺放)有時把端點推到離自己的音好幾格遠(那個例子:C5 符頭底部 2.0 格,端點 5.3 格)。
+   符桿朝另一邊(圓滑線在下、符桿朝上,或反過來)時,端點應該在符頭外 SLUR_SNAP.gap 格;符頭那一側有跳音/保持音/跳弓記號時
+   放在記號外面(印刷慣例:跳音點在圓滑線裡面)。OSMD 的端點比這個位置遠 SLUR_SNAP.far 格以上才拉回;拉回後拱形照圓滑線拱形那套重算
+   (離中間的音符至少 SLUR_FLAT.clear 格)。符桿朝圓滑線那邊的(端點本來就該在符桿尾端附近)不動 */
+const SLUR_SNAP = { gap: 0.4, far: 0.8, art: { 6: 0.7, 7: 0.6, 8: 0.7, 9: 0.6, 2: 0.7 } };   // 記號佔的格數:staccato 6、staccatissimo 7、tenuto 8、spiccato 9、detached legato 2(OSMD ArticulationEnum)
+function slurSnapEnds(gs){
+  let moved = false;
+  try {
+    const below = gs.placement === 1, slur = gs.slur;   // PlacementEnum:Above 0、Below 1
+    if (!slur) return false;
+    const line = gs.staffEntries[0].parentMeasure.ParentStaffLine, sy = line.PositionAndShape.AbsolutePosition.y;
+    const fix = (pt, note, ses) => {
+      if (!pt || !note) return;
+      let ve = null;
+      for (const se of ses) for (const v of se.graphicalVoiceEntries) if (v.notes.some(n => n.sourceNote === note)) ve = v;
+      if (!ve || ve.parentStaffEntry.parentMeasure.ParentStaffLine !== line) return;
+      const stem = ve.parentVoiceEntry.StemDirection;   // StemDirectionType:Up 0、Down 1、None 2
+      if (below ? stem === 1 : stem === 0) return;
+      const ps = ve.PositionAndShape, top = ps.AbsolutePosition.y - sy + ps.BorderMarginTop, bot = ps.AbsolutePosition.y - sy + ps.BorderMarginBottom;
+      if (!isFinite(top) || !isFinite(bot)) return;
+      let art = 0;
+      for (const a of ve.parentVoiceEntry.Articulations || []) {
+        const e = a.articulationEnum != null ? a.articulationEnum : a;
+        const place = a.placement;   // 沒寫就是符頭那一側
+        if (SLUR_SNAP.art[e] && (place == null || place === 2 || place === (below ? 1 : 0))) art = Math.max(art, SLUR_SNAP.art[e]);
+      }
+      const target = below ? bot + SLUR_SNAP.gap + art : top - SLUR_SNAP.gap - art;
+      if (below ? pt.y > target + SLUR_SNAP.far : pt.y < target - SLUR_SNAP.far) { pt.y = target; moved = true; }
+    };
+    fix(gs.bezierStartPt, slur.StartNote, [gs.staffEntries[0]]);
+    fix(gs.bezierEndPt, slur.EndNote, [gs.staffEntries[gs.staffEntries.length - 1]]);
+  } catch (e) { return false; }
+  return moved;
+}
 function installSlurFlattening(){
   const G = window.opensheetmusicdisplay && opensheetmusicdisplay.GraphicalSlur;
   if (!G || !G.prototype.calculateCurve || G.prototype.__ssFlat) return;
@@ -4105,6 +4196,8 @@ function installSlurFlattening(){
         this.bezierStartControlPt = { x: E[0].x, y: E[0].y }; this.bezierEndControlPt = { x: E[1].x, y: E[1].y };
         return;
       } }
+    const keep = [this.bezierStartPt, this.bezierStartControlPt, this.bezierEndControlPt, this.bezierEndPt].map(p => ({ x: p.x, y: p.y }));
+    const moved = slurSnapEnds(this);
     if (!line) return;
     try {
       const P0 = this.bezierStartPt, P1 = this.bezierStartControlPt, P2 = this.bezierEndControlPt, P3 = this.bezierEndPt;
@@ -4128,19 +4221,22 @@ function installSlurFlattening(){
       } return v; };
       const orig1 = bez(P1, P2), h1 = height(orig1);
       // 原本的曲線有些地方就已經比 clear 近(端點附近、跟別的圓滑線很近):只要不比原本更近就可以
-      const v1 = intrude(orig1) + 1e-3;
+      const v1 = moved ? 1e-3 : intrude(orig1) + 1e-3;   // 端點拉回音符旁邊之後原本的控制點不能用,一定重算、不能碰到中間的音
       const hMin = Math.min(SLUR_FLAT.minH, SLUR_FLAT.minRatio * len);
       let best = null;
-      if (h1 > hMin * 1.15 && len >= SLUR_FLAT.minLen) for (const a of SLUR_FLAT.shapes) {   // 短的圓滑線本來就不高,不用找
+      if ((h1 > hMin * 1.15 && len >= SLUR_FLAT.minLen) || moved) for (const a of SLUR_FLAT.shapes) {   // 短的圓滑線本來就不高,不用找
         // 拱高約 0.75H:找最小、不碰到東西的 H(二分搜尋)
-        let lo = hMin / 0.75, hi = Math.max(lo, h1 / 0.75 * 1.5);
+        let lo = hMin / 0.75, hi = Math.max(lo, h1 / 0.75 * 1.5, moved ? 12 : 0);
         if (intrude(bez(...shape(a, hi))) > v1) continue;
         if (intrude(bez(...shape(a, lo))) > v1) { for (let it = 0; it < 16; it++) { const m = (lo + hi) / 2; if (intrude(bez(...shape(a, m))) <= v1) hi = m; else lo = m; } lo = hi; }
         const pts = bez(...shape(a, lo)), h = height(pts);
         if (!best || h < best.h * 0.9) best = { a, H: lo, h };                  // 差不多高時用前面(比較圓)的形狀
       }
-      const useNew = best && best.h < h1 * 0.9;                                // 省不到一成就保留 OSMD 原本的
+      const useNew = best && (moved || best.h < h1 * 0.9);                     // 省不到一成就保留 OSMD 原本的
       if (useNew) { const [C1, C2] = shape(best.a, best.H); P1.x = C1.x; P1.y = C1.y; P2.x = C2.x; P2.y = C2.y; }
+      else if (moved) {   // 端點拉回音符旁邊後找不到不碰到中間音符的拱形:整條照 OSMD 原本的(寧可離音符遠一點,不能穿過音符)
+        [P0, P1, P2, P3].forEach((p, k) => { p.x = keep[k].x; p.y = keep[k].y; });
+      }
       for (const p of bez(P1, P2)) {                                             // 用新的曲線更新輪廓(跟 OSMD 一樣更新兩個取樣點)
         const i = Math.floor(p.x * su);
         for (const j of [i, i + 1]) { if (j < 0 || j >= arr.length) continue; arr[j] = above ? Math.min(arr[j], p.y) : Math.max(arr[j], p.y); }
@@ -4211,6 +4307,7 @@ async function renderScore(xmlText){
   centerBetweenStaffLabels(osmd, $("score"));
   drawWordDashes(osmd, $("score"), finalXml);
   extendLedgerLineStems(); // OSMD符桿長度是固定值,不會因為加線音符離譜表遠就自動加長,這裡渲染完手動補上
+  avoidMeasureNumberOverlap(osmd, $("score"));
 
   buildTimeline();
   markDrumChokes();
@@ -13050,6 +13147,7 @@ async function renderPageOsmd(contentW, sp){
   centerBetweenStaffLabels(o, host);
   drawWordDashes(o, host, lastRenderedXml);
   extendLedgerLineStems(host);
+  avoidMeasureNumberOverlap(o, host);
   return { o, host };
 }
 function readPageGeometry(o){
