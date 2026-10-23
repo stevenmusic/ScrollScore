@@ -1,6 +1,7 @@
 // 離線算出 ScrollScore 的實際輸出(跟網頁播放走同一條音訊路徑),存成 32-bit float WAV。
 // 用法:node render.mjs <樂譜> <輸出.wav> [--inst piano|drum] [--tempo N] [--reverb N] [--sec 最長秒數] [--taps]
 //   --taps:多存 2 聲道 = masterGain(響度壓縮器之前的鋼琴/吉他總和),共 4 聲道
+//   --tapsrc mg(配合 --taps):3、4 聲道改存 masterGain(鋼琴/吉他母帶處理之前)
 //   --tapsrc verb(配合 --taps):3、4 聲道改存鋼琴殘響回送 pianoVerbWet 的輸出(換殘響 IR 時校正 PIANO_HALL.wet)
 // 需要:npm i playwright opensheetmusicdisplay@2.0.0 jszip(在 NODE_PATH 或本目錄)
 // 雲端環境 jsdelivr 被擋,所以 OSMD/JSZip 從 npm 拿,用 page.route 攔截
@@ -47,6 +48,9 @@ await page.addInitScript(([taps, fixedSec]) => {
     return ctx;
   };
 }, [TAPS, +opt("sec", 0)]);
+// 環境變數:SPEAKER=1/0 強制手機喇叭補償開/關(window.SPEAKER_PROFILE_OVERRIDE);NOWK=1 模擬 iPhone 沒有 AudioWorklet
+if (process.env.SPEAKER) await page.addInitScript(v => { window.SPEAKER_PROFILE_OVERRIDE = (v === "1"); }, process.env.SPEAKER);
+if (process.env.NOWK) await page.addInitScript(() => { window.FORCE_NO_WORKLET = true; });
 await page.goto(`http://127.0.0.1:${port}/index.html`);
 await page.waitForFunction(() => typeof loadScoreFile === "function");
 const inst = opt("inst", null);
@@ -82,6 +86,7 @@ const nch = await page.evaluate(async ([taps, tapSrc]) => {
     const m = ctx.createChannelMerger(4), s1 = ctx.createChannelSplitter(2), s2 = ctx.createChannelSplitter(2);
     masterOut.connect(s1); s1.connect(m, 0, 0); s1.connect(m, 1, 1);
     if (tapSrc === "verb") { getPianoVerb(); pianoVerbWet.connect(s2); }   // --tapsrc verb:3、4 聲道改成鋼琴殘響回送(換 IR 時校正 PIANO_HALL.wet 用)
+    else if (tapSrc === "mg") masterGain.connect(s2);   // --tapsrc mg:3、4 聲道 = masterGain(鋼琴母帶鏈之前的總和,離線測試台用)
     else (typeof masterBus !== "undefined" && masterBus ? masterBus : masterGain).connect(s2);
     s2.connect(m, 0, 2); s2.connect(m, 1, 3);
     ctx.destination.channelInterpretation = "discrete";

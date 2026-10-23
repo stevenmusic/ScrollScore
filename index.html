@@ -1998,7 +1998,8 @@ let audioCtx = null, masterGain = null, masterLimiter = null, masterOut = null, 
 const MASTER = {
   // 響度壓縮器維持原本的設定(試過慢起音壓縮,p→ff 被壓扁)。makeup 1.6 → 1.82:舊的限幅器(DynamicsCompressor)會自動
   // 補約 +1.1dB 到整個訊號,換成真峰值限幅器後補回來,整體響度跟以前一樣(實測 11 首差 ≤ 0.3 LU)
-  compThreshold: -18, compKnee: 8, compRatio: 3, compAttack: 0.008, compRelease: 0.18, makeup: 1.82,
+  // makeup 1.82 → 1.5(2026-10 母帶計畫 B,使用者要求):播放音量統一到 −14 LUFS(跟匯出影片、YouTube 一樣),典型鋼琴曲(〈甲乙丙丁〉)−12.5 → −14;只動鋼琴/吉他這條,鼓有自己的 DRUM_BUS.makeup
+  compThreshold: -18, compKnee: 8, compRatio: 3, compAttack: 0.008, compRelease: 0.18, makeup: 1.5,
   ceilingDb: -1.3,      // 限幅器上限(dBFS,4 倍超取樣量):實測 16 倍超取樣的真峰值最壞(寬頻雜訊突波)−1.0dBTP,一般 ≤ −1.1
   lookahead: 0.005,     // 預讀 5ms:峰值到之前就先把音量降好
   release: 0.09,        // 放開:單一尖峰很快回復(60ms 會在 40Hz 低音的一個週期內起伏,低音失真)
@@ -2014,7 +2015,7 @@ const MASTER = {
    ③ DynamicsCompressor 會自動補增益(makeup),依 threshold/knee/ratio 決定,makeupDb 是在 Chrome 離線實測的值(100Hz 小訊號通過的增益),壓縮器後面再扣掉;改參數要重測
    ④ 低段的壓縮器之後再並聯 500Hz 的 LP+HP(= 全通),補中段分頻點的相位,三段相加才平 */
 const PIANO_MASTER = { on: true, subHp: 30, xover: 230, xover2: 500, trimDb: 0.6,
-  low: { threshold: -36, knee: 6, ratio: 2.6, attack: 0.008, release: 0.2, makeupDb: 12.28 },
+  low: { threshold: -32, knee: 6, ratio: 2.3, attack: 0.008, release: 0.2, makeupDb: 9.91 },   // 2026-10 計畫 A:−36/2.6 → −32/2.3(只處理瞬間尖峰,低段不再被壓薄);makeupDb 重測(100Hz 小訊號通過增益)
   mid: { threshold: -32, knee: 6, ratio: 2, attack: 0.01, release: 0.2, makeupDb: 8.75 } };
 /* 母帶限幅器(AudioWorklet 處理器,用 Blob 載入,維持單檔)
    1) 峰值偵測用 4 倍超取樣:16 點 Kaiser(β=8)加窗 sinc 內插取樣點之間 1/4、1/2、3/4 的值,抓到真峰值
@@ -8047,9 +8048,54 @@ function ensureAudio(){
     try { audioCtx = new AC({ latencyHint: "playback" }); } catch (e) { audioCtx = new AC(); }
     initAudioGraph();
   }
+  initSpeakerRoute();
   if (audioCtx.state === "suspended") audioCtx.resume();
 }
 /* 在目前的 audioCtx 上建立總輸出鏈路(ensureAudio 與匯出前的離線響度分析共用) */
+/* 手機喇叭補償(SPEAKER_COMP,使用者要求 2026-10,只有 iOS App 偵測得到「聲音從內建喇叭出來」才開):
+   手機/iPad 內建小喇叭 450Hz 以下幾乎發不出,但放大器要把低頻補償(約 +8dB,350Hz 以下)推它,低頻大的瞬間就削波(爆音)。
+   所以內建喇叭時,鋼琴/吉他母帶鏈最後(loudnessComp、makeup 之後、masterBus 之前)多一個低頻架式濾波器收掉 250Hz 以下(只收喇叭本來就發不出的部分,
+   450Hz 以上幾乎不變);換耳機/藍牙/AirPlay 立刻放回(setTargetAtTime 約 0.1 秒平滑)。鼓不經過這段(鼓已凍結)。
+   偵測只靠原生外掛 AudioRoute(app/ios/App/App/AudioRoutePlugin.swift,AVAudioSession 目前路由的 portType),網頁用瀏覽器 API 猜不準,所以網頁版永遠不開。
+   匯出影片永遠不套(影片要給所有裝置看;匯出開始/結束時 speakerCompUpdate(true) 立即切)。
+   window.SPEAKER_PROFILE_OVERRIDE = true/false 可在電腦上強制測試(匯出時仍關)。參數依 tools/audiotest/translation_check.py 的手機模型量決定 */
+const SPEAKER_COMP = { f: 250, gainDb: -8, tau: 0.03 };
+let speakerRoute = { builtInSpeaker: false, portType: "", portName: "" }, speakerRouteInit = false;
+function speakerWanted(){
+  if (exporting) return false;
+  if (typeof window.SPEAKER_PROFILE_OVERRIDE === "boolean") return window.SPEAKER_PROFILE_OVERRIDE;
+  return !!speakerRoute.builtInSpeaker;
+}
+function speakerCompUpdate(immediate){
+  try {
+    const sh = audioCtx && audioCtx.__spkShelf; if (!sh) return;
+    const g = speakerWanted() ? SPEAKER_COMP.gainDb : 0, t = audioCtx.currentTime;
+    sh.gain.cancelScheduledValues(t);
+    if (immediate) sh.gain.setValueAtTime(g, t); else sh.gain.setTargetAtTime(g, t, SPEAKER_COMP.tau);
+  } catch (e) {}
+}
+function setSpeakerRoute(r){
+  if (!r || typeof r !== "object") return;
+  speakerRoute = { builtInSpeaker: !!r.builtInSpeaker, portType: String(r.portType || ""), portName: String(r.portName || "") };
+  speakerCompUpdate(false);
+}
+function refreshSpeakerRoute(){
+  try {
+    const AR = window.IN_NATIVE_APP && window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.AudioRoute;
+    if (AR && AR.getRoute) AR.getRoute().then(setSpeakerRoute).catch(() => {});
+  } catch (e) {}
+}
+function initSpeakerRoute(){
+  if (speakerRouteInit) return; speakerRouteInit = true;
+  try {
+    const AR = window.IN_NATIVE_APP && window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.AudioRoute;
+    if (!AR) return;   // 網頁版、或外掛不存在:完全不變
+    refreshSpeakerRoute();
+    let ok = false;
+    try { if (AR.addListener) { const h = AR.addListener("routeChange", setSpeakerRoute); ok = true; if (h && h.catch) h.catch(() => { ok = false; }); } } catch (e) {}
+    if (!ok) setInterval(refreshSpeakerRoute, 3000);   // 沒有事件時每 3 秒問一次(換耳機最多 3 秒才切)
+  } catch (e) {}
+}
 /* 鋼琴/吉他母帶處理的節點(見 PIANO_MASTER)。回傳 { input, output };window.PIANO_MASTER_OVERRIDE 可覆寫參數({ on:false } 關掉,測試用) */
 function buildPianoMaster(ctx){
   const C = Object.assign({}, PIANO_MASTER, window.PIANO_MASTER_OVERRIDE || {});
@@ -8110,7 +8156,10 @@ function initAudioGraph(){
     /* masterBus:所有樂器最後匯集的地方(鋼琴/吉他走完響度壓縮、鼓組匯流排直接進來),後面只剩母帶限幅器。
        masterOut:最後的輸出節點,喇叭與匯出影片都從這裡取 */
     masterBus = audioCtx.createGain();
-    makeupGain.connect(masterBus);
+    // 手機喇叭補償(SPEAKER_COMP):只有內建喇叭才收低頻,其他情況增益 0dB(= 沒有效果);匯出時永遠 0
+    const spkShelf = audioCtx.createBiquadFilter(); spkShelf.type = "lowshelf"; spkShelf.frequency.value = SPEAKER_COMP.f;
+    spkShelf.gain.value = speakerWanted() ? SPEAKER_COMP.gainDb : 0; audioCtx.__spkShelf = spkShelf;
+    makeupGain.connect(spkShelf); spkShelf.connect(masterBus);
     masterOut = audioCtx.createGain();
     // monitorOut:只給喇叭的音量(匯出影片時靜音,見 exportVideo;影片從 masterOut 取,不受影響)
     monitorOut = audioCtx.createGain();
@@ -8667,7 +8716,7 @@ function loadInstrumentSamples(instKey){
    全部載入解碼後約 1.5GB,所以只載入「這首曲子用得到的音 × 力度層」,超過裝置記憶體預算時
    依序:截短到曲子實際需要的長度 → 改單聲道 → 合併最少用到的力度層(找最近的層代替)。 */
 const PIANO_BASES = ["piano/", "https://raw.githubusercontent.com/stevenmusic/ScrollScore/main/piano/"];
-let PIANO_GAIN = 1.5;          // 實測:整首約 -11.5 LUFS、完全不削波,p→ff 仍有約 8dB 差(再大聲限幅器就開始削波、力度被壓平)
+let PIANO_GAIN = 1.5;          // 實測(2026-10 以前,makeup 1.82):整首約 -11.5 LUFS、完全不削波;現在播放母帶 makeup 1.5,典型鋼琴曲約 −14 LUFS,p→ff 仍有約 8dB 差(再大聲限幅器就開始削波、力度被壓平)
 const PIANO_VERB_SEND = 0.5;     // 殘響送出量(踩踏板的琴弦共鳴改由 PIANO_SYMPA 真的模擬,不再用多送殘響近似)
 let PIANO_RELEASE_TRIM = 0;    // 放鍵弦共鳴的額外增減(dB)
 const PIANO_NOTE_NAMES = ["C","Cs","D","Ds","E","F","Fs","G","Gs","A","As","B"];
@@ -10032,7 +10081,7 @@ function pianoResetVoices(){ pianoVoices = []; pianoLastByKey = {}; pianoRRFlip 
    舊版 2.8kHz −3.5dB + 9kHz +1.5dB 已拿掉(會讓強音更悶、高頻補得不夠)。
    另外試過給鋼琴獨立的慢起音壓縮器取代 loudnessComp,實測同樣響度下 p→ff 的差距從 7.7dB 縮到 5.6dB、
    清晰度沒有變好,所以壓縮維持原本的 */
-const PIANO_EQ = { mudFreq: 450, mudGain: -2, mudQ: 1.0, harshFreq: 3300, harshGain: -4.5, harshQ: 1.1, lowFreq: 100, lowGain: 1.5 };
+const PIANO_EQ = { mudFreq: 450, mudGain: -2, mudQ: 1.0, harshFreq: 3300, harshGain: -4.5, harshQ: 1.1, lowFreq: 100, lowGain: 0 };
 /* 鋼琴立體聲寬度(PIANO_WIDTH):side(左右差)在 hp Hz 以上乘 gain,M/S 做法——單聲道(左+右)完全不變,手機單喇叭聽起來一樣。
    跟 Keyscape / Claire 同一首曲子比:250Hz~4kHz 左右相關性他們 0.1~0.4 / ~0,我們 0.4~0.6(偏窄、聲音集中在中間) */
 const PIANO_WIDTH = { gain: 1.5, hp: 300, lp: 5000 };
@@ -10042,8 +10091,10 @@ function getPianoBus(){
   const E = PIANO_EQ;
   const peq = (f, g, q) => { const n = audioCtx.createBiquadFilter(); n.type = "peaking"; n.frequency.value = f; n.gain.value = g; n.Q.value = q; return n; };
   const mud = peq(E.mudFreq, E.mudGain, E.mudQ), harsh = peq(E.harshFreq, E.harshGain, E.harshQ);
-  const low = audioCtx.createBiquadFilter(); low.type = "lowshelf"; low.frequency.value = E.lowFreq; low.gain.value = E.lowGain;
-  mud.connect(harsh); harsh.connect(low);
+  // 低頻架式(lowGain 0 = 不接):2026-10 母帶處理計畫 A 拿掉 +1.5dB(先加再被 PIANO_MASTER 低段壓縮器壓掉是矛盾的)
+  let low = harsh;
+  if (E.lowGain) { low = audioCtx.createBiquadFilter(); low.type = "lowshelf"; low.frequency.value = E.lowFreq; low.gain.value = E.lowGain; harsh.connect(low); }
+  mud.connect(harsh);
   if (PIANO_WIDTH.gain !== 1) {
     // L' = L + k·HP(S)、R' = R − k·HP(S),S = (L−R)/2、k = gain − 1
     const split = audioCtx.createChannelSplitter(2), merge = audioCtx.createChannelMerger(2);
@@ -13484,6 +13535,7 @@ async function exportCombinedWithVideo(){
   if (!video.src) { setStatus(T("statusUploadVideoFirst")); return; }
   exporting = true; exportCancelled = false; $("exportCancel").disabled = false;
   document.body.classList.add("exporting-active");
+  speakerCompUpdate(true);   // 匯出的影片不套手機喇叭補償
   await acquireWakeLock();
   stopPlayback();
   ensureAudio();
@@ -13566,6 +13618,7 @@ async function exportCombinedWithVideo(){
     releaseWakeLock();
     exporting = false;
     document.body.classList.remove("exporting-active");
+    speakerCompUpdate(true);
   }
 }
 
@@ -15537,6 +15590,7 @@ async function exportVideo(cfg){
   if (!events.length || exporting) return;
   exporting = true; exportCancelled = false; $("exportCancel").disabled = false;
   document.body.classList.add("exporting-active");
+  speakerCompUpdate(true);   // 匯出的影片不套手機喇叭補償
   // 匯出畫面先打開:音色還在下載時按「開始匯出」,以前要等下載完才有畫面、也不能取消(審查發現)
   fastExportNote = ""; $("exportFastNote").textContent = "";
   fastTimes = { t0: performance.now() }; fastAudioHealth = ""; fastVerifyNote = ""; fastAudioRetry = ""; fastFrameNote = ""; lastExportDetail = "";
@@ -15739,6 +15793,7 @@ async function exportVideo(cfg){
   $("exportOverlay").classList.remove("show");
   exporting = false;
   document.body.classList.remove("exporting-active");
+  speakerCompUpdate(true);   // 匯出完恢復(內建喇叭時放回補償)
 }
 
 /* 匯出完成的影片交給使用者:App(WKWebView)裡 <a download> 沒有作用,iPhone 網頁版下載後也不好找,
