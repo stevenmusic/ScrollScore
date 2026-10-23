@@ -3935,9 +3935,11 @@ function drawWordDashes(o, root, xml){
 }
 /* 小節數字不跟任何符號重疊(使用者反映 2026-10:「有的地方跟圓滑線重疊了」;〈甲乙丙丁〉第 11、31 小節的數字壓在跨小節線的延音線上):
    畫完後每個小節數字(OSMD MusicSystem.MeasureNumberLabels)跟 SVG 裡其他畫出來的東西比(譜線、小節線不算;大的路徑〔圓滑線、延音線〕
-   沿著線取點比,不是比外框),碰到就往上移到那些東西上面 MNUM_GAP(OSMD 單位,10 = 一格),再檢查一次(最多 8 次)。
+   沿著線取點比,不是比外框)。真的重疊時(使用者選的做法,2026-10:位置盡量一致)先左右挪 1 格以內、高度不變(MNUM_SHIFTS),
+   挪不開才往上移到那些東西上面 MNUM_GAP(OSMD 單位,10 = 一格),再檢查一次(最多 8 次)。
    畫面與翻頁式都用;檢查工具 tools/audiotest/measure_number_check.mjs */
 const MNUM_GAP = 2;
+const MNUM_SHIFTS = [-2, 2, -4, 4, -6, 6, -8, 8, -10, 10];   // 左右挪的候選(OSMD 單位,10 = 一格),最多 1 格
 function avoidMeasureNumberOverlap(o, root){
   try {
     const svg = (root || $("score")).querySelector("svg");
@@ -3968,23 +3970,34 @@ function avoidMeasureNumberOverlap(o, root){
       }
       return top;
     };
+    // 跟障礙物真的重疊才算(pad 0;以前留 0.5 邊,只是貼很近的 0.2~0.4 格也被移,使用者 2026-10:「位置會不一致」)
+    const collide = (b, dx, dy, pad = 0) => {
+      const R = { x: b.x + dx - pad, y: b.y + dy - pad, width: b.width + 2 * pad, height: b.height + 2 * pad };
+      let top = null;
+      for (const ob of obs) {
+        if (ob.x > R.x + R.width || ob.x + ob.w < R.x || ob.y > R.y + R.height || ob.y + ob.h < R.y) continue;
+        const y = hitY(ob.el, ob, R);
+        if (y != null) top = top == null ? y : Math.min(top, y);
+      }
+      return top;
+    };
     let moved = 0;
     for (const node of labels) {
+      const b = node.getBBox();
+      if (collide(b, 0, 0) == null) { node.removeAttribute("transform"); continue; }
+      moved++;
+      // ① 先左右挪(1 格以內,高度不變),小的先試
+      let dx = null;
+      for (const d of MNUM_SHIFTS) if (collide(b, d, 0, MNUM_GAP / 2) == null) { dx = d; break; }   // 挪過去的位置要留一點空隙,不要剛好貼著
+      if (dx != null) { node.setAttribute("transform", `translate(${dx} 0)`); continue; }
+      // ② 挪不開才往上移到擋住的東西上面
       let lift = 0;
       for (let it = 0; it < 8; it++) {
-        const b0 = node.getBBox(), b = { x: b0.x, y: b0.y - lift, width: b0.width, height: b0.height };
-        const pad = 0.5, R = { x: b.x - pad, y: b.y - pad, width: b.width + 2 * pad, height: b.height + 2 * pad };
-        let top = null;
-        for (const ob of obs) {
-          if (ob.x > R.x + R.width || ob.x + ob.w < R.x || ob.y > R.y + R.height || ob.y + ob.h < R.y) continue;
-          const y = hitY(ob.el, ob, R);
-          if (y != null) top = top == null ? y : Math.min(top, y);
-        }
+        const top = collide(b, 0, -lift);
         if (top == null) break;
-        lift += (b.y + b.height) - top + MNUM_GAP;
-        node.setAttribute("transform", `translate(0 ${(-lift).toFixed(2)})`);   // getBBox 不含自己的 transform,所以上面用 lift 自己算
-        if (!it) moved++;
+        lift += (b.y - lift + b.height) - top + MNUM_GAP;
       }
+      node.setAttribute("transform", `translate(0 ${(-lift).toFixed(2)})`);   // getBBox 不含自己的 transform,所以位移自己算
     }
     return moved;
   } catch (e) { console.warn("measure numbers", e); return 0; }
