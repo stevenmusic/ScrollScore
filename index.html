@@ -9236,6 +9236,13 @@ const POP_BEAT = Object.assign({ down: -2, back: 1.5, beat: 0, off: 0 }, window.
    是之前「感情不夠」把段落/旋律起伏加大後累積的)。bar 縮每小節平均離整首平均的距離、mel 縮同時彈的最高音與其他音的差、
    contour 縮旋律音離前後 8 個旋律音平均的距離。取真人較有情感那一端(四分位上緣附近),不是平均值 */
 const POP_CAL_DEFAULT = { bar: 0.33, mel: 0.65, contour: 0.3 };
+/* 旋律每半音力度與旋律/其他差距照真人(第二輪,使用者 2026-10「要接近真人」;POP_EXPOSE):Pop1K7 慢歌真人「每個同時起音群的最高音(≥ C4,skyline)」
+   的力度,離前後 8 個最高音平均的高低 vs 音高,每半音 0.47(四分位 0.31~0.62);App〈甲乙丙丁〉0.94。查出來:旋律音自己的起伏只有 0.26,
+   多出來的是 skyline 裡混了 132/509 個「旋律休息時露在最上面的伴奏音」(多數是右手單音音型的內聲部,力度 61、音高比旋律低 8 半音),
+   旋律(76)與它們的力度差 14 ÷ 音高差 8 ≈ 角色差異本身,不是旋律走向。真人彈琴旋律休息時最上面的伴奏音不會這麼輕,而且整體旋律只比其他大 5.8(App 7.6)。
+   做法(非古典,看樂譜結構):① 「露在最上面的伴奏」= 同時起音的音裡最高、≥ C4、不是旋律音(n.pmel),往前後一小節內旋律音的平均力度靠 frac 倍的差距(最多 cap);
+   ② 旋律與其他的差距(以最高音群計)超過 melGap 時,旋律音一起往下收超出的部分(最多 melMaxCut) */
+const POP_EXPOSE = Object.assign({ frac: 0.25, cap: 4, melGap: 6.3, melMaxCut: 4 }, window.POP_EXPOSE_OVERRIDE || {});
 /* 拍位置的力度照真人(POP_BEAT_PROFILE,偶數拍子〔4/4、2/4〕的非古典):Pop1K7 慢歌真人各拍平均力度相對整首:第 1 拍 −2.6、第 2 拍 +0.4、
    第 3 拍 +0.1、第 4 拍 +0.9、反拍 +0.1(第 1 拍反而輕、後拍略重)。整首算完後各拍位置的平均往真人拉近 strength、每個位置最多 ±max */
 const POP_BEAT_PROFILE = { target: [-2.6, 0.4, 0.1, 0.9], off: 0.1, strength: 0.7, max: 5 };
@@ -9252,12 +9259,21 @@ function popBeatProfile(){
     for (const n of ev.notes) if (!n.drum && n.freq && n.pvel != null) { (groups[key] = groups[key] || []).push(n); all.push(n); }
   }
   if (all.length < 100) return;
-  const mean = a => a.reduce((s, n) => s + n.pvel, 0) / a.length, M = mean(all);
-  for (const key of Object.keys(groups)) {
-    const g = groups[key]; if (g.length < 10) continue;
-    const tgt = key === "off" ? P.off : P.target[+key];
-    const d = Math.max(-P.max, Math.min(P.max, (tgt - (mean(g) - M)) * P.strength));
-    for (const n of g) n.pvel = Math.max(8, Math.min(124, n.pvel + d));
+  // 基準 = 全部音的平均(跟 pop_stats 的量法一樣;以前只算有分到拍位置的音,十六分音符位置的音被排除、反拍量出來 +0.76 而不是 +0.1)
+  const allN = []; for (const ev of events) for (const n of ev.notes) if (!n.drum && n.freq && n.pvel != null) allN.push(n);
+  const mean = a => a.reduce((s, n) => s + n.pvel, 0) / a.length;
+  // 各拍位置互相影響(整體平均 M 會跟著動;以前一輪只用舊的 M,反拍停在 +0.4~0.5):逐組用當下的 M 重算、反覆做到收斂。
+  // 注意各組目標不可能同時達成(音符幾乎都分在這幾組裡,加權平均必須 ≈ 0;真人資料裡第 1 拍的音比例比較少),所以是折衷:反覆後約 第 1 拍 −2.2、反拍 +0.35
+  // 每組總共最多動 ±max,往真人拉近的比例 strength(單位:離目標差距)
+  const acc = {};
+  for (let it = 0; it < 12; it++) {
+    for (const key of Object.keys(groups)) {
+      const g = groups[key]; if (g.length < 10) continue;
+      const tgt = key === "off" ? P.off : P.target[+key];
+      const want = Math.max(-P.max, Math.min(P.max, (acc[key] || 0) + (tgt - (mean(g) - mean(allN))) * P.strength));
+      const d = want - (acc[key] || 0); acc[key] = want;
+      for (const n of g) n.pvel = Math.max(8, Math.min(124, n.pvel + d));
+    }
   }
 }
 function popDynamicsCalibrate(){
@@ -9288,6 +9304,36 @@ function popDynamicsCalibrate(){
       top.pvel = clampV(top.pvel + sh); for (const n of others) n.pvel = clampV(n.pvel - sh);
     }
   }
+  popExposeAccomp();
+}
+/* 露在最上面的伴奏音拉近旋律 + 旋律與其他的差距收到真人範圍(見 POP_EXPOSE) */
+function popExposeAccomp(){
+  const X = POP_EXPOSE;
+  if (!X || classicalProbInfo().p >= 0.5) return;
+  const clampV = v => Math.max(8, Math.min(124, v));
+  const tops = [];   // 每個起音群的最高音(≥ C4)
+  for (const ev of events) {
+    let top = null;
+    for (const n of ev.notes) if (!n.drum && n.freq && n.pvel != null && (!top || n.freq > top.freq)) top = n;
+    if (top && freqToMidi(top.freq) >= 60) tops.push({ n: top, t: ev.tWhole, w: ev.barLen > 0 ? ev.barLen : 1 });
+  }
+  const mels = tops.filter(x => x.n.pmel);
+  if (mels.length < 8) return;
+  let lo = 0;
+  for (const x of tops) {
+    if (x.n.pmel) continue;
+    while (lo < mels.length && mels[lo].t < x.t - x.w - 1e-6) lo++;
+    let s = 0, k = 0;
+    for (let j = lo; j < mels.length && mels[j].t <= x.t + x.w + 1e-6; j++) { s += mels[j].n.pvel; k++; }
+    if (k && s / k > x.n.pvel) x.n._expose = Math.min(X.cap, X.frac * (s / k - x.n.pvel));
+  }
+  for (const x of tops) if (x.n._expose != null) { x.n.pvel = clampV(x.n.pvel + x.n._expose); delete x.n._expose; }
+  const topSet = new Set(tops.map(x => x.n)), rest = [];
+  for (const ev of events) for (const n of ev.notes) if (!n.drum && n.freq && n.pvel != null && !topSet.has(n)) rest.push(n.pvel);
+  if (!rest.length) return;
+  const mean = a => a.reduce((s, v) => s + v, 0) / a.length;
+  const gap = mean(tops.map(x => x.n.pvel)) - mean(rest), cut = Math.min(X.melMaxCut, gap - X.melGap);
+  if (cut > 0.05) for (const x of mels) x.n.pvel = clampV(x.n.pvel - cut * tops.length / mels.length);
 }
 /* 像真人彈流行歌的三個細節(使用者 2026-10 選的:「有其他地方可以調整,更能夠像真人彈的感覺嗎?主要針對流行歌」)
    ① 和弦最低音不加重(pianoBassNotHeavy,非古典):Pop1K7(1747 首流行歌鋼琴翻彈)量到真人同時彈的音裡最低音比中間的音輕約 3 力度,
@@ -9651,9 +9697,9 @@ function computePianoDynamics(){
   });
   pianoLineNuance();
   popDynamicsCalibrate();
-  popBeatProfile();
   // 低音區整體拉高與和弦最低音收輕會互相影響(先後哪個都會讓另一個偏掉),交替做兩次讓兩項都落在真人範圍
   if (pop) for (let k = 0; k < 2; k++) { pianoHandBalance(); pianoBassNotHeavy(); }
+  popBeatProfile();   // 拍位置放在低音區平衡之後(平衡會動低音區的力度、連帶改變各拍位置的平均)
   pianoVelocityAsync();
   pianoWideChordRoll(multiStaff);
   if (pop) pianoHandDrift(multiStaff);
