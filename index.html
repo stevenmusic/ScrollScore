@@ -1993,7 +1993,7 @@ let calibrationMap = []; // [{tWhole, realSec}] 已排序,由 tap-along 或自�
 let endX = 0, totalWhole = 0;
 let audioCtx = null, masterGain = null, masterLimiter = null, masterOut = null, monitorOut = null, masterBus = null, masterLimiterNode = null, masterReady = Promise.resolve(false);
 /* ── 母帶(總輸出)設定 ─────────────────────────────────
-   masterGain(鋼琴/吉他)→ loudnessComp(響度壓縮)→ makeup → masterBus ← 鼓組匯流排
+   masterGain(鋼琴/吉他)→ 母帶處理 PIANO_MASTER(分頻動態控制)→ loudnessComp(響度壓縮)→ makeup → masterBus ← 鼓組匯流排
    masterBus → 母帶限幅器(AudioWorklet)→ masterOut → 喇叭/匯出影片 */
 const MASTER = {
   // 響度壓縮器維持原本的設定(試過慢起音壓縮,p→ff 被壓扁)。makeup 1.6 → 1.82:舊的限幅器(DynamicsCompressor)會自動
@@ -2004,6 +2004,18 @@ const MASTER = {
   release: 0.09,        // 放開:單一尖峰很快回復(60ms 會在 40Hz 低音的一個週期內起伏,低音失真)
   releaseSlow: 0.7      // 持續壓著(大聲段落)時改用慢的放開,不會一下一下抽動
 };
+/* 鋼琴/吉他母帶處理(PIANO_MASTER,使用者要求 2026-10:「讓鋼琴音色接近商業用的」「成品聽感」;iPhone 喇叭聽起來「有爆掉的感覺」):
+   masterGain → 30Hz 高通 → LR4 分頻(230Hz / 500Hz)→ 低段、中段各一個慢起音 DynamicsCompressor(只壓大聲的瞬間,平常不動)→ 三段相加 → loudnessComp。
+   原因:〈甲乙丙丁〉約 40% 的能量在 450Hz 以下,和弦低音疊起來時低頻短時峰值比整體響度還大(20ms RMS p99 −3.6 LU);手機喇叭的放大器要把低頻補償(+8dB)
+   放大才推得動,這些尖峰就削波(「爆」)。商業唱片的鋼琴低音有分頻壓縮、低於約 30Hz 切掉,所以這裡做同樣的事。
+   全部是原生節點,整條鏈只加一組(不是每個音一組),不用 AudioWorklet(Safari 經過 AudioWorklet 會有雜訊)。
+   注意:① Web Audio 的 lowpass/highpass Q 單位是 dB,Butterworth(線性 0.7071)要填 −3.0103;兩個串聯 = LR4,低+高相加是全通(實測頻響平坦、整首響度差 0.01 LU)
+   ② DynamicsCompressor 內建 6ms 預讀延遲,不壓的那一路(高段)要延遲一樣長(取整數取樣)才不會相位錯開
+   ③ DynamicsCompressor 會自動補增益(makeup),依 threshold/knee/ratio 決定,makeupDb 是在 Chrome 離線實測的值(100Hz 小訊號通過的增益),壓縮器後面再扣掉;改參數要重測
+   ④ 低段的壓縮器之後再並聯 500Hz 的 LP+HP(= 全通),補中段分頻點的相位,三段相加才平 */
+const PIANO_MASTER = { on: true, subHp: 30, xover: 230, xover2: 500, trimDb: 0.6,
+  low: { threshold: -36, knee: 6, ratio: 2.6, attack: 0.008, release: 0.2, makeupDb: 12.28 },
+  mid: { threshold: -32, knee: 6, ratio: 2, attack: 0.01, release: 0.2, makeupDb: 8.75 } };
 /* 母帶限幅器(AudioWorklet 處理器,用 Blob 載入,維持單檔)
    1) 峰值偵測用 4 倍超取樣:16 點 Kaiser(β=8)加窗 sinc 內插取樣點之間 1/4、1/2、3/4 的值,抓到真峰值
       (8 點 Hann 在 18kHz 會少算 0.6dB,高頻的銅鈸會穿過上限,所以用 16 點;到 18kHz 誤差 < 0.1dB)
@@ -8038,6 +8050,31 @@ function ensureAudio(){
   if (audioCtx.state === "suspended") audioCtx.resume();
 }
 /* 在目前的 audioCtx 上建立總輸出鏈路(ensureAudio 與匯出前的離線響度分析共用) */
+/* 鋼琴/吉他母帶處理的節點(見 PIANO_MASTER)。回傳 { input, output };window.PIANO_MASTER_OVERRIDE 可覆寫參數({ on:false } 關掉,測試用) */
+function buildPianoMaster(ctx){
+  const C = Object.assign({}, PIANO_MASTER, window.PIANO_MASTER_OVERRIDE || {});
+  const BW_Q = -3.0103;   // Butterworth,Web Audio 的 Q 單位是 dB
+  const bq = (type, f) => { const n = ctx.createBiquadFilter(); n.type = type; n.frequency.value = f; n.Q.value = BW_Q; return n; };
+  const lr4 = (type, f, from) => { const a = bq(type, f), b = bq(type, f); from.connect(a); a.connect(b); return b; };
+  const comp = (L, to) => {
+    const c = ctx.createDynamicsCompressor();
+    c.threshold.value = L.threshold; c.knee.value = L.knee; c.ratio.value = L.ratio; c.attack.value = L.attack; c.release.value = L.release;
+    const mk = ctx.createGain(); mk.gain.value = Math.pow(10, -L.makeupDb / 20);   // 扣掉壓縮器自動補的增益
+    c.connect(mk); mk.connect(to); return c;
+  };
+  // 強制 2 聲道(Safari 單聲道輸入時 explicit 聲道數才不會把某些路徑弄成單聲道)
+  const input = ctx.createGain(); input.channelCount = 2; input.channelCountMode = "explicit"; input.channelInterpretation = "speakers";
+  const out = ctx.createGain(); out.gain.value = Math.pow(10, C.trimDb / 20);
+  const sub = bq("highpass", C.subHp); input.connect(sub);
+  const lowO = lr4("lowpass", C.xover, sub), restI = lr4("highpass", C.xover, sub);
+  const ap = ctx.createGain(); lowO.connect(comp(C.low, ap));
+  lr4("lowpass", C.xover2, ap).connect(out); lr4("highpass", C.xover2, ap).connect(out);
+  const midO = lr4("lowpass", C.xover2, restI), hiO = lr4("highpass", C.xover2, restI);
+  midO.connect(comp(C.mid, out));
+  const dly = ctx.createDelay(0.05); dly.delayTime.value = Math.floor(0.006 * ctx.sampleRate) / ctx.sampleRate;   // 壓縮器的預讀延遲
+  hiO.connect(dly); dly.connect(out);
+  return { input, output: out };
+}
 function initAudioGraph(){
   {
     masterGain = audioCtx.createGain();
@@ -8066,7 +8103,9 @@ function initAudioGraph(){
     loudnessComp.release.value = MASTER.compRelease;
     const makeupGain = audioCtx.createGain();
     makeupGain.gain.value = MASTER.makeup;
-    masterGain.connect(loudnessComp);
+    // 鋼琴/吉他母帶處理(PIANO_MASTER):masterGain → 分頻動態控制 → loudnessComp(鼓走 masterBus,不經過)
+    if ((window.PIANO_MASTER_OVERRIDE || PIANO_MASTER).on !== false) { const pm = buildPianoMaster(audioCtx); masterGain.connect(pm.input); pm.output.connect(loudnessComp); }
+    else masterGain.connect(loudnessComp);
     loudnessComp.connect(makeupGain);
     /* masterBus:所有樂器最後匯集的地方(鋼琴/吉他走完響度壓縮、鼓組匯流排直接進來),後面只剩母帶限幅器。
        masterOut:最後的輸出節點,喇叭與匯出影片都從這裡取 */
