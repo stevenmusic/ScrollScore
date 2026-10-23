@@ -7,6 +7,8 @@
 //   text-beam   文字壓到符尾橫線(沿外框取點)
 //   curve-note  圓滑線/延音線穿過別的符頭(端點附近 1.2 格內的符頭不算,那是它自己的音)
 //   slur-far    圓滑線端點離自己的音超過 2.5 格
+//   head-head   兩個符頭/休止符重疊超過較小那個的 30%(同一位置的同音不算)
+//   mod-head    臨時記號/附點/演奏記號壓到符頭
 // 都只算真的重疊(內縮 0.3 單位),貼著不算。SHOT=目錄 時每個問題截一張圖(紅圈 = 位置)
 import { chromium } from "playwright";
 import http from "node:http"; import fs from "node:fs"; import path from "node:path";
@@ -61,7 +63,7 @@ for (const f of process.argv.slice(2)) {
     const add = (type, x, msg, y) => { const sx = inv.a * x + inv.c * (y || 0) + inv.e, sy = y != null ? inv.b * x + inv.d * y + inv.f : null; out.push({ type, m: mAt(x), msg, sx, sy }); };
     for (let i = 0; i < texts.length; i++) for (let j = i + 1; j < texts.length; j++) {
       const A = texts[i], C = texts[j];
-      if (ov(A.B, C.B) && A.C.some(a => C.C.some(c => ov(a, c))) && !(A.s === C.s && Math.abs(A.B.l - C.B.l) < 1 && Math.abs(A.B.t - C.B.t) < 1)) add("text-text", A.B.l, `${A.k}「${A.s}」×${C.k}「${C.s}」`);
+      if (ov(A.B, C.B) && A.C.some(a => C.C.some(c => ov(a, c))) && !(A.s === C.s && Math.abs(A.B.l - C.B.l) < 1 && Math.abs(A.B.t - C.B.t) < 1)) add("text-text", A.B.l, `${A.k}「${A.s}」×${C.k}「${C.s}」`, (A.B.t + A.B.b) / 2);
     }
     for (const T of texts) {
       for (const H of [...heads, ...mods, ...stems]) if (ovT(T, shrink(H.B, 0.3))) { add("text-note", T.B.l, `${T.k}「${T.s}」× ${H.e.closest(".vf-modifiers") ? "記號" : H.e.closest(".vf-notehead") ? "符頭" : "符桿/旗"}`, (T.B.t + T.B.b) / 2); break; }
@@ -78,6 +80,21 @@ for (const f of process.argv.slice(2)) {
         if (C.P.some(p => inB(p, HB))) { add("curve-note", cx, (C.tie ? "延音線" : "圓滑線") + "穿過符頭", (H.B.t + H.B.b) / 2); break; }
       }
     }
+    const area = B => Math.max(0, B.r - B.l) * Math.max(0, B.b - B.t);
+    const inter = (A, B) => ({ l: Math.max(A.l, B.l), t: Math.max(A.t, B.t), r: Math.min(A.r, B.r), b: Math.min(A.b, B.b) });
+    const hs = heads.slice().sort((a, b) => a.B.l - b.B.l);
+    for (let i = 0; i < hs.length; i++) for (let j = i + 1; j < hs.length && hs[j].B.l < hs[i].B.r; j++) {
+      const A = hs[i].B, C = hs[j].B;
+      if (Math.abs(A.l - C.l) < 0.5 && Math.abs(A.t - C.t) < 0.5) continue;   // 同音同位置(兩個聲部共用符頭)
+      const I = inter(A, C), a = area(I);
+      if (a > 0.3 * Math.min(area(A), area(C))) add("head-head", (A.l + A.r) / 2, "符頭/休止符重疊", (A.t + A.b) / 2);
+    }
+    for (const Mo of mods) {
+      const MB = shrink(Mo.B, 0.4);
+      if (!(MB.r > MB.l && MB.b > MB.t)) continue;
+      const own = Mo.e.closest(".vf-stavenote");   // 同一個音自己的記號(倚音斜線、附點休止符的點)不算
+      for (const H of hs) { if (H.B.l > MB.r) break; if (own && H.e.closest(".vf-stavenote") === own) continue; if (ov(MB, shrink(H.B, 0.4))) { add("mod-head", (MB.l + MB.r) / 2, "記號壓到符頭", (MB.t + MB.b) / 2); break; } }
+    }
     // 圓滑線端點離自己的音太遠(OSMD 資料)
     try {
       for (const sys of osmd.GraphicSheet.MusicPages[0].MusicSystems) for (const sl of sys.StaffLines) for (const gs of sl.GraphicalSlurs || []) {
@@ -85,7 +102,9 @@ for (const f of process.argv.slice(2)) {
         const chk = (pt, note, se) => {
           if (!pt || !note || !se) return;
           let ve = null; for (const v of se.graphicalVoiceEntries) if (v.notes.some(n => n.sourceNote === note)) ve = v;
-          if (!ve) return; const ps = ve.PositionAndShape, top = ps.AbsolutePosition.y - sy + ps.BorderMarginTop, bot = ps.AbsolutePosition.y - sy + ps.BorderMarginBottom;
+          if (!ve) return;
+          const stem = ve.parentVoiceEntry.StemDirection; if (gs.placement === 1 ? stem === 1 : stem === 0) return;   // 符桿朝圓滑線那側:端點在符桿尾端是對的
+          const ps = ve.PositionAndShape, top = ps.AbsolutePosition.y - sy + ps.BorderMarginTop, bot = ps.AbsolutePosition.y - sy + ps.BorderMarginBottom;
           const d = pt.y < top ? top - pt.y : pt.y > bot ? pt.y - bot : 0;
           if (d > 2.5) add("slur-far", M0.a * (pt.x + sx) * 10 + M0.e, `端點離音 ${d.toFixed(1)} 格`, M0.d * (pt.y + sy) * 10 + M0.f);
         };

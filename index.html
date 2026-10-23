@@ -2447,8 +2447,11 @@ async function loadScoreFile(file){
     } else if (/\.mxl$/i.test(file.name)) {
       xmlText = await extractMXL(file);
     } else {
-      xmlText = await file.text();
+      xmlText = decodeXmlBytes(new Uint8Array(await file.arrayBuffer()));
     }
+    // OSMD 只接受開頭是 <?xml 的字串:沒有 XML 宣告(合法,Finale 等軟體會這樣存)或前面有 BOM/空白的檔案會整首載不進來
+    xmlText = xmlText.replace(/^\uFEFF/, "").replace(/^\s+/, "");
+    if (!/^<\?xml/.test(xmlText)) xmlText = '<?xml version="1.0" encoding="UTF-8"?>\n' + xmlText;
     transposeSemitones = 0;
     updateTransposeLabel();
     const parsed = parseXmlTimeline(xmlText);
@@ -3165,7 +3168,24 @@ async function extractMXL(file){
     rootPath = Object.keys(zip.files).find(p => /\.(xml|musicxml)$/i.test(p) && !p.startsWith("META-INF"));
   }
   if (!rootPath) throw new Error(T("errMxlNoMusicXml"));
-  return zip.file(rootPath).async("text");
+  return decodeXmlBytes(await zip.file(rootPath).async("uint8array"));
+}
+// 依 BOM / XML 宣告決定編碼:舊版 Finale、Dolet 匯出的 MusicXML 常是 UTF-16(照 UTF-8 讀會變亂碼、整首載不進來)
+function decodeXmlBytes(u8){
+  let enc = "utf-8";
+  if (u8[0] === 0xFF && u8[1] === 0xFE) enc = "utf-16le";
+  else if (u8[0] === 0xFE && u8[1] === 0xFF) enc = "utf-16be";
+  else if (u8[0] === 0x3C && u8[1] === 0x00) enc = "utf-16le";
+  else if (u8[0] === 0x00 && u8[1] === 0x3C) enc = "utf-16be";
+  else {
+    const head = new TextDecoder("latin1").decode(u8.subarray(0, 200));
+    const m = /^\s*<\?xml[^>]*encoding=["']([\w.-]+)["']/i.exec(head);
+    if (m && !/^utf-?8$/i.test(m[1])) { try { new TextDecoder(m[1]); enc = m[1]; } catch (e) {} }
+  }
+  let text = new TextDecoder(enc).decode(u8);
+  // 已經是 JS 字串了,宣告裡的編碼改成 UTF-8,後面重新解析時才不會照錯的編碼讀
+  if (enc !== "utf-8") text = text.replace(/^(\uFEFF?\s*<\?xml[^>]*encoding=)["'][\w.-]+["']/i, '$1"UTF-8"');
+  return text;
 }
 
 /* ── 移調:直接改寫 MusicXML 的音高/調號資料,依照樂理正確選擇升記號或降記號 ── */
@@ -3308,6 +3328,72 @@ function hideHiddenTempoMarks(o){
       sm.TempoExpressions.length = 0; sm.TempoExpressions.push(...keep);
     }
   } catch (e) { console.warn("hideHiddenTempoMarks", e); }
+}
+// OSMD 2.0.0 碰到會當掉(整首載不進來)的寫法,只改畫譜用的 XML、照原意補齊:
+// ① 移八度記號(octave-shift)有開始沒結束 → 在那個聲部最後一小節結尾補結束(移八度照原檔一直到曲尾,音高不變)
+// ② 裝飾音上的 triple-sharp 臨時記號(OSMD 沒有這個符號,setUpperAccidental 讀不到字形)→ 不畫這個小記號,裝飾音照樣畫、照樣演奏
+// 歌詞疊字:OSMD 依歌詞撐開音符間距只看「長歌詞超過門檻多少」,第二段以後的歌詞比較長、音符又密(八分音符一字一音)時
+// 相鄰兩個字還是疊在一起(music21 語料 Aloha Oe 第 14 小節「Fare-well」)。排完後量同一段歌詞相鄰兩個字的實際位置,
+// 疊到(或連字號放不下)就把那一小節的 WidthFactor 加大,再排一次(最多 LYRIC_FIT.iters 次;沒有歌詞的樂譜不會重排)
+const LYRIC_FIT = { gap: 0.5, dash: 1.4, max: 3, iters: 2 };
+function widenMeasuresForLyrics(o){
+  const need = new Map();
+  try {
+    for (const page of o.GraphicSheet.MusicPages) for (const sys of page.MusicSystems) for (const sl of sys.StaffLines) {
+      const byVerse = new Map();
+      for (const gm of sl.Measures) for (const se of gm.staffEntries || []) for (const le of se.LyricsEntries || []) {
+        const ps = le.GraphicalLabel && le.GraphicalLabel.PositionAndShape;
+        if (!ps || !le.LyricsEntry || !String(le.LyricsEntry.Text || "").trim()) continue;
+        const x = ps.AbsolutePosition.x, v = le.LyricsEntry.VerseNumber;
+        if (!byVerse.has(v)) byVerse.set(v, []);
+        byVerse.get(v).push({ x, l: x + ps.BorderLeft, r: x + ps.BorderRight, dash: !!(le.hasDashFromLyricWord && le.hasDashFromLyricWord()), sm: gm.parentSourceMeasure });
+      }
+      for (const arr of byVerse.values()) {
+        arr.sort((a, b) => a.x - b.x);
+        for (let i = 1; i < arr.length; i++) {
+          const A = arr[i - 1], B = arr[i], d = B.x - A.x;
+          const deficit = A.r + (A.dash ? LYRIC_FIT.dash : LYRIC_FIT.gap) - B.l;
+          if (deficit <= 0.05 || d <= 0.5 || !A.sm) continue;
+          need.set(A.sm, Math.max(need.get(A.sm) || 1, (d + deficit) / d));
+        }
+      }
+    }
+  } catch (e) { console.warn("widenMeasuresForLyrics", e); return false; }
+  let changed = false;
+  for (const [sm, f] of need) {
+    const w0 = sm.WidthFactor || 1, w = Math.min(LYRIC_FIT.max, w0 * f * 1.04);
+    if (w > w0 + 0.01) { sm.WidthFactor = w; changed = true; }
+  }
+  return changed;
+}
+function osmdCrashGuardMusicXML(xmlText){
+  if (!/octave-shift|triple-sharp/.test(xmlText)) return xmlText;
+  try {
+    const doc = new DOMParser().parseFromString(xmlText, "text/xml");
+    if (doc.getElementsByTagName("parsererror")[0]) return xmlText;
+    let changed = false;
+    for (const am of Array.from(doc.getElementsByTagName("accidental-mark"))) {
+      if (am.textContent.trim() !== "triple-sharp") continue;
+      am.parentNode.removeChild(am); changed = true;
+    }
+    for (const part of Array.from(doc.getElementsByTagName("part"))) {
+      const open = new Map();   // number → size
+      for (const os of Array.from(part.getElementsByTagName("octave-shift"))) {
+        const num = os.getAttribute("number") || "1", type = os.getAttribute("type");
+        if (type === "up" || type === "down") open.set(num, os.getAttribute("size") || "8");
+        else if (type === "stop") open.delete(num);
+      }
+      if (!open.size) continue;
+      const ms = part.getElementsByTagName("measure"), last = ms[ms.length - 1];
+      if (!last) continue;
+      for (const [num, size] of open) {
+        const dir = doc.createElement("direction"), dt = doc.createElement("direction-type"), os = doc.createElement("octave-shift");
+        os.setAttribute("type", "stop"); os.setAttribute("number", num); os.setAttribute("size", size);
+        dt.appendChild(os); dir.appendChild(dt); last.appendChild(dir); changed = true;
+      }
+    }
+    return changed ? new XMLSerializer().serializeToString(doc) : xmlText;
+  } catch (e) { console.warn("osmdCrashGuardMusicXML", e); return xmlText; }
 }
 function hideInvisibleMarksMusicXML(xmlText){
   hiddenTempoMarks = [];
@@ -4459,7 +4545,7 @@ async function renderScore(xmlText){
   osmd.EngravingRules.AutoGenerateMultipleRestMeasuresFromRestMeasures = mergeRests;
 
   const transposedXml = transposeSemitones ? transposeMusicXML(xmlText, transposeSemitones) : xmlText;
-  const beamedXml = stemConventionMusicXML(tupletSecondaryBeamsMusicXML(autoBeamMusicXML(drumStemFixMusicXML(tameFarDirectionsMusicXML(hideInvisibleMarksMusicXML(transposedXml))))));   // 符桿方向要在補完符尾之後算(同一組符尾要一起決定)
+  const beamedXml = stemConventionMusicXML(tupletSecondaryBeamsMusicXML(autoBeamMusicXML(drumStemFixMusicXML(tameFarDirectionsMusicXML(hideInvisibleMarksMusicXML(osmdCrashGuardMusicXML(transposedXml)))))));   // 符桿方向要在補完符尾之後算(同一組符尾要一起決定)
   const finalXml = mergeRests ? mergeRestMeasures(beamedXml) : splitRestMeasures(beamedXml);
   await osmd.load(finalXml);
   hideHiddenTempoMarks(osmd);
@@ -4474,6 +4560,7 @@ async function renderScore(xmlText){
   // (蕭邦第一號敘事曲 465 個踏板記號,疊到譜表下方 140 格,畫面上看不到譜表)。排出來太誇張時改成不畫踏板記號
   // (踏板的播放照樣依原檔),一般曲子不受影響
   if (osmd.EngravingRules.RenderPedals && scoreLayoutTooTall()) { osmd.EngravingRules.RenderPedals = false; crossArp.single.clear(); crossArp.strokes.clear(); osmd.render(); }
+  for (let k = 0; k < LYRIC_FIT.iters && widenMeasuresForLyrics(osmd); k++) { crossArp.single.clear(); crossArp.strokes.clear(); osmd.render(); }
   if (finalXml.includes('id="gp-hide-clef-octave"')) hideClefOctaveMarks();
   roundRehearsalBoxes();
   tagChordSymbols(osmd);
@@ -5734,7 +5821,7 @@ function harmonySymbolTimes(xmlText){
    彈性速度模型是用古典鋼琴家的演奏(ASAP)訓練的:小節第一拍放慢、句尾拉長、長音前喘息,套在流行/爵士/抒情伴奏上會怪。
    這裡從樂譜找線索加減分(正 = 古典),scoreClassicalProb() 再加上音樂內容(切分音)換算成機率,
    buildRubatoMap 依機率縮放模型起伏(非古典約 30%);譜上的 rit./延長記號照做。沒有線索時偏古典(維持以前的行為) */
-const CLASSICAL_COMPOSERS = /\b(bach|mozart|beethoven|chopin|haydn|schubert|schumann|liszt|brahms|debussy|ravel|rachmaninoff|rachmaninov|rakhmaninov|mendelssohn|clementi|scarlatti|handel|händel|haendel|grieg|tchaikovsky|tschaikowsky|satie|czerny|burgm[uü]ller|kuhlau|prokofiev|scriabin|skryabin|faur[eé]|glinka|mussorgsky|alb[eé]niz|granados|bart[oó]k|couperin|rameau|diabelli|field|hummel|dvo[rř][aá]k|jan[aá][cč]ek|franck|saint-sa[eë]ns|chaminade|balakirev|borodin|rimsky|mompou|telemann|vivaldi|pachelbel|purcell|byrd|gibbons|soler|cimarosa|dussek|weber|alkan|godowsky|medtner|lyapunov|busoni|reger|elgar|sibelius|nielsen|poulenc|milhaud|honegger|shostakovich|kabalevsky|khachaturian|gretchaninov|heller|streabbog|lemoine|duvernoy|bertini|cramer|moszkowski|paderewski|szymanowski|rubinstein|gottschalk|joplin)\b/i;
+const CLASSICAL_COMPOSERS = /\b(bach|mozart|beethoven|chopin|haydn|schubert|schumann|liszt|brahms|debussy|ravel|rachmaninoff|rachmaninov|rakhmaninov|mendelssohn|clementi|scarlatti|handel|händel|haendel|grieg|tchaikovsky|tschaikowsky|satie|czerny|burgm[uü]ller|kuhlau|prokofiev|scriabin|skryabin|faur[eé]|glinka|mussorgsky|alb[eé]niz|granados|bart[oó]k|couperin|rameau|diabelli|field|hummel|dvo[rř][aá]k|jan[aá][cč]ek|franck|saint-sa[eë]ns|chaminade|balakirev|borodin|rimsky|mompou|telemann|vivaldi|pachelbel|purcell|byrd|gibbons|soler|cimarosa|dussek|weber|alkan|godowsky|medtner|lyapunov|busoni|reger|elgar|sibelius|nielsen|poulenc|milhaud|honegger|shostakovich|kabalevsky|khachaturian|gretchaninov|heller|streabbog|lemoine|duvernoy|bertini|cramer|moszkowski|paderewski|szymanowski|rubinstein|gottschalk|joplin|monteverdi|palestrina|josquin|lassus|gesualdo|marenzio|tallis|dowland|frescobaldi|sweelinck|schütz|sch[uü]tz|buxtehude|corelli|albinoni|tartini|gluck|boccherini|paganini|rossini|bellini|donizetti|verdi|puccini|wagner|bizet|gounod|massenet|offenbach|mahler|bruckner|hindemith|sch[oö]nberg|schoenberg|webern|stravinsky|britten|messiaen|ligeti|vaughan williams|holst|delius|respighi|villa-lobos|piazzolla|ysa[yÿ]e|wieniawski|sarasate|kreisler)\b/i;
 const CLASSICAL_TITLE = /\b(op\.?\s*\d|opus\s*\d|bwv|hwv|hob\.?|kv?\.?\s*\d|woo\s*\d|d\.\s*\d|l\.\s*\d|s\.\s*\d|sonat(a|e|ina|ine)|[eé]tudes?|studie|prelude|pr[eé]lude|praeludium|fugue?|nocturnes?|mazurkas?|polonaises?|ballade|scherzo|impromptus?|inventions?|sinfonia|partita|variations?|variationen|rondo|minuet|menuett?|concerto|fantasi[ae]|fantaisie|bagatelles?|moments? musicaux|lieder ohne worte|songs without words|gymnop[eé]die|gnossienne|arabesque|berceuse|barcarolle|toccata|allemande|courante|sarabande|gigue|gavotte|bourr[eé]e|chaconne|passacaglia|suite bergamasque|kinderszenen|arabeske|kreisleriana|novellet(te|ten)|papillons|carnaval|davidsb[uü]ndler|humoreske|intermezz[oi]|capriccio|rhapsod(y|ie|ies)|r[eê]verie|valse|walzer|album f[uü]r die jugend|well-tempered|wohltemperierte)\b/i;
 /* 中文/日文寫的古典作曲者與曲名(\b 對中日文無效,另外一組) */
 const CLASSICAL_COMPOSERS_CJK = /巴哈|巴赫|莫札特|莫扎特|貝多芬|贝多芬|蕭邦|肖邦|舒伯特|舒曼|李斯特|布拉姆斯|勃拉姆斯|德布西|德彪西|拉威爾|拉威尔|拉赫曼尼諾夫|拉赫玛尼诺夫|孟德爾頌|门德尔松|海頓|海顿|韓德爾|亨德尔|柴可夫斯基|葛利格|格里格|薩提|萨蒂|徹爾尼|車爾尼|车尔尼|布爾格彌勒|布格缪勒|克萊曼蒂|克列门蒂|史卡拉第|斯卡拉蒂|普羅高菲夫|普罗科菲耶夫|史克里亞賓|斯克里亚宾|佛瑞|福雷|德弗札克|德沃夏克|バッハ|モーツァルト|ベートーヴェン|ベートーベン|ショパン|シューベルト|シューマン|リスト|ブラームス|ドビュッシー|ラヴェル|ラフマニノフ|メンデルスゾーン|ハイドン|チャイコフスキー|ブルグミュラー|ツェルニー|サティ/;
@@ -13315,6 +13402,7 @@ async function renderPageOsmd(contentW, sp){
   R.FlatBeams = M.FlatBeams;
   R.RenderPedals = M.RenderPedals;
   installCrossStaffArpeggio(); crossArp.single.clear(); crossArp.strokes.clear(); o.render();
+  for (let k = 0; k < LYRIC_FIT.iters && widenMeasuresForLyrics(o); k++) { crossArp.single.clear(); crossArp.strokes.clear(); o.render(); }
   if (lastRenderedXml.includes('id="gp-hide-clef-octave"')) hideClefOctaveMarks(host);
   roundRehearsalBoxes(host);
   tagChordSymbols(o);
