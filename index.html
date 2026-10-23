@@ -3549,6 +3549,61 @@ function stemConventionCore(xmlText){
   return changed ? new XMLSerializer().serializeToString(doc) : xmlText;
 }
 
+/* 連音邊界的第二條以上符尾斷開(使用者反映 2026-10:〈甲乙丙丁〉第 48 小節左手兩個十六分音符跟後面的十六分音符三連音
+   兩條線全部連在一起,應該只連一條):印刷慣例是第一條(八分音符那條)連整組,第二條以上在連音的頭尾斷開,一看就知道哪幾個是連音。
+   同一組符尾(第 1 條 begin~end)裡有連音也有一般音符時才動:第 2 條以上在連音與一般音符交界處斷開(兩組連音相接,例如兩組十六分
+   三連音連成六個,各版本習慣不同,照原檔;第一版連這種也斷,貝多芬 Op.10-1 第 83~98 小節被改),
+   重新寫 begin/continue/end,單獨剩一個的畫短符尾(在組的開頭朝右、其他朝左)。原檔本來就斷開的照原檔;只改畫譜用的 XML */
+function tupletSecondaryBeamsMusicXML(xmlText){
+  if (!/<time-modification/.test(xmlText) || !/<beam[\s>]/.test(xmlText)) return xmlText;
+  const doc = new DOMParser().parseFromString(xmlText, "text/xml");
+  const kid = (el, name) => { for (const c of el.children) if (c.tagName === name) return c; return null; };
+  let changed = false;
+  for (const part of Array.from(doc.getElementsByTagName("part"))) {
+    for (const m of Array.from(part.getElementsByTagName("measure"))) {
+      const voices = new Map(), tupId = new Map(), wasTup = new Map();
+      for (const el of Array.from(m.children)) {
+        if (el.tagName !== "note" || kid(el, "grace") || kid(el, "chord")) continue;
+        const key = (kid(el, "staff") ? kid(el, "staff").textContent.trim() : "1") + ":" + (kid(el, "voice") ? kid(el, "voice").textContent.trim() : "1");
+        const tm = kid(el, "time-modification"), nt = kid(el, "notations");
+        const tStart = !!(nt && Array.from(nt.getElementsByTagName("tuplet")).some(t => t.getAttribute("type") === "start"));
+        let id = tupId.get(key) || 0;
+        if (tm && (tStart || !wasTup.get(key))) id++;
+        tupId.set(key, id); wasTup.set(key, !!tm);
+        const beams = {};
+        for (const b of Array.from(el.children)) if (b.tagName === "beam") beams[parseInt(b.getAttribute("number") || "1", 10)] = b;
+        if (!voices.has(key)) voices.set(key, []);
+        voices.get(key).push({ el, seg: tm ? "t" + id : "n", beams });
+      }
+      for (const list of voices.values()) {
+        // 第 1 條符尾分組
+        const groups = []; let cur = null;
+        for (const x of list) {
+          const b1 = x.beams[1], v = b1 ? b1.textContent.trim() : "";
+          if (v === "begin") { cur = [x]; groups.push(cur); }
+          else if ((v === "continue" || v === "end") && cur) { cur.push(x); if (v === "end") cur = null; }
+          else cur = null;
+        }
+        for (const g of groups) {
+          if (g.length < 2 || !g.some(x => x.seg === "n") || g.every(x => x.seg === "n")) continue;
+          const maxL = Math.max(...g.map(x => Math.max(...Object.keys(x.beams).map(Number))));
+          for (let L = 2; L <= maxL; L++) {
+            const val = g.map(x => x.beams[L] ? x.beams[L].textContent.trim() : "");
+            const has = val.map(v => v === "begin" || v === "continue" || v === "end");
+            const link = i => i >= 0 && i + 1 < g.length && has[i] && has[i + 1] && val[i] !== "end" && val[i + 1] !== "begin" && (g[i].seg === "n") === (g[i + 1].seg === "n");
+            for (let i = 0; i < g.length; i++) {
+              if (!has[i]) continue;
+              const l = link(i - 1), r = link(i);
+              const nv = l && r ? "continue" : r ? "begin" : l ? "end" : (i === 0 ? "forward hook" : "backward hook");
+              if (nv !== val[i]) { g[i].beams[L].textContent = nv; changed = true; }
+            }
+          }
+        }
+      }
+    }
+  }
+  return changed ? new XMLSerializer().serializeToString(doc) : xmlText;
+}
 /* 檔案完全沒有 <beam> 時自動補上符尾連結(有些程式或 AI 產生的 MusicXML 不寫 beam,OSMD 就會把
    每個八分、十六分音符各自畫成單獨的旗子)。只要檔案裡有任何 <beam> 就完全照原檔,不去動作者的寫法。
    不用 OSMD 內建的 autoBeam:它把同一小節所有聲部混在一起分組,鼓譜手腳分兩個聲部時會連錯或連不起來。
@@ -4299,7 +4354,7 @@ async function renderScore(xmlText){
   osmd.EngravingRules.AutoGenerateMultipleRestMeasuresFromRestMeasures = mergeRests;
 
   const transposedXml = transposeSemitones ? transposeMusicXML(xmlText, transposeSemitones) : xmlText;
-  const beamedXml = stemConventionMusicXML(autoBeamMusicXML(drumStemFixMusicXML(tameFarDirectionsMusicXML(hideInvisibleMarksMusicXML(transposedXml)))));   // 符桿方向要在補完符尾之後算(同一組符尾要一起決定)
+  const beamedXml = stemConventionMusicXML(tupletSecondaryBeamsMusicXML(autoBeamMusicXML(drumStemFixMusicXML(tameFarDirectionsMusicXML(hideInvisibleMarksMusicXML(transposedXml))))));   // 符桿方向要在補完符尾之後算(同一組符尾要一起決定)
   const finalXml = mergeRests ? mergeRestMeasures(beamedXml) : splitRestMeasures(beamedXml);
   await osmd.load(finalXml);
   hideHiddenTempoMarks(osmd);
