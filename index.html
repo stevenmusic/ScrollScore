@@ -1090,7 +1090,7 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
       <ul class="credits-list">
         <li><b data-i18n="creditPiano">鋼琴音色</b> Accurate-Salamander Grand Piano V6.2 (Chisato Yamauchi), based on Salamander Grand Piano V3 by Alexander Holm — <a href="https://creativecommons.org/licenses/by/3.0/" target="_blank" rel="noopener">CC BY 3.0</a></li>
         <li><b data-i18n="creditDrums">鼓組音色</b> Naked Drums by Wilkinson Audio <span style="white-space:nowrap">(SFZ edition by kinwie)</span> — <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a></li>
-        <li><b data-i18n="creditHall">音樂廳殘響</b> <a href="https://zenodo.org/records/4116247" target="_blank" rel="noopener">Open Database of Spatial Room Impulse Responses at Detmold University of Music</a> (S. V. Amengual Garí, B. Şahin, D. Eddy, M. Kob) — <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a></li>
+        <li><b data-i18n="creditHall">音樂廳殘響與房間聲</b> <a href="https://zenodo.org/records/4116247" target="_blank" rel="noopener">Open Database of Spatial Room Impulse Responses at Detmold University of Music</a> (S. V. Amengual Garí, B. Şahin, D. Eddy, M. Kob) — <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a></li>
         <li><b data-i18n="creditScore">樂譜顯示</b> <a href="https://github.com/opensheetmusicdisplay/opensheetmusicdisplay" target="_blank" rel="noopener">OpenSheetMusicDisplay</a> (BSD‑3‑Clause), VexFlow (MIT)</li>
         <li><b data-i18n="creditGp">Guitar Pro 匯入</b> <a href="https://github.com/CoderLine/alphaTab" target="_blank" rel="noopener">alphaTab</a> (MPL-2.0)</li>
         <li><b data-i18n="creditZip">壓縮樂譜(.mxl)</b> <a href="https://github.com/Stuk/jszip" target="_blank" rel="noopener">JSZip</a> (MIT)</li>
@@ -1343,7 +1343,7 @@ const I18N = {
     creditsIntro: "ScrollScore 使用以下開放授權的音色、資料與程式庫。|音色檔經過處理|(轉檔、音量、立體聲與長度調整)。",
     creditPiano: "鋼琴音色",
     creditDrums: "鼓組音色",
-    creditHall: "音樂廳殘響",
+    creditHall: "音樂廳殘響與房間聲",
     creditScore: "樂譜顯示",
     creditGp: "Guitar Pro 匯入",
     creditZip: "壓縮樂譜(.mxl)",
@@ -1610,7 +1610,7 @@ const I18N = {
     creditsIntro: "ScrollScore uses the following openly licensed sounds, data and libraries. The sound files have been modified (format conversion, level matching, stereo and length adjustments).",
     creditPiano: "Piano",
     creditDrums: "Drum kit",
-    creditHall: "Concert hall reverb",
+    creditHall: "Concert hall reverb and room sound",
     creditScore: "Score rendering",
     creditGp: "Guitar Pro import",
     creditZip: "Compressed scores (.mxl)",
@@ -7696,6 +7696,7 @@ function reverbWetTarget(){ return reverbAmount() * 0.55; }
 function applyReverbAmount(){
   if (reverbWet) reverbWet.gain.value = reverbWetTarget();
   if (pianoVerbWet) pianoVerbWet.gain.value = reverbAmount() * (pianoVerbHall ? pianoHallWet() : PIANO_VERB.wet);
+  if (pianoRoomWet) pianoRoomWet.gain.value = reverbAmount() * PIANO_ROOM.wet;
   if (gtrVerbWet) gtrVerbWet.gain.value = reverbAmount() * GTR_VERB.wet;
 }
 /* 真實鋼琴的低音弦在左、高音弦在右(以演奏者的視角),錄音也會保留這個位置感。
@@ -8165,7 +8166,7 @@ function pianoToneFor(vel){
    piano/sympa.flac 是全部琴弦當共振器的脈衝響應(piano/build/sympa_ir.py:每條弦的泛音含非諧和性、低音弦衰減慢、
    低音左高音右),踩著踏板時發出的音送進去;放開踏板 = 制音器落下,閘門 0.1 秒內關掉。
    send 校正成單音的共鳴比琴聲本身小約 15dB(0.3~3 秒,實測 send 3.2e-4 時 18dB),和弦的音互相是泛音關係,共鳴自然更大 */
-const PIANO_SYMPA = { send: 4.5e-4, closeTau: 0.1, openTau: 0.02 };
+const PIANO_SYMPA = { send: 3.4e-4, closeTau: 0.1, openTau: 0.02 };   // sympa.flac 改成左右不相關(2026-10)後峰值正規化讓檔案大 2.4dB,send 4.5e-4 → 3.4e-4 讓共鳴響度不變(整體 −20 LU)
 function isIOSDevice(){ return /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1); }
 /* Safari(iPhone/iPad 上所有瀏覽器與 App 的 WKWebView、Mac Safari)的 AudioWorklet 會把經過它的聲音弄髒(2026-10-17 iPhone 自檢:
    同一個鋼琴音不經過 AudioWorklet 8kHz 以上 −61dB,經過限幅器 AudioWorklet 變 −42dB = 使用者聽到的沙沙聲;離線合成時圖裡有
@@ -9058,7 +9059,7 @@ function pianoPlan(need, auxBytes){
 /* 取樣檔快取(Cache Storage):第一次下載後存在裝置上,之後開 App / 換曲子直接從本機讀,不用再下載
    (鋼琴 16 層全部約 156MB,手機網路下載是載入最慢的部分)。取樣檔重新產生時要把 SAMPLE_CACHE 的版本號加一,
    不然使用者會繼續用到舊檔。不支援 Cache Storage(非 https、無痕模式、儲存空間不足)時照原本直接下載 */
-const SAMPLE_CACHE = "scrollscore-samples-v3";   // v2(2026-10):piano/hall.flac 換成真實音樂廳;v3:銅鈸補回完整尾巴
+const SAMPLE_CACHE = "scrollscore-samples-v4";   // v2(2026-10):piano/hall.flac 換成真實音樂廳;v3:銅鈸補回完整尾巴;v4:piano/sympa.flac 左右改成響板輻射(不相關)
 let sampleCachePromise = null;
 function sampleCache(){
   if (!sampleCachePromise) sampleCachePromise = (typeof caches !== "undefined" && window.isSecureContext)
@@ -9114,6 +9115,7 @@ function loadPianoSamples(){
     const aux = new Set(["pedalD1", "pedalD2", "pedalU1", "pedalU2"]);
     if (pianoRanges().length) aux.add("sympa");   // 有踏板(記號或自動踏板)才需要踏板共鳴
     aux.add("hall");                              // 音樂廳殘響 IR
+    aux.add("room");                              // 房間麥克風(早期反射)IR,見 PIANO_ROOM
     for (const p of need.values()) aux.add((p.L >= pianoLayerFor(45) ? "harmL" : "harmS") + pianoNoteName(p.c));
     for (const ev of events) for (const n of ev.notes) if (!n.drum && n.freq) {
       const m = Math.max(21, Math.min(108, Math.round(freqToMidi(n.freq)))); aux.add("rel" + (m - 20));
@@ -9133,8 +9135,8 @@ function loadPianoSamples(){
     for (const a of Object.keys(pianoAux)) if (!aux.has(a)) delete pianoAux[a];
     const auxJobs = auxList.filter(a => !pianoAux[a]).map(a => Object.assign(async () => {
       try {
-        const b = await fetchPianoBuffer(a + ".flac", null, auxMono && a !== "hall" ? 1 : null);   // 殘響 IR 一定要立體聲
-        if (gen === pianoGen) { pianoAux[a] = b; if (a === "hall") pianoVerbUseHall(); }
+        const b = await fetchPianoBuffer(a + ".flac", null, auxMono && !PIANO_STEREO_AUX.has(a) ? 1 : null);   // 殘響/房間/共鳴 IR 一定要立體聲
+        if (gen === pianoGen) { pianoAux[a] = b; if (a === "hall") pianoVerbUseHall(); if (a === "room") pianoVerbUseRoom(); }
       } catch (e) {}
     }, { aux: a }));
     const total = first.length + rest.length + auxJobs.length;
@@ -9146,8 +9148,8 @@ function loadPianoSamples(){
     };
     if (total) setStatus(T("statusLoadingPiano", { pct: 0 }));
     // 音樂廳 IR 跟第一批一起載(播放中才換殘響會斷一下),其餘放鍵聲/踏板聲跟剩下的層一起
-    const hallJob = auxJobs.find(j => j.aux === "hall"), otherAux = auxJobs.filter(j => j !== hallJob);
-    await runLimited([...(hallJob ? [async () => { await hallJob(); tick(); }] : []), ...first.map(job)], SAMPLE_FETCH_CONCURRENCY);
+    const early = auxJobs.filter(j => j.aux === "hall" || j.aux === "room"), otherAux = auxJobs.filter(j => !early.includes(j));
+    await runLimited([...early.map(j => async () => { await j(); tick(); }), ...first.map(job)], SAMPLE_FETCH_CONCURRENCY);
     await runLimited([...otherAux.map(j => async () => { await j(); tick(); }), ...rest.map(job)], SAMPLE_FETCH_CONCURRENCY);
     if (gen === pianoGen) setStatus(T("statusPianoReady", { n: Object.keys(pianoBuf).length }));
   })();
@@ -9323,6 +9325,17 @@ function pianoVerbSyncStyle(){   // 換曲子後古典/非古典可能不同:開
   applyReverbAmount();
 }
 function pianoHallWet(){ return PIANO_HALL.wet * (pianoVerbPop ? Math.pow(10, PIANO_HALL_POP.wetDb / 20) : 1); }
+/* 房間麥克風層(使用者選的,2026-10:「不夠立體」——缺商業音色裡「房間麥克風」那一層):piano/room.flac(piano/build/room_brahms.py)
+   = Detmold 音樂大學 Brahmssaal(室內樂廳)第一排與第三排兩支全指向麥克風(相距約 1.8m,一支當左、一支當右)量到的早期反射,
+   直達聲拿掉、0.12 秒後淡出到 0.35 秒(長尾巴交給 hall.flac)。跟音樂廳殘響共用送出量(每個音 PIANO_VERB_SEND)、
+   同一個高通,並聯一個卷積器;古典非古典一樣(流行曲尾巴短,但琴照樣在房間裡)。wet 在 App 裡量回送響度校正(ConvolverNode 會自動正規化) */
+const PIANO_ROOM = { wet: 2.9 };   // 房間層回送 ≈ 整體 −15 LU(〈甲乙丙丁〉、莫札特 K331 都是;wet 1 時 −24),音樂廳長尾巴 −23~−27
+const PIANO_STEREO_AUX = new Set(["hall", "room", "sympa"]);   // 記憶體少的裝置其他 aux 改單聲道,這幾個靠左右不相關才有空間感,一定立體聲
+let pianoRoomConv = null, pianoRoomWet = null;
+function pianoVerbUseRoom(){
+  if (!pianoRoomConv || pianoRoomConv.buffer || !pianoAux.room || pianoVerbCtx !== audioCtx) return;
+  pianoRoomConv.buffer = pianoAux.room;
+}
 function getPianoVerb(){
   if (pianoVerbIn && pianoVerbCtx === audioCtx) return pianoVerbIn;
   const input = audioCtx.createGain();
@@ -9332,8 +9345,11 @@ function getPianoVerb(){
   pianoVerbWet = audioCtx.createGain(); pianoVerbWet.gain.value = reverbAmount() * PIANO_VERB.wet;
   // 殘響回送也經過鋼琴 EQ(跟直達聲同一套音色處理;以前直接進 masterGain,殘響在 3kHz 附近比琴聲亮 5dB)
   input.connect(hp); hp.connect(pre); pre.connect(conv); conv.connect(pianoVerbWet); pianoVerbWet.connect(getPianoBus());
+  pianoRoomConv = audioCtx.createConvolver(); pianoRoomWet = audioCtx.createGain(); pianoRoomWet.gain.value = reverbAmount() * PIANO_ROOM.wet;
+  hp.connect(pianoRoomConv); pianoRoomConv.connect(pianoRoomWet); pianoRoomWet.connect(getPianoBus());   // 房間層不經過預延遲(合成殘響的 8ms 是給長尾巴的)
   pianoVerbIn = input; pianoVerbCtx = audioCtx; pianoVerbConv = conv; pianoVerbPre = pre; pianoVerbHp = hp; pianoVerbHall = false;
   pianoVerbUseHall();   // 音樂廳 IR 已經載到就直接換上
+  pianoVerbUseRoom();
   return input;
 }
 function pianoConnect(node, sendAmt){
@@ -13257,7 +13273,7 @@ function solveExportGain(E, P, block, releaseSec){
 function exportHasDrums(){ return events.some(ev => ev.notes.some(n => n.drum)); }
 // 離線算聲音時要暫時換掉的全域狀態(audioCtx 與所有快取的匯流排),算完還原
 const EXPORT_AUDIO_KEEP = ["audioCtx", "masterGain", "masterLimiter", "masterOut", "monitorOut", "masterBus", "masterLimiterNode", "masterReady", "reverbBus", "reverbConvolver", "reverbWet", "reverbPreDelay",
-    "pianoRoomBus", "pianoBusIn", "pianoBusCtx", "pianoVerbIn", "pianoVerbWet", "pianoVerbCtx", "pianoVerbConv", "pianoVerbPre", "pianoVerbHp", "pianoVerbHall", "pianoResIn", "pianoResGate", "pianoResCtx", "gtrVerbIn", "gtrVerbWet", "gtrVerbCtx", "drumBus", "drumVerbIn", "drumVerbWet", "drumRoomConv", "drumRoomWet", "drumRoomIn",
+    "pianoRoomBus", "pianoBusIn", "pianoBusCtx", "pianoVerbIn", "pianoVerbWet", "pianoVerbCtx", "pianoVerbConv", "pianoVerbPre", "pianoVerbHp", "pianoVerbHall", "pianoRoomConv", "pianoRoomWet", "pianoVerbPop", "pianoResIn", "pianoResGate", "pianoResCtx", "gtrVerbIn", "gtrVerbWet", "gtrVerbCtx", "drumBus", "drumVerbIn", "drumVerbWet", "drumRoomConv", "drumRoomWet", "drumRoomIn",
     "scheduled", "startCtxTime", "ringingOpenHat", "ringingCymbals", "noteSched", "pianoPedalQueue", "pianoVoices", "pianoLastByKey", "pianoRRFlip", "gtrRR"];
 /* 匯出中途按「取消」:各階段(準備、試編、離線合成、限幅器)都要停得下來,不能等整段算完(審查發現:以前要等到聲音全部算完才看取消) */
 const exportCancelError = () => Object.assign(new Error("cancelled"), { cancelled: true });

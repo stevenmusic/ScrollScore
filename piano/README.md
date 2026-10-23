@@ -34,4 +34,19 @@ The measurement used is Set C, source S2 (a Neumann KH 120 A on the front of the
 - the tail, which the original files cut off at about 1.45 s, extended with noise that follows each frequency's measured decay rate and stereo correlation;
 - written as 48 kHz 16-bit stereo FLAC.
 
+## Room microphone layer (`room.flac`)
+
+Early reflections of a real measured chamber music hall, from the same database (CC BY 4.0): Set A, the Brahmssaal of the Detmold University of Music (17.4 × 8.1 m, two grand pianos on stage), source S1 (Neumann KH 120 A, centre stage), receivers R2 (first row) and R3 (third row), front omnidirectional capsule of the open array. R2 is used as the left channel and R3 as the right, like a spaced pair of room microphones.
+
+**Changes made for ScrollScore** (build script `build/room_brahms.py`):
+- each channel aligned to its own direct-sound arrival, and the direct sound removed;
+- the same loudspeaker high-frequency compensation as `hall.flac`;
+- below 250 Hz the two channels pulled halfway toward their average;
+- only the first 0.35 s kept (full level to 0.12 s, then a cosine fade-out);
+- written as 48 kHz 16-bit stereo FLAC.
+
+## Sympathetic resonance (`sympa.flac`)
+
+Synthesized by `build/sympa_ir.py` (all 88 strings as resonators). Since 2026-10 each partial reaches the left and right channel with its own random phase and level above about 500 Hz, the way a soundboard radiates to two microphones.
+
 `build/hall_ir.py` builds the earlier simulated hall (pyroomacoustics), which is no longer used.
