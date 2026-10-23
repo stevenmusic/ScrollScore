@@ -9565,7 +9565,16 @@ function pianoComputeNeeds(){
           const key = pianoNoteName(c) + "-v" + L;
           const e = need.get(key) || { key, c, L, uses: 0, sec: 0 };
           e.uses++; e.sec = Math.max(e.sec, sec); need.set(key, e);
-          if (dm === 0) break;
+          if (dm === 0) {
+            // 觸鍵變化(PIANO_VARY ①)會用到的相鄰層:uses 不加,記憶體不夠時最先被省掉(省掉就照原本那層彈)
+            const r = pianoMan.velRanges, z = r && r[L - 1], v = n.pvel || 70;
+            for (const L2 of [z && z[1] + 0.5 - v < PIANO_VARY.layerZone ? L + 1 : 0, z && v - (z[0] - 0.5) < PIANO_VARY.layerZone ? L - 1 : 0]) {
+              if (L2 < 1 || L2 > r.length) continue;
+              const k2 = pianoNoteName(c) + "-v" + L2, e2 = need.get(k2) || { key: k2, c, L: L2, uses: 0, sec: 0 };
+              e2.sec = Math.max(e2.sec, sec); need.set(k2, e2);
+            }
+            break;
+          }
         }
       }
     }
@@ -9703,6 +9712,19 @@ function pianoSampleFor(m, L){
     }
   }
   return null;
+}
+/* 每一下觸鍵的變化(使用者要求 2026-10:「每個音要有 100 種以上的選擇,才會像真人」):Salamander 每個音高、每層力度只有一個錄音,
+   同樣的力度彈同一個鍵聲音一模一樣。不加聲部(CPU 不變),從四個地方給變化,組合起來是連續的、不會重複:
+   ① 力度落在相鄰兩層錄音交界 ±layerZone 內時,依離交界多近隨機用相鄰那一層(交界上一半一半;各層音量已校正一樣,只差音色)
+   ② 琴槌亮度:pres(2kHz)±presDb、air(6.5kHz)±airDb、起音亮度 ±attack(標準差,常態分布,平均 0 → 整體音色/響度不變)
+   ③ 音量 ±gainDb ④ 制音器收音快慢 ±damper。同音連彈換相鄰層(pianoRRFlip)照舊。
+   亂數由(音高, 時間)決定:同一份樂譜同樣的播放每次一樣(測試可重現),不同的音一定不同 */
+const PIANO_VARY = Object.assign({ layerZone: 4, presDb: 0.8, airDb: 1.0, attack: 0.2, gainDb: 0.35, damper: 0.1 }, window.PIANO_VARY_OVERRIDE || {});
+function pianoVaryRand(m, when){
+  let x = (Math.imul(m + 1, 0x9E3779B1) ^ Math.imul(Math.round(when * 48000) | 0, 0x85EBCA6B)) >>> 0;
+  const u = () => { x = (x + 0x6D2B79F5) >>> 0; let t = x; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  u.n = () => Math.max(-2.5, Math.min(2.5, Math.sqrt(-2 * Math.log(1 - u())) * Math.cos(2 * Math.PI * u())));   // 常態分布,截在 ±2.5 個標準差
+  return u;
 }
 let pianoVoices = [], pianoLastByKey = {}, pianoRRFlip = {};
 function pianoResetVoices(){ pianoVoices = []; pianoLastByKey = {}; pianoRRFlip = {}; }
@@ -9913,7 +9935,19 @@ function playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel
   if (!pianoMan) return false;
   const tm = freqToMidi(freq), m = Math.round(tm);
   if (vel == null) vel = 70;
-  let s = pianoSampleFor(m, pianoLayerFor(vel));
+  // 每一下的觸鍵都不一樣(PIANO_VARY,使用者要求 2026-10:「人彈一個音不會再出現完全一模一樣的一次」):
+  // 力度在兩層錄音交界附近時隨機用相鄰那一層、琴槌亮度/起音/音量/放鍵各有一點起伏;組合起來同一個音每下都不同
+  const rv = pianoVaryRand(m, when), V = PIANO_VARY;
+  let L0 = pianoLayerFor(vel);
+  {
+    const r = pianoMan.velRanges, z = r && r[L0 - 1];
+    if (z) {
+      const up = z[1] + 0.5 - vel, dn = vel - (z[0] - 0.5);   // 離上/下交界多遠
+      if (up < V.layerZone && L0 < r.length && rv() < 0.5 * (1 - up / V.layerZone)) L0++;
+      else if (dn < V.layerZone && L0 > 1 && rv() < 0.5 * (1 - dn / V.layerZone)) L0--;
+    }
+  }
+  let s = pianoSampleFor(m, L0);
   if (!s) return false;
   // 同一個鍵短時間內再彈、又落在同一層:改用相鄰的力度層(各層音量已校正一樣,只差一點音色),
   // 真鋼琴連續敲同一個鍵每下都略有不同;Salamander 沒有輪替錄音,每下完全一樣會像機器
@@ -9926,7 +9960,7 @@ function playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel
     }
   }
   const rate = Math.pow(2, (tm - s.c + ((pianoMan.tune[m] || 0) / 100)) / 12);
-  const gain = PIANO_GAIN * pianoVelGain(vel);
+  const gain = PIANO_GAIN * pianoVelGain(vel) * Math.pow(10, V.gainDb * rv.n() / 20);
   let keyUp = Math.max(dur, 0.05);
   if (artic) {
     // 斷音照「秒」(使用者 2026-10 選的):真人的斷音大約固定一小段時間、跟速度關係不大;以前一律音長的一半,
@@ -9952,7 +9986,7 @@ function playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel
   // 斷音類(斷音/極斷音/跳弓/次斷音)沒踩踏板時不套和聲自動延長(半踏板):以前放鍵後還拖著尾巴響到原本的時值,斷音聽不出來
   const damperAt = harmonyEndSec != null && !(short && !pedal) ? Math.max(harmonyEndSec, keyUp) : keyUp;
   const noDamper = m >= 89;
-  const tau = noDamper ? 3.0 : pianoDamperTau(m);   // 沒有制音器的高音:放開也繼續自然衰減(原廠 ampeg_release=3)
+  const tau = noDamper ? 3.0 : pianoDamperTau(m) * (1 + V.damper * rv.n());   // 制音器落下的快慢每次也略有不同   // 沒有制音器的高音:放開也繼續自然衰減(原廠 ampeg_release=3)
   const bufEnd = when + s.buf.duration / rate;
   const end = Math.min(bufEnd, damperAt + tau * 7);
   // 同一個鍵再彈一次:前一個音被琴槌重新敲下去打斷(原廠 note_polyphony=1)
@@ -9964,7 +9998,8 @@ function playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel
   const src = audioCtx.createBufferSource();
   src.buffer = s.buf; src.playbackRate.value = rate;
   // 依力度的音色(PIANO_TONE):pres 在敲下瞬間多亮一點再回到原值,air 補高頻泛音
-  const tone = pianoToneFor(vel);
+  const tone0 = pianoToneFor(vel);
+  const tone = { pres: tone0.pres + V.presDb * rv.n(), air: tone0.air + V.airDb * rv.n(), attack: tone0.attack * (1 + V.attack * rv.n()) };   // 琴槌碰到弦的位置、角度每次都不一樣
   const pres = audioCtx.createBiquadFilter(); pres.type = "highshelf"; pres.frequency.value = PIANO_TONE.presFreq;
   pres.gain.setValueAtTime(tone.pres + tone.attack, when); pres.gain.setTargetAtTime(tone.pres, when, PIANO_TONE.attackTau);
   const air = audioCtx.createBiquadFilter(); air.type = "highshelf"; air.frequency.value = PIANO_TONE.airFreq; air.gain.value = tone.air;
