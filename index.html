@@ -9617,7 +9617,8 @@ function computePianoDynamics(){
   });
   pianoLineNuance();
   popDynamicsCalibrate();
-  if (pop) { pianoBassNotHeavy(); pianoHandBalance(); }
+  // 低音區整體拉高與和弦最低音收輕會互相影響(先後哪個都會讓另一個偏掉),交替做兩次讓兩項都落在真人範圍
+  if (pop) for (let k = 0; k < 2; k++) { pianoHandBalance(); pianoBassNotHeavy(); }
   pianoVelocityAsync();
   pianoWideChordRoll(multiStaff);
   if (pop) pianoHandDrift(multiStaff);
