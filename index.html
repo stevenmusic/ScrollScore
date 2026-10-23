@@ -9259,6 +9259,64 @@ function popDynamicsCalibrate(){
     }
   }
 }
+/* 像真人彈流行歌的三個細節(使用者 2026-10 選的:「有其他地方可以調整,更能夠像真人彈的感覺嗎?主要針對流行歌」)
+   ① 和弦最低音不加重(pianoBassNotHeavy,非古典):Pop1K7(1747 首流行歌鋼琴翻彈)量到真人同時彈的音裡最低音比中間的音輕約 3 力度,
+      App 以前反而重約 3(左手低音角色、段落力度疊上去)。≥ 3 個音同時彈時,最低音最多 = 中間那些音的平均 − bassBelowMid,一次最多收 bassMaxCut
+   ② 手撐不到的和弦滾開(pianoWideChordRoll,所有曲子:這是手的物理限制):同一手同時寫的音超過 reach 半音(大十度)撐不到,
+      真人一定從低往高快速補上;以前完全同時響、像電腦。從最低音開始分組(組內不超過 reach),第一組在拍上,之後每組晚 rollGap ± rollJit 秒,
+      總長不超過到這隻手下一個音的 rollMaxFrac。譜上已經寫琶音的不動
+   ③ 兩手時間不完全對齊(pianoHandDrift,非古典):真人兩手常差 10~20ms,而且會連續一小段偏同一邊。每隻手各一條緩慢起伏的時間偏移
+      (AR(1),每個時間點 handAR、標準差 handSd 秒),同一隻手同時彈的音一起移 */
+const PIANO_FEEL = Object.assign({ bassBelowMid: 3, bassMaxCut: 8, reach: 16, rollGap: 0.03, rollJit: 0.01, rollMaxFrac: 0.25, handSd: 0.007, handAR: 0.85 }, window.PIANO_FEEL_OVERRIDE || {});
+function pianoBassNotHeavy(){
+  const F = PIANO_FEEL;
+  for (const ev of events) {
+    const ns = ev.notes.filter(n => !n.drum && n.freq && n.pvel != null && !n.pmel);
+    const all = ev.notes.filter(n => !n.drum && n.freq && n.pvel != null);
+    if (all.length < 3 || ns.length < 2) continue;
+    const sorted = all.slice().sort((a, b) => a.freq - b.freq), low = sorted[0], mid = sorted.slice(1, -1);
+    if (!mid.length || low.pmel) continue;
+    const ref = mid.reduce((a, n) => a + n.pvel, 0) / mid.length - F.bassBelowMid;
+    if (low.pvel > ref) low.pvel = Math.max(ref, low.pvel - F.bassMaxCut);
+  }
+}
+function pianoWideChordRoll(multiStaff){
+  const F = PIANO_FEEL, nextOn = {};
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ev = events[i], hands = {};
+    for (const n of ev.notes) if (!n.drum && n.freq && n.rollIndex == null && !ev.arpCount) { const h = multiStaff ? (n.staff || 1) : 1; (hands[h] = hands[h] || []).push(n); }
+    for (const h of Object.keys(hands)) {
+      const ns = hands[h].sort((a, b) => a.freq - b.freq), lo = freqToMidi(ns[0].freq);
+      if (freqToMidi(ns[ns.length - 1].freq) - lo > F.reach) {
+        const groups = [[ns[0]]];
+        for (const n of ns.slice(1)) { const g = groups[groups.length - 1]; if (freqToMidi(n.freq) - freqToMidi(g[0].freq) <= F.reach) g.push(n); else groups.push([n]); }
+        const room = nextOn[h] != null ? spanSec(ev.tWhole, nextOn[h] - ev.tWhole) : 1;
+        const gap = Math.min(F.rollGap, room * F.rollMaxFrac / Math.max(1, groups.length - 1));
+        let d = 0;
+        groups.forEach((g, k) => {
+          if (k) d += gap * (1 + (seededRand01(ev.tWhole * 31.7 + k * 7.3 + +h) * 2 - 1) * F.rollJit / F.rollGap);
+          for (const n of g) n.pdt = (n.pdt || 0) + d;
+        });
+      }
+      nextOn[h] = ev.tWhole;
+    }
+  }
+}
+function pianoHandDrift(multiStaff){
+  const F = PIANO_FEEL, x = {}, k = Math.sqrt(1 - F.handAR * F.handAR);
+  let i = 0;
+  for (const ev of events) {
+    i++;
+    const hs = new Set();
+    for (const n of ev.notes) if (!n.drum && n.freq) hs.add(multiStaff ? (n.staff || 1) : 1);
+    for (const h of hs) {
+      // 常態分布(兩個均勻亂數相減的近似 × √6 ≈ 標準差 1)
+      const z = (seededRand01(ev.tWhole * 13.13 + h * 101.7 + i * 0.37) + seededRand01(ev.tWhole * 7.77 + h * 53.1 + i * 0.91) - 1) * Math.sqrt(6);
+      x[h] = x[h] == null ? z * F.handSd : F.handAR * x[h] + k * z * F.handSd;
+    }
+    for (const n of ev.notes) if (!n.drum && n.freq) n.pdt = (n.pdt || 0) + x[multiStaff ? (n.staff || 1) : 1];
+  }
+}
 function pianoVelocityAsync(){
   let k = 0;
   for (const ev of events) {
@@ -9541,7 +9599,10 @@ function computePianoDynamics(){
   });
   pianoLineNuance();
   popDynamicsCalibrate();
+  if (pop) pianoBassNotHeavy();
   pianoVelocityAsync();
+  pianoWideChordRoll(multiStaff);
+  if (pop) pianoHandDrift(multiStaff);
   for (const x of pn) delete x.n._v0, delete x.n._accDb, delete x.n._momDb, delete x.n._role;
 }
 
