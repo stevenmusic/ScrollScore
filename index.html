@@ -9280,6 +9280,24 @@ function pianoBassNotHeavy(){
     if (low.pvel > ref) low.pvel = Math.max(ref, low.pvel - F.bassMaxCut);
   }
 }
+/* 低音區跟高音區的力度差照真人(pianoHandBalance,非古典;使用者 2026-10:「要接近真人!」):
+   Pop1K7 慢歌(435 首)真人 中央 C 以下的音平均力度比中央 C 以上低 6.6(中位數,四分位 −7.7~−5.3),
+   總能量(Σ(力度/127)²,跟音的數量有關)低 2.6dB(四分位 −3.9~−1.5)。App 的旋律 +4、伴奏 −3、低音不加重…疊起來,
+   〈甲乙丙丁〉低音區低 9.9 力度、能量低 4.1dB,兩項都在真人範圍外(右手太突出)。
+   整首算一次:低音區平均力度比真人中位數還低時,低音區的力度一起乘一個倍數拉回 −6.6;但能量不超過真人的上四分位 −1.5dB
+   (伴奏音很密的編曲,真人會彈得更輕,不能再加)、倍數最多 maxGain。本來就在範圍內或比較大聲的不動 */
+const PIANO_BALANCE = Object.assign({ split: 60, dv: -6.6, edbMax: -1.5, maxGain: 1.15 }, window.PIANO_BALANCE_OVERRIDE || {});
+function pianoHandBalance(){
+  const B = PIANO_BALANCE, lo = [], hi = [];
+  for (const ev of events) for (const n of ev.notes) if (!n.drum && n.freq && n.pvel != null) (freqToMidi(n.freq) < B.split ? lo : hi).push(n);
+  if (lo.length < 30 || hi.length < 30) return;
+  const mean = a => a.reduce((s, n) => s + n.pvel, 0) / a.length, e = a => a.reduce((s, n) => s + (n.pvel / 127) ** 2, 0);
+  const mLo = mean(lo), mHi = mean(hi), edb = 10 * Math.log10(e(lo) / e(hi));
+  const k = Math.min(B.maxGain, (mHi + B.dv) / mLo, Math.pow(10, (B.edbMax - edb) / 20));
+  if (!(k > 1.005)) return;
+  for (const n of lo) n.pvel = Math.max(1, Math.min(127, n.pvel * k));
+  console.log(`高低音區平衡:力度差 ${(mLo - mHi).toFixed(1)}、能量 ${edb.toFixed(1)}dB → 低音區力度 ×${k.toFixed(3)}`);
+}
 function pianoWideChordRoll(multiStaff){
   const F = PIANO_FEEL, nextOn = {};
   for (let i = events.length - 1; i >= 0; i--) {
@@ -9599,7 +9617,7 @@ function computePianoDynamics(){
   });
   pianoLineNuance();
   popDynamicsCalibrate();
-  if (pop) pianoBassNotHeavy();
+  if (pop) { pianoBassNotHeavy(); pianoHandBalance(); }
   pianoVelocityAsync();
   pianoWideChordRoll(multiStaff);
   if (pop) pianoHandDrift(multiStaff);
