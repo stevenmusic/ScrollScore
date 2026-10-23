@@ -4185,11 +4185,13 @@ function avoidExpressionOverlap(o, root){
       if (b.height < 1.6 && b.width > 40) continue;    // 譜線(下面另外整片加)
       if (b.width < 2.2 && b.height > 30 && el.tagName.toLowerCase() === "rect") continue;    // 小節線(OSMD 畫成 rect;符桿也細長但是 path,不能排除)
       const t = tr(el);
+      // 文字(和弦名稱、其他標籤)的外框也扣掉字型上下留白,跟移動的文字同一套(不然文字跟文字之間會多空一截)
+      if (el.tagName.toLowerCase() === "text") { const desc = /[gjpqyf,;]/.test(el.textContent); obs.push({ x: b.x + t[0], y: b.y + t[1] + b.height * 0.22, w: b.width, h: b.height * (desc ? 0.73 : 0.6), el, txt: true, dx: t[0], dy: t[1] }); continue; }
       obs.push({ x: b.x + t[0], y: b.y + t[1], w: b.width, h: b.height, el, dx: t[0], dy: t[1] });
     }
     for (const st of staffs) obs.push({ x: st.x, y: st.y, w: st.w, h: st.h, el: null, dx: 0, dy: 0 });
     const hit = (ob, R) => {   // 碰到的部分的 [最上, 最下] y,沒碰到 null
-      if (!ob.el) return [ob.y, ob.y + ob.h];
+      if (!ob.el || ob.txt) return [ob.y, ob.y + ob.h];
       const el = ob.el, big = el.tagName.toLowerCase() === "path" && (ob.w > R.width * 1.5 || ob.h > R.height * 1.5) && el.getTotalLength;
       if (!big) return [ob.y, ob.y + ob.h];
       let lo = null, hi = null;
@@ -4200,9 +4202,10 @@ function avoidExpressionOverlap(o, root){
       }
       return lo == null ? null : [lo, hi];
     };
-    const collide = R => {
+    const collide = (R, skip) => {
       let lo = null, hi = null;
       for (const ob of obs) {
+        if (skip && ob.el && skip.has(ob.el)) continue;
         if (ob.x > R.x + R.width || ob.x + ob.w < R.x || ob.y > R.y + R.height || ob.y + ob.h < R.y) continue;
         const h = hit(ob, R);
         if (h) { lo = lo == null ? h[0] : Math.min(lo, h[0]); hi = hi == null ? h[1] : Math.max(hi, h[1]); }
@@ -4238,9 +4241,70 @@ function avoidExpressionOverlap(o, root){
       for (const n of it.group) { const b = n.getBBox(), t = tr(n); obs.push({ x: b.x + t[0], y: b.y + t[1], w: b.width, h: b.height, el: n, dx: t[0], dy: t[1] }); }
       moved++;
     }
+    moved += compactStackedExpressions(items, collide, tr, svg);
     return moved;
   } catch (e) { console.warn("expressions", e); return 0; }
 }
+/* 譜表上方的文字疊太多層時往下收(使用者反映 2026-10:〈甲乙丙丁〉第 51、52 小節「(Long hold)」越過小節線,
+   下一小節的「a tempo」被 OSMD 推到它上面一層,上方疊了 Outro / a tempo / (Long hold) / 和弦名稱「太多排了」)。
+   ① 下面那個文字往左挪(最多自己寬度的一半 − 0.2 格,右端仍在原本中心之後 = 還蓋著自己的音),挪到跟上面那個左右不再重疊
+   ② 上面那個往下移回下面那一排的高度(最多移到跟下面那個同一條底線,碰到任何東西就停在不碰的位置)。
+   只動 OSMD 疊起來的那一對;挪不開(碰到東西)就照原位 */
+function compactStackedExpressions(items, collide, tr, svg){
+  const rect = it => {
+    const n = it.node, b = n.getBBox(), t = tr(n), desc = /[gjpqyf,;]/.test(n.textContent);
+    return { x: b.x + t[0] + 0.3, y: b.y + t[1] + b.height * 0.22, width: b.width - 0.6, height: b.height * (desc ? 0.73 : 0.6) };
+  };
+  const live = items.filter(it => !it.skip && it.group);
+  const others = (self, R) => live.some(o => o !== self && o.top === self.top && (() => { const Q = rect(o); return Q.x < R.x + R.width && Q.x + Q.width > R.x && Q.y < R.y + R.height && Q.y + Q.height > R.y; })());
+  const free = (it, R) => !collide(R, new Set(it.group)) && !others(it, R);   // 自己之前移動時也被加進障礙,要排除
+  const shift = (it, dx, dy) => { for (const n of it.group) { const t = tr(n); n.setAttribute("transform", `translate(${(t[0] + dx).toFixed(2)} ${(t[1] + dy).toFixed(2)})`); } };
+  const grow = (R, g) => ({ x: R.x - g, y: R.y - g, width: R.width + 2 * g, height: R.height + 2 * g });
+  let moved = 0;
+  for (const up of live) {
+    const U = rect(up);
+    if (!(U.y + U.height < up.top)) continue;   // 只處理譜表上方的
+    // 正下方(左右重疊、上緣在 U 下面)最近的另一個文字
+    let low = null, LR = null;
+    for (const o of live) {
+      if (o === up || o.top !== up.top) continue;
+      const Q = rect(o);
+      if (Q.y < U.y + U.height - 1 || Q.x >= U.x + U.width || Q.x + Q.width <= U.x) continue;
+      if (!low || Q.y < LR.y) { low = o; LR = Q; }
+    }
+    if (!low) continue;
+    const need = LR.x + LR.width - U.x + COMPACT_GAP_X;       // 下面那個往左挪多少才跟上面那個左右分開(中間留 1 格)
+    if (need <= COMPACT_GAP_X - EXPR_GAP || need > LR.width / 2 - EXPR_GAP) continue;
+    const dy = (LR.y + LR.height) - (U.y + U.height);         // 上面那個往下移回同一條底線
+    const L2 = { x: LR.x - need, y: LR.y, width: LR.width, height: LR.height };
+    if (!free(low, grow(L2, EXPR_GAP / 2))) continue;
+    shift(low, -need, 0);
+    // 往下移:從同一條底線開始往上找第一個不碰的位置(整段都碰就不動)
+    let d = null;
+    for (let k = dy; k > 0.5; k -= 1) { if (free(up, grow({ x: U.x, y: U.y + k, width: U.width, height: U.height }, EXPR_GAP))) { d = k; break; } }
+    if (d == null) { shift(low, need, 0); continue; }        // 收不下來就兩個都放回原位
+    shift(up, 0, d);
+    moved += 2;
+  }
+  // 段落記號(roundRehearsalBoxes 已往上挪過)跟著往下收:底下的文字收下來以後,方框跟正下方最高的東西保持 REHEARSAL_GAP(以前固定在
+  // 疊三層時的高度,中間空一大截)。只往下、不往上
+  if (moved && svg) for (const r of svg.querySelectorAll("rect.ss-reh")) {
+    const grp = []; let n = r;
+    while (n && (grp.push(n), !(n.tagName.toLowerCase() === "text"))) n = n.nextElementSibling;
+    const box = grp.reduce((a, el) => { const b = el.getBBox(), t = tr(el); if (!(b.width > 0 && b.height > 0)) return a; const q = { x: b.x + t[0], y: b.y + t[1], x2: b.x + t[0] + b.width, y2: b.y + t[1] + b.height }; return a ? { x: Math.min(a.x, q.x), y: Math.min(a.y, q.y), x2: Math.max(a.x2, q.x2), y2: Math.max(a.y2, q.y2) } : q; }, null);
+    if (!box) continue;
+    const skip = new Set(grp), R = k => ({ x: box.x, y: box.y + k, width: box.x2 - box.x, height: box.y2 - box.y + REHEARSAL_GAP });
+    const busy = Q => collide(Q, skip) || live.some(o => { const P = rect(o); return P.x < Q.x + Q.width && P.x + P.width > Q.x && P.y < Q.y + Q.height && P.y + P.height > Q.y; });   // 上面收過的文字用目前位置
+    if (busy(R(0))) continue;
+    let d = 0;
+    while (d < 200 && !busy(R(d + 1))) d += 1;
+    if (d >= 200 || d < 2) continue;
+    for (const el of grp) { const t = tr(el); el.setAttribute("transform", `translate(${t[0].toFixed(2)} ${(t[1] + d).toFixed(2)})`); }
+  }
+  return moved;
+}
+const COMPACT_GAP_X = 10;   // 收成同一排時,兩個文字左右至少隔 1 格
+const REHEARSAL_GAP = 13;   // 段落記號方框下緣離底下的東西(= OSMD 原本離和弦名稱半格 + REHEARSAL_LIFT 0.8 格)
 function roundRehearsalBoxes(root){
   const svg = (root || $("score")).querySelector("svg");
   if (!svg) return;
