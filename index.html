@@ -9148,6 +9148,38 @@ function pianoHammerLagMs(v){
   for (let i = 1; i < C.length; i++) if (v <= C[i][0]) return C[i - 1][1] + (C[i][1] - C[i - 1][1]) * (v - C[i - 1][0]) / (C[i][0] - C[i - 1][0]);
   return C[C.length - 1][1];
 }
+/* 非古典的力度幅度校正(試驗中,window.POP_CAL = { bar, mel, contour }):
+   bar = 小節平均力度離整首平均的幅度倍數(前後小節 1:2:1 平滑),mel = 同時彈的音裡最高音跟其他音差距的倍數,
+   contour = 旋律音離前後 8 個旋律音平均的幅度倍數;沒設 = 不改 */
+function popDynamicsCalibrate(){
+  const c = window.POP_CAL;
+  if (!c || classicalProbInfo().p >= 0.5) return;
+  const notes = [];
+  for (const ev of events) for (const n of ev.notes) if (!n.drum && n.freq && n.pvel != null) notes.push({ n, ev });
+  if (!notes.length) return;
+  const clampV = v => Math.max(8, Math.min(124, v));
+  if (c.bar != null && c.bar !== 1) {
+    const sum = new Map(), cnt = new Map();
+    for (const { n, ev } of notes) { sum.set(ev.mIdx, (sum.get(ev.mIdx) || 0) + n.pvel); cnt.set(ev.mIdx, (cnt.get(ev.mIdx) || 0) + 1); }
+    const bars = [...sum.keys()].sort((a, b) => a - b), bm = new Map(bars.map(b => [b, sum.get(b) / cnt.get(b)]));
+    const G = notes.reduce((s, x) => s + x.n.pvel, 0) / notes.length;
+    const sm = new Map(bars.map((b, i) => { const a = bm.get(bars[Math.max(0, i - 1)]), m = bm.get(b), z = bm.get(bars[Math.min(bars.length - 1, i + 1)]); return [b, (a + 2 * m + z) / 4]; }));
+    for (const { n, ev } of notes) n.pvel = clampV(n.pvel + (c.bar - 1) * (sm.get(ev.mIdx) - G));
+  }
+  if (c.contour != null && c.contour !== 1) {
+    const mel = notes.filter(x => x.n.pmel), v0 = mel.map(x => x.n.pvel);
+    mel.forEach((x, i) => { let s = 0, k = 0; for (let j = Math.max(0, i - 8); j <= Math.min(mel.length - 1, i + 8); j++) { s += v0[j]; k++; } x.n.pvel = clampV(s / k + c.contour * (v0[i] - s / k)); });
+  }
+  if (c.mel != null && c.mel !== 1) {
+    for (const ev of events) {
+      const ns = ev.notes.filter(n => !n.drum && n.freq && n.pvel != null);
+      if (ns.length < 2) continue;
+      const top = ns.reduce((a, b) => (b.freq > a.freq ? b : a)), others = ns.filter(n => n !== top);
+      const d = top.pvel - others.reduce((s, n) => s + n.pvel, 0) / others.length, sh = (c.mel - 1) * d / 2;
+      top.pvel = clampV(top.pvel + sh); for (const n of others) n.pvel = clampV(n.pvel - sh);
+    }
+  }
+}
 function pianoVelocityAsync(){
   let k = 0;
   for (const ev of events) {
@@ -9429,6 +9461,7 @@ function computePianoDynamics(){
     }
   });
   pianoLineNuance();
+  popDynamicsCalibrate();
   pianoVelocityAsync();
   for (const x of pn) delete x.n._v0, delete x.n._accDb, delete x.n._momDb, delete x.n._role;
 }

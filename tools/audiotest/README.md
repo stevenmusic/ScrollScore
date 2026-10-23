@@ -19,6 +19,7 @@ pip install numpy scipy soundfile pyloudnorm
 | `gp_ui_test.mjs` | GP 選音軌對話框:19 種尺寸 × 中英文的版面檢查 + 隨機種子的真人操作模擬(選軌、取消、Esc、連點、旋轉、切語言、播放中匯入、重新整理),`--seed N` |
 | `piano_tone_eval.py` | 鋼琴音色校正:用 App 的取樣與播放規則(含 PIANO_TONE、PIANO_EQ)彈 MAESTRO 真人演奏的 MIDI,跟同一份演奏的真實 Yamaha 錄音逐音比較各力度的亮度、起音高頻、1/3 八度頻譜。`python3 piano_tone_eval.py <放 曲名.flac + 曲名.mid 的目錄> 設定.json [秒數]`(MAESTRO 只拿來測試,不放 repo;另需 `pip install mido`) |
 | `perf_dump.mjs` + `perf_compare.py` | App 自動演奏 vs 真人鋼琴家:perf_dump 讓 App 載入 ASAP 樂譜、匯出每個音的力度/秒數與踏板範圍;perf_compare 用 (n)ASAP 逐音對照比力度(逐音、每全音符)、旋律突出、局部速度、踏板(比例、一致程度、次數),並算「真人 vs 其他真人平均」當上限。`node perf_dump.mjs 清單.txt pd/` → `python3 perf_compare.py`(需要 nasap/ match 檔與演奏 MIDI,只測試不放 repo;`pip install mido`) |
+| `pop_stats.py` | 流行鋼琴:Pop1K7 真人翻彈(自動轉譜)的力度/速度統計 vs App(perf_dump 輸出),`BPM_MAX=85` 只算慢歌。`python3 pop_stats.py <App 輸出目錄>`(資料只測試不放 repo) |
 | `ir_compare.py` | 殘響 IR 比較(`python3 ir_compare.py a.flac b.flac …`):各倍頻程 EDT/T30、C80、左右相關性、單聲道相容、後段頻譜、殘響密度(Abel & Huang,1 = 完全擴散)、尾端剩多少、聽得到的音量內的離散回聲。換 IR 後的音量用 `render.mjs --taps --tapsrc verb` 直接量殘響回送(ConvolverNode 會自動正規化,不能用檔案音量算) |
 | `gmd_stats.py` | 真人鼓手統計(Groove MIDI Dataset):各鼓件力度、hi-hat/ride 各拍位置的相對力度、鬼音、各肢體時間差、扣掉節奏型後的力度起伏與相鄰相關。對照 App 的 humanizeDrumHit(用法與 2026-10 的數字寫在檔案開頭) |
 | `staff_gap.mjs` | 大譜表上下兩行的間距(格):App 現在的排版 vs 不畫圓滑線,看圓滑線撐開多少 |
