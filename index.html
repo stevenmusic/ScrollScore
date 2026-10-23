@@ -9329,7 +9329,7 @@ function pianoHallWet(){ return PIANO_HALL.wet * (pianoVerbPop ? Math.pow(10, PI
    = Detmold 音樂大學 Brahmssaal(室內樂廳)第一排與第三排兩支全指向麥克風(相距約 1.8m,一支當左、一支當右)量到的早期反射,
    直達聲拿掉、0.12 秒後淡出到 0.35 秒(長尾巴交給 hall.flac)。跟音樂廳殘響共用送出量(每個音 PIANO_VERB_SEND)、
    同一個高通,並聯一個卷積器;古典非古典一樣(流行曲尾巴短,但琴照樣在房間裡)。wet 在 App 裡量回送響度校正(ConvolverNode 會自動正規化) */
-const PIANO_ROOM = { wet: 2.9 };   // 房間層回送 ≈ 整體 −15 LU(〈甲乙丙丁〉、莫札特 K331 都是;wet 1 時 −24),音樂廳長尾巴 −23~−27
+const PIANO_ROOM = { wet: 2.44 };   // 房間層回送 ≈ 整體 −16.5 LU(使用者試聽 2026-10:−12 明顯太多、−15/−18 分不出來 → 取中間、離「太多」遠一點;wet 1 時 −24),音樂廳長尾巴 −23~−27
 const PIANO_STEREO_AUX = new Set(["hall", "room", "sympa"]);   // 記憶體少的裝置其他 aux 改單聲道,這幾個靠左右不相關才有空間感,一定立體聲
 let pianoRoomConv = null, pianoRoomWet = null;
 function pianoVerbUseRoom(){
