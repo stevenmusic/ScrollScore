@@ -44,7 +44,7 @@ def corr(a,b):
     if len(a)<5 or a.std()==0 or b.std()==0: return np.nan
     return float(np.corrcoef(a,b)[0,1])
 R=defaultdict(list)
-for js in sorted(glob.glob('pd/*.json')):
+for js in sorted(glob.glob((sys.argv[1] if len(sys.argv)>1 else 'pd')+'/*.json')):
     name=js.split('nxml_')[1].replace('.json','')
     app=json.load(open(js))
     perfs=[f for f,x in mx.items() if x.endswith(name)]
@@ -124,7 +124,7 @@ for js in sorted(glob.glob('pd/*.json')):
     R['tempo_app'].append(np.nanmean(cta)); R['tempo_human'].append(np.nanmean(cth))
     R['tempo_sd_app'].append(np.nanstd(ta)); R['tempo_sd_human'].append(np.nanmean([np.nanstd(x) for x in tc]))
     # 6 踏板:把演奏時間換回樂譜位置,看每個音起音時踏板有沒有踩
-    appped=app['ped'] or app['auto']; src='譜' if app['ped'] else '自動'
+    appped=app['ped']+app['auto']; src=('譜+自動' if app['auto'] else '譜') if app['ped'] else '自動'
     def down_at(w,ranges): return any(a-1e-6<=w<b-1e-6 for a,b in ranges)
     pa=np.array([down_at(W[i],appped) for i in range(N)],float)
     hp=[]; changes=[]

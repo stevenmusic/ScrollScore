@@ -5218,6 +5218,41 @@ function detectRepeatingChordRanges(onsets, maxChordSize){
    換踏板的時機跟音符的和聲延長規則一樣:同一個和聲(repeatChordRanges,各譜表合併)踩著,和聲一換就換踏板;
    同一個和聲很長時每 capWhole(= RING_CAP_WHOLE,音符最多延長的長度)換一次。不畫在樂譜上;
    音符的延長/半踏板衰減完全照原本規則(這裡不改變音長) */
+/* 譜上踏板記號很少(蓋不到整首 cover)時:只有記號前後 marginBars 小節內照記號,其他地方照沒有踏板記號的規則
+   (自動踏板、和聲延長、左手延音)。使用者 2026-10 交給 Claude 決定;依據:ASAP 只標一兩處踏板的曲子(蕭邦 Op.10-1/10-5、
+   貝多芬 26-2、舒曼 Kreisleriana 6)真人踩 63~87% 的時間,App 以前照「有記號就完全照記號」幾乎整首沒踩;
+   網路上的流行譜也常只標開頭或某一段。記號附近完全照記號(使用者之前定的規則不變) */
+/* 古典曲的旋律突出(使用者 2026-10 交給 Claude 決定):(n)ASAP 19 首、每首 3~25 位鋼琴家,和弦/同時彈的音裡最高音比其他音大
+   10.8 力度,App 以前 5.4(旋律 +4~6、其他 −4~5,再被後面的規則抵掉一部分)。非古典另有 PIANO_POP */
+const PIANO_CLASSIC_VOICE = Object.assign({ melody: 3, accomp: 2 }, window.PCV || {});
+const PEDAL_SPARSE = { cover: 0.25, marginBars: 1 };
+let pedalZones = null, baroqueDry = false, pianoRangesAll = [];
+function pedalMarksGovern(sT){ return pedalRanges.length > 0 && (!pedalZones || inRanges(sT, pedalZones)); }
+function mergeRanges(rs){
+  const out = [];
+  for (const r of [...rs].sort((a, b) => a.start - b.start)) {
+    const last = out[out.length - 1];
+    if (last && r.start <= last.end + 1e-6) last.end = Math.max(last.end, r.end); else out.push({ start: r.start, end: r.end });
+  }
+  return out;
+}
+function subtractRanges(rs, cut){
+  const out = [];
+  for (const r of rs) {
+    let segs = [{ start: r.start, end: r.end }];
+    for (const c of cut) {
+      const next = [];
+      for (const g of segs) {
+        if (c.end <= g.start || c.start >= g.end) { next.push(g); continue; }
+        if (c.start > g.start) next.push({ start: g.start, end: c.start });
+        if (c.end < g.end) next.push({ start: c.end, end: g.end });
+      }
+      segs = next;
+    }
+    for (const g of segs) if (g.end - g.start > 1e-6) out.push(g);
+  }
+  return out;
+}
 function buildAutoPedalRanges(ranges, capWhole){
   const rs = [...ranges].sort((a, b) => a.start - b.start), out = [];
   for (const r of rs) {
@@ -5828,6 +5863,9 @@ const CLASSICAL_COMPOSERS_CJK = /巴哈|巴赫|莫札特|莫扎特|貝多芬|贝
 const CLASSICAL_TITLE_CJK = /奏鳴曲|奏鸣曲|練習曲|练习曲|夜曲|前奏曲|賦格|赋格|圓舞曲|圆舞曲|敘事曲|叙事曲|即興曲|即兴曲|變奏曲|变奏曲|協奏曲|协奏曲|小步舞曲|幻想曲|詼諧曲|谐谑曲|波蘭舞曲|波兰舞曲|馬厝卡|玛祖卡|搖籃曲|摇篮曲|船歌|觸技曲|托卡塔|組曲|组曲|創意曲|创意曲|平均律|作品\s*\d|ソナタ|ソナチネ|エチュード|ノクターン|ワルツ|バラード|即興曲|変奏曲|協奏曲|インヴェンション|メヌエット/;
 const CLASSICAL_TEMPO = /\b(allegro|allegretto|andante|andantino|adagio|adagietto|largo|larghetto|lento|presto|prestissimo|vivace|vivacissimo|moderato|maestoso|grave|sostenuto|cantabile|con moto|tempo di|scherzando|leggiero|leggero|agitato|animato|tranquillo|espressivo|grazioso)\b/i;
 const POP_TEMPO = /\b(moderately|moderate|ballad|swing|swung|shuffle|rock|groove|funk|funky|pop|bossa|latin|reggae|gospel|blues|bluesy|laid back|easy|medium|slowly|brightly|bright|freely|straight|half[- ]time|double[- ]time|with feeling|steady|driving|upbeat|r&b|soul|jazz waltz|country|folk|bpm)\b/i;
+// 巴洛克鍵盤曲(大鍵琴/管風琴時代,寫的時候還沒有制音踏板):真人鋼琴家幾乎不踩踏板
+// (ASAP 巴哈 5 首、37 位鋼琴家:只有 1~13% 的音踩著踏板;App 以前自動踏板蓋到 76~92%)
+const BAROQUE_RE = /\b(bach|bwv|handel|händel|haendel|hwv|scarlatti|telemann|twv|vivaldi|rameau|couperin|purcell|buxtehude|pachelbel|frescobaldi|sweelinck|froberger|byrd|gibbons|well[- ]tempered|wohltemperierte|goldberg)\b|巴哈|巴赫|韓德爾|亨德爾|史卡拉第|斯卡拉蒂|バッハ|ヘンデル|スカルラッティ|平均律/i;
 const POP_SECTION = /^\s*(intro|verse|pre[- ]?chorus|chorus|refrain|bridge|outro|interlude|hook|solo|break|instrumental|tag|vamp|coda\s*\d?|v\d|ch\d?)\b|主歌|副歌|前奏|間奏|间奏|尾奏|橋段|桥段|導歌|预副歌|サビ|Aメロ|Bメロ/i;
 function detectScoreStyleMeta(xmlText, fileName){
   let score = 0.5;   // 有古典線索時照以前從 +0.5 起算;完全沒有古典線索時最後再 −0.8(見下面「沒有古典線索」)
@@ -5864,7 +5902,7 @@ function detectScoreStyleMeta(xmlText, fileName){
   // 沒有和弦記號/段落/歌詞/英文風格字的流行譜 p 0.65 被當古典彈)。只要有一個古典線索就跟以前完全一樣;
   // ASAP 235 首古典裡沒有任何線索的(檔名也沒有作曲者)約 3% 會當流行彈
   if (!cComp && !cTitle && !CLASSICAL_TEMPO.test(tempoText)) add(-0.8, "沒有古典線索");
-  return { score, reasons };
+  return { score, reasons, baroque: BAROQUE_RE.test(meta) };
 }
 /* 加上音樂內容:切分音(反拍起音、延續過下一拍)比例。流行/爵士伴奏與旋律常見(> 15%),古典鋼琴曲多半 < 5% */
 function scoreSyncopationRate(){
@@ -5931,7 +5969,7 @@ function computeLeftHandHolds(chordSegs){
     const a = lh[i], ev = a.ev, sT = ev.srcT != null ? ev.srcT : ev.tWhole, toPerf = w => ev.tWhole + (w - sT);
     const barEnd = ev.barPos != null ? ev.tWhole - ev.barPos + (ev.barLen || 1) : ev.tWhole + (ev.barLen || 1);
     let B;
-    if (pedalRanges.length) {
+    if (pedalMarksGovern(sT)) {
       const r = ev.pedalOn ? pedalRanges.find(r => inRange(sT, r)) : null;
       B = r ? toPerf(r.end) : Math.min(barEnd, toPerf(nextPedalStart(sT)));
     } else if (chordSegs.length && sT >= chordSegs[0].start - eps) {
@@ -6193,9 +6231,22 @@ function buildTimeline(){
   const nextChordAfter = t => { for (const c of chordSegs) if (c.start > t + 1e-6) return c.start; return Infinity; };
   // 和弦記號之前的重複音型範圍:切在第一個和弦記號
   const preChordRepeat = repeatChordRanges.filter(r => r.start < firstChordT - 1e-6).map(r => ({ start: r.start, end: Math.min(r.end, firstChordT) }));
-  autoPedalRanges = pedalRanges.length ? [] : chordSegs.length
+  // 踏板記號很少(PEDAL_SPARSE):只在記號附近照記號,其他地方當成沒有踏板記號(自動踏板、和聲延長)
+  pedalZones = null;
+  if (pedalRanges.length && !isDrumScore) {
+    const cover = pedalRanges.reduce((s, r) => s + Math.max(0, r.end - r.start), 0) / Math.max(1e-6, srcEndWhole);
+    if (cover < PEDAL_SPARSE.cover) {
+      const m = PEDAL_SPARSE.marginBars * ((events.find(e => e.barLen > 0) || {}).barLen || 1);
+      pedalZones = mergeRanges(pedalRanges.map(r => ({ start: r.start - m, end: r.end + m })));
+    }
+  }
+  // 巴洛克(BAROQUE_RE)而且譜上沒有踏板記號:不自動踩踏板、不做和聲延長(音只響自己的時值,圓滑/連奏照舊)
+  baroqueDry = !pedalRanges.length && !isDrumScore && !!(scoreStyleMeta && scoreStyleMeta.baroque);
+  const autoAll = baroqueDry || (pedalRanges.length && !pedalZones) ? [] : chordSegs.length
     ? buildAutoPedalRanges(preChordRepeat, RING_CAP_WHOLE).concat(buildAutoPedalRanges(chordSegs, RING_CAP_WHOLE))
     : buildAutoPedalRanges(repeatChordRanges, RING_CAP_WHOLE);
+  autoPedalRanges = pedalZones ? subtractRanges(autoAll, pedalZones) : autoAll;
+  pianoRangesAll = pedalRanges.concat(autoPedalRanges).sort((a, b) => a.start - b.start);
   for (const ev of events) {
     const sT = ev.srcT != null ? ev.srcT : ev.tWhole, toPerf = w => ev.tWhole + (w - sT);   // 記譜位置的範圍 → 這一遍的演奏位置
     ev.pedalOn = inRanges(sT, pedalRanges);
@@ -6244,7 +6295,9 @@ function buildTimeline(){
     ev.harmonyEndWhole = rangeEnd != null ? Math.max(rangeEnd, coChordEnd) : coChordEnd;
     // 樂譜有踏板記號:聲音完全照踏板走(使用者要求,2026-10:「和弦中間踏板有放開,但聽起來聲音一直延續」)——
     // 踩著踏板的音響到踏板放開,沒踩踏板的音只響自己的時值;上面的和聲延長(同時最長的音、重複音型、和弦記號、圓滑線)都不用
-    if (pedalRanges.length) ev.harmonyEndWhole = pedalEnd;
+    // 踏板記號很少時,離記號遠的地方照沒有記號的規則(pedalMarksGovern / PEDAL_SPARSE)
+    if (pedalMarksGovern(sT)) ev.harmonyEndWhole = pedalEnd;
+    else if (baroqueDry) ev.harmonyEndWhole = null;
     ev.artic = findNearestEntry(articEntries, sT, MARK_MATCH_EPSILON) || null;
     // 每個音自己那一手的記號(n.artic);延長記號整個時間點都算(常常只寫在一個譜表)
     // (譜表編號對不上——例如多聲部檔案——就退回整個時間點的記號)
@@ -9309,16 +9362,16 @@ function computePianoDynamics(){
             // 有和弦記號的非古典:和弦最上面的旋律音跟單音旋律一樣加 4(下面已經多一個音、本來就比較響,不用再多打;
             // 以前 +6,雙音的旋律音比前後單音重 2,第 51 小節 B♭4+D5 的 D 特別突出)
             const topB = ns.length > 1 && !hplan ? 6 : 4;
-            v += topB + (pop ? PIANO_POP.melody : 0);
+            v += topB + (pop ? PIANO_POP.melody : PIANO_CLASSIC_VOICE.melody);
             if (hplan) n._micro = (ev._beatTerm || 0) + topB + (n.durWhole >= 0.5 ? 2 : n.durWhole <= 1 / 16 + 1e-6 ? -2 : 0);
             v += melodyDip(ev, m);   // 旋律凹處放輕(通用)
             if (pop) v += popMelodyContour(ev);   // 非古典:旋律整體的走向(平滑),見 popMelodyContour
             else if (melodyHist.length) v += Math.max(-4, Math.min(4, (m - melodyHist.reduce((s, x) => s + x, 0) / melodyHist.length) * 0.35));   // 古典:跟前 8 個旋律音比
             if (hplan && ev._chord) v += melodyChordLean(ev, m);   // 旋律跟和弦:非和弦音加重、解決音放輕(有和弦記號時)
             melodyHist.push(m); if (melodyHist.length > 8) melodyHist.shift();
-          } else v -= 5 + (pop ? PIANO_POP.accomp : 0);
+          } else v -= 5 + (pop ? PIANO_POP.accomp : PIANO_CLASSIC_VOICE.accomp);
         } else {
-          v -= 4 + (pop ? PIANO_POP.accomp : 0);
+          v -= 4 + (pop ? PIANO_POP.accomp : PIANO_CLASSIC_VOICE.accomp);
           if (pop && ns.length === 1 && isLHFiller(ev, m)) v -= PIANO_POP.lhFiller;   // 左手夾在中間的伴奏音(isLHFiller)
           if (ns.length > 1) v += n === bottom ? 3 : -3;
         }
@@ -9873,7 +9926,7 @@ function pianoCloseResonance(){
   const p = pianoResGate.gain; p.cancelScheduledValues(0); p.setTargetAtTime(0, audioCtx.currentTime, PIANO_SYMPA.closeTau);
 }
 /* 踏板範圍(記譜位置):有踏板記號就用記號,沒有就用自動踏板 */
-function pianoRanges(){ return pedalRanges && pedalRanges.length ? pedalRanges : (autoPedalRanges || []); }
+function pianoRanges(){ return pianoRangesAll; }   // 譜上踏板 + 自動踏板(踏板記號很少時兩種都有,見 PEDAL_SPARSE)
 
 /* ── 民謠吉他(鋼弦):FSS Steel-String Acoustic Guitar(FreePats,FlameStudios 的 FS Seagull 取樣,GPL + 音色例外)──
    E2~C6 每個半音都有錄音(重彈 42 個、中彈 17 個),44.1kHz。原本用的 Ella Gitauru 真正的錄音只有 5 個音高,其他音都要升調,
