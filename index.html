@@ -4010,7 +4010,7 @@ function avoidMeasureNumberOverlap(o, root){
       let b; try { b = el.getBBox(); } catch (e) { continue; }
       if (!b || (b.width < 0.01 && b.height < 0.01)) continue;
       if (b.height < 1.6 && b.width > 40) continue;    // 譜線
-      if (b.width < 2.2 && b.height > 30) continue;    // 小節線
+      if (b.width < 2.2 && b.height > 30 && el.tagName.toLowerCase() === "rect") continue;    // 小節線(OSMD 畫成 rect;符桿也細長但是 path,不能排除)
       const dy = dyOf(el);
       obs.push({ x: b.x, y: b.y + dy, w: b.width, h: b.height, el, dy });
     }
@@ -4056,6 +4056,104 @@ function avoidMeasureNumberOverlap(o, root){
     }
     return moved;
   } catch (e) { console.warn("measure numbers", e); return 0; }
+}
+/* 表情文字、力度記號不壓到音符/線條(2026-10,使用者要求「繼續檢查,確保沒有任何寫法上的錯誤」;tools/audiotest/engrave_check.mjs 找到的:
+   Gretchaninov〈A Boring Story〉第 10 小節「poco rall.」壓到圓滑線、舒伯特〈An die Musik〉第 21 小節「fp」壓到下面譜表的符桿)。
+   每個 StaffLine.AbstractExpressions 的文字(centerBetweenStaffLabels 之後、drawWordDashes 之前),真的碰到別的東西(符頭、符桿、
+   符尾線、圓滑線、延音線、其他文字…;大的路徑沿線取點)時,往離開自己譜表的方向移(在譜表上方就往上、下方就往下),
+   移到剛好不碰 + EXPR_GAP;所有譜表的五線範圍也算障礙(不會移進別的譜表);最多 EXPR_MAX 單位(10 = 一格),
+   上下移不開就原高度左右挪 1 格以內(MNUM_SHIFTS),都不行就照原位。
+   力度記號只上下移(要跟音符對齊),OSMD 同一個字畫兩份的一起移 */
+const EXPR_GAP = 2, EXPR_MAX = 40;
+function avoidExpressionOverlap(o, root){
+  try {
+    const svg = (root || $("score")).querySelector("svg");
+    if (!svg || !o || !o.GraphicSheet) return 0;
+    const items = [], staffs = [];
+    for (const page of o.GraphicSheet.MusicPages) for (const sys of page.MusicSystems) for (const sl of sys.StaffLines) {
+      const top = sl.PositionAndShape.AbsolutePosition.y * 10, x0 = sl.PositionAndShape.AbsolutePosition.x * 10;
+      staffs.push({ x: x0, y: top, w: (sl.PositionAndShape.Size.width || 1e7) * 10, h: 40 });
+      for (const ae of sl.AbstractExpressions || []) {
+        const L = ae.Label || ae.label;
+        if (L && L.SVGNode && L.SVGNode.getBBox) items.push({ node: L.SVGNode, top, bot: top + 40 });
+      }
+    }
+    if (!items.length) return 0;
+    const tr = el => { const m = /translate\(\s*([-\d.]+)[ ,]+([-\d.]+)/.exec(el.getAttribute("transform") || ""); return m ? [parseFloat(m[1]), parseFloat(m[2])] : [0, 0]; };
+    // 標籤的 SVGNode 是包著 <text> 的 <g>;OSMD 同一個字常畫兩份(兩個 <g>,位置一樣),一起移、只移最外層(裡面的 <text> 不能再移一次)
+    const tops = [...svg.querySelectorAll("text")].map(t => { let n = t; while (n.parentNode && n.parentNode !== svg && n.parentNode.tagName.toLowerCase() === "g" && !n.parentNode.classList.contains("staffline") && n.parentNode.childElementCount === 1) n = n.parentNode; return n; });
+    const seen = new Set();
+    for (const it of items) {
+      if (seen.has(it.node)) { it.skip = true; continue; }
+      const b = it.node.getBBox(), t0 = tr(it.node), s = it.node.textContent;
+      it.group = [...new Set(tops.filter(n => n === it.node || (n.textContent === s && !n.contains(it.node) && !it.node.contains(n) && (() => { const c = n.getBBox(), u = tr(n); return Math.abs(c.x + u[0] - b.x - t0[0]) < 0.5 && Math.abs(c.y + u[1] - b.y - t0[1]) < 0.5; })())))];
+      if (!it.group.includes(it.node)) it.group.push(it.node);
+      for (const n of it.group) seen.add(n);
+    }
+    const own = new Set(items.flatMap(it => it.group || []));
+    const obs = [];
+    for (const el of svg.querySelectorAll("path, text, rect, line, polygon, polyline, ellipse, circle")) {
+      if ([...own].some(n => n === el || n.contains(el))) continue;
+      let b; try { b = el.getBBox(); } catch (e) { continue; }
+      if (!b || (b.width < 0.01 && b.height < 0.01)) continue;
+      if (b.height < 1.6 && b.width > 40) continue;    // 譜線(下面另外整片加)
+      if (b.width < 2.2 && b.height > 30 && el.tagName.toLowerCase() === "rect") continue;    // 小節線(OSMD 畫成 rect;符桿也細長但是 path,不能排除)
+      const t = tr(el);
+      obs.push({ x: b.x + t[0], y: b.y + t[1], w: b.width, h: b.height, el, dx: t[0], dy: t[1] });
+    }
+    for (const st of staffs) obs.push({ x: st.x, y: st.y, w: st.w, h: st.h, el: null, dx: 0, dy: 0 });
+    const hit = (ob, R) => {   // 碰到的部分的 [最上, 最下] y,沒碰到 null
+      if (!ob.el) return [ob.y, ob.y + ob.h];
+      const el = ob.el, big = el.tagName.toLowerCase() === "path" && (ob.w > R.width * 1.5 || ob.h > R.height * 1.5) && el.getTotalLength;
+      if (!big) return [ob.y, ob.y + ob.h];
+      let lo = null, hi = null;
+      const L = el.getTotalLength(), step = Math.max(0.5, L / 1500);
+      for (let t = 0; t <= L; t += step) {
+        const p = el.getPointAtLength(t), x = p.x + ob.dx, y = p.y + ob.dy;
+        if (x > R.x && x < R.x + R.width && y > R.y && y < R.y + R.height) { lo = lo == null ? y : Math.min(lo, y); hi = hi == null ? y : Math.max(hi, y); }
+      }
+      return lo == null ? null : [lo, hi];
+    };
+    const collide = R => {
+      let lo = null, hi = null;
+      for (const ob of obs) {
+        if (ob.x > R.x + R.width || ob.x + ob.w < R.x || ob.y > R.y + R.height || ob.y + ob.h < R.y) continue;
+        const h = hit(ob, R);
+        if (h) { lo = lo == null ? h[0] : Math.min(lo, h[0]); hi = hi == null ? h[1] : Math.max(hi, h[1]); }
+      }
+      return lo == null ? null : [lo, hi];
+    };
+    let moved = 0;
+    for (const it of items) {
+      if (it.skip) continue;
+      const b0 = it.node.getBBox(), t0 = tr(it.node);
+      // 文字外框含字型上下留白:上緣內縮 22%、下緣 18%,接近筆畫
+      const desc = /[gjpqyf,;]/.test(it.node.textContent);   // 有下伸筆畫(力度記號的斜體 f、p 也往下伸)時下緣不縮
+      const R0 = { x: b0.x + t0[0] + 0.3, y: b0.y + t0[1] + b0.height * 0.22, width: b0.width - 0.6, height: b0.height * (desc ? 0.73 : 0.6) };
+      if (!(R0.width > 0)) continue;
+      const cy = R0.y + R0.height / 2;
+      const dir = cy < it.top ? -1 : cy > it.bot ? 1 : 0;
+      if (!dir || !collide(R0)) continue;
+      let d = 0, ok = false;
+      for (let k = 0; k < 10 && Math.abs(d) <= EXPR_MAX; k++) {
+        const R = { x: R0.x, y: R0.y + d, width: R0.width, height: R0.height };
+        const c = collide(R);
+        if (!c) { ok = true; break; }
+        d = dir < 0 ? d - ((R.y + R.height) - c[0] + EXPR_GAP) : d + (c[1] - R.y + EXPR_GAP);
+      }
+      let dx = 0;
+      if (!ok || Math.abs(d) > EXPR_MAX) {   // 上下移不開(兩個譜表中間空間不夠):原高度左右挪 1 格以內(力度記號稍微偏左也還對得到音符)
+        d = 0;
+        for (const x of MNUM_SHIFTS) if (!collide({ x: R0.x + x - EXPR_GAP / 2, y: R0.y - EXPR_GAP / 2, width: R0.width + EXPR_GAP, height: R0.height + EXPR_GAP })) { dx = x; ok = true; break; }
+        if (!ok) continue;
+      }
+      for (const n of it.group) { const t = tr(n); n.setAttribute("transform", `translate(${(t[0] + dx).toFixed(2)} ${(t[1] + d).toFixed(2)})`); }
+      // 新位置也是之後其他文字的障礙
+      for (const n of it.group) { const b = n.getBBox(), t = tr(n); obs.push({ x: b.x + t[0], y: b.y + t[1], w: b.width, h: b.height, el: n, dx: t[0], dy: t[1] }); }
+      moved++;
+    }
+    return moved;
+  } catch (e) { console.warn("expressions", e); return 0; }
 }
 function roundRehearsalBoxes(root){
   const svg = (root || $("score")).querySelector("svg");
@@ -4224,11 +4322,18 @@ function slurSnapEnds(gs){
       if (below ? stem === 1 : stem === 0) return;
       const ps = ve.PositionAndShape, top = ps.AbsolutePosition.y - sy + ps.BorderMarginTop, bot = ps.AbsolutePosition.y - sy + ps.BorderMarginBottom;
       if (!isFinite(top) || !isFinite(bot)) return;
+      // 指法、裝飾音記號(顫音、迴音…)、不認得的演奏記號(延長記號等)在那一側時不拉回:OSMD 原本的端點已經讓開它們
+      // (布拉姆斯小提琴協奏曲第 1 小節:拉回後壓到指法「4」)
+      const pve = ve.parentVoiceEntry;
+      if ((pve.TechnicalInstructions || []).length || ve.notes.some(n => n.sourceNote && n.sourceNote.Fingering) || pve.OrnamentContainer) return;
       let art = 0;
-      for (const a of ve.parentVoiceEntry.Articulations || []) {
+      for (const a of pve.Articulations || []) {
         const e = a.articulationEnum != null ? a.articulationEnum : a;
         const place = a.placement;   // 沒寫就是符頭那一側
-        if (SLUR_SNAP.art[e] && (place == null || place === 2 || place === (below ? 1 : 0))) art = Math.max(art, SLUR_SNAP.art[e]);
+        const onSide = place == null || place === 2 || place === (below ? 1 : 0);
+        if (!onSide) continue;
+        if (!SLUR_SNAP.art[e]) return;
+        art = Math.max(art, SLUR_SNAP.art[e]);
       }
       const target = below ? bot + SLUR_SNAP.gap + art : top - SLUR_SNAP.gap - art;
       if (below ? pt.y > target + SLUR_SNAP.far : pt.y < target - SLUR_SNAP.far) { pt.y = target; moved = true; }
@@ -4373,6 +4478,7 @@ async function renderScore(xmlText){
   roundRehearsalBoxes();
   tagChordSymbols(osmd);
   centerBetweenStaffLabels(osmd, $("score"));
+  avoidExpressionOverlap(osmd, $("score"));
   drawWordDashes(osmd, $("score"), finalXml);
   extendLedgerLineStems(); // OSMD符桿長度是固定值,不會因為加線音符離譜表遠就自動加長,這裡渲染完手動補上
   avoidMeasureNumberOverlap(osmd, $("score"));
@@ -13213,6 +13319,7 @@ async function renderPageOsmd(contentW, sp){
   roundRehearsalBoxes(host);
   tagChordSymbols(o);
   centerBetweenStaffLabels(o, host);
+  avoidExpressionOverlap(o, host);
   drawWordDashes(o, host, lastRenderedXml);
   extendLedgerLineStems(host);
   avoidMeasureNumberOverlap(o, host);
