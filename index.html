@@ -5837,7 +5837,7 @@ function detectScoreStyleMeta(xmlText, fileName){
   try { doc = new DOMParser().parseFromString(xmlText, "application/xml"); } catch (e) { return { score, reasons }; }
   if (!doc || doc.getElementsByTagName("parsererror")[0]) return { score, reasons };
   const texts = tag => Array.from(doc.getElementsByTagName(tag)).map(e => e.textContent.trim()).filter(Boolean);
-  const meta = [...texts("work-title"), ...texts("movement-title"), ...texts("creator"), ...texts("credit-words"), fileName || ""].join(" | ");
+  const meta = [...texts("work-title"), ...texts("movement-title"), ...texts("creator"), ...texts("credit-words"), (fileName || "").replace(/[_]+/g, " ")].join(" | ");   // 檔名的底線當空格:Schumann_Kreisleriana_7 的 \b 才比對得到(底線算字母)
   const cComp = CLASSICAL_COMPOSERS.test(meta) || CLASSICAL_COMPOSERS_CJK.test(meta), cTitle = CLASSICAL_TITLE.test(meta) || CLASSICAL_TITLE_CJK.test(meta);
   if (cComp) add(2.5, "作曲者");
   if (cTitle) add(2, "標題");
