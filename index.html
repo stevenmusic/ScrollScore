@@ -5457,6 +5457,9 @@ function resolveTempoWordSpans(words, dashStops, bars, endT){
    lunghissima / 很長 = 很長,fermata breve / short hold = 短,單獨的 fermata / 延長記號 = 一般(「hold」單獨不算,常是 hold pedal)。
    文字貼在那個位置起半拍內最近的音上。跟 rit. 一樣不管彈性速度開不開都照做(以前只在彈性速度裡,關掉時時間不會停) */
 const FERMATA = { short: 0.75, normal: 0.58, long: 0.45, verylong: 0.33 };
+/* 延長那個音的放鍵倍數(音長已經照延長放慢過,這裡是延長音比時值多響一點);短音被拉長到最少拍數時按比例縮、至少 1 */
+function fermataHoldMul(artic){ return Math.max(1, 1.8 * FERMATA.normal / FERMATA[artic.fermataLen || "normal"] * (artic.fermataScale != null ? artic.fermataScale : 1)); }
+const FERMATA_MIN_BEATS = { short: 1, normal: 1.5, long: 2, verylong: 3 };   // 延長那個音至少停幾拍(短音上的延長)
 function fermataShapeLen(shape){
   const s = String(shape || "").trim().toLowerCase();
   if (s === "angled" || s === "double-angled") return "short";
@@ -5489,7 +5492,9 @@ function applyFermataWords(){
       // 同一遍裡只取第一個(反覆記號重播時記譜位置會再出現一次)
       if (lastSrc != null && sT > lastSrc + 1e-6) continue;
       lastSrc = sT;
-      if (!ev.fermataLen || FERMATA[w.len] < FERMATA[ev.fermataLen]) ev.fermataLen = w.len;
+      // 文字(Long hold…)優先於延長記號的形狀(使用者要求 2026-10:「Long hold 優先級大於延長記號」);同一處好幾個文字取最長的
+      if (!ev._fermWord || FERMATA[w.len] < FERMATA[ev.fermataLen]) ev.fermataLen = w.len;
+      ev._fermWord = true;
       for (const n of ev.notes) if (!n.drum) n.artic = Object.assign({}, n.artic || {}, { fermata: true, fermataLen: ev.fermataLen });
     }
   }
@@ -5499,8 +5504,18 @@ function fermataFactors(){
   for (let i = 0; i < events.length; i++) {
     const len = events[i].fermataLen;
     if (!len) continue;
-    const v = FERMATA[len];
-    f[i] = Math.min(f[i], v);
+    const ev = events[i], bl = ev.beatLen || 0.25;
+    // 延長的範圍 = 帶延長記號那一手最短的音(兩手都沒標就用整個時間點最短的);底下另一手在動時整段一起放慢
+    const bySt = ev.artic && ev.artic.byStaff;
+    const own = ev.notes.filter(n => !n.drum && n.durWhole > 0 && (!bySt || !Object.keys(bySt).some(k => bySt[k].fermata) || (bySt[n.staff || 1] || {}).fermata));
+    const D = (own.length ? own : ev.notes.filter(n => n.durWhole > 0)).reduce((m, n) => Math.min(m, n.durWhole), Infinity);
+    // 短音上的延長至少停 FERMATA_MIN_BEATS 拍(使用者反映 2026-10:十六分音符上的延長只停 0.39 秒,「沒有留長到應該有的長度」):
+    // 延長是「停住」,不是照音符時值乘一個倍數;長音照倍數
+    const v = isFinite(D) ? Math.max(0.08, Math.min(FERMATA[len], D / (FERMATA_MIN_BEATS[len] * bl))) : FERMATA[len];
+    const t0 = ev.tWhole, t1 = isFinite(D) ? t0 + D : t0 + 1e-6;
+    for (let j = i; j < events.length && events[j].tWhole < t1 - 1e-6; j++) if (events[j].tWhole >= t0 - 1e-6) f[j] = Math.min(f[j], v);
+    // 時間已經照最少拍數拉長時,放鍵不再多乘(不然十六分音符上的延長會蓋到下一句一秒多)
+    for (const n of ev.notes) if (n.artic && n.artic.fermata) n.artic.fermataScale = v / FERMATA[len];
     if (i > 0 && !events[i - 1].fermataLen) f[i - 1] = Math.min(f[i - 1], Math.max(0.62, 1 - (1 - v) * 0.9));   // 前一個音:最多 0.62(延長之前稍微收,長短都一樣;拉長的是延長那個音)
   }
   return f;
@@ -9858,7 +9873,7 @@ function playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel
     else if (artic.staccato) keyUp = Math.min(dur * S.staccato[0], S.staccato[1] + S.staccato[2] * dur);
     else if (artic.detachedLegato) keyUp = dur * 0.75;
     if (artic.tenuto) keyUp = Math.max(keyUp, dur * 0.98);
-    if (artic.fermata) keyUp *= 1.8 * FERMATA.normal / FERMATA[artic.fermataLen || "normal"];
+    if (artic.fermata) keyUp *= fermataHoldMul(artic);
   }
   // 樂句結尾換氣(PHRASE_NUANCE.breath):換氣記號、圓滑線接下一條圓滑線、長音接弱起拍的前一個音提早放鍵(不改時間)
   const short = artic && (artic.staccatissimo || artic.spiccato || artic.staccato || artic.detachedLegato);
@@ -10062,7 +10077,7 @@ function playGuitarNote(inst, freq, when, dur, ringEndSec, artic, tech, vel, gn)
     else if (artic.staccato) hold = dur * 0.5;
     else if (artic.detachedLegato) hold = dur * 0.75;
     if (artic.tenuto) hold = Math.max(hold, dur * 0.98);
-    if (artic.fermata) hold *= 1.8 * FERMATA.normal / FERMATA[artic.fermataLen || "normal"];
+    if (artic.fermata) hold *= fermataHoldMul(artic);
   }
   const short = artic && (artic.staccatissimo || artic.spiccato || artic.staccato || artic.detachedLegato);
   let releaseAt = when + Math.max(0.04, hold);
@@ -11209,6 +11224,7 @@ function setScrollerX(x){
   if (pl) pl.style.left = playlinePosX() + "px";
 }
 /* 播放軸貼著樂譜:最上/最下的符頭(或譜線)再往外留 PLAYLINE_PAD_SPACES_WITH_PANEL 個譜線間距,跟匯出影片同一條規則 */
+const TOP_TEXT_PAD = 4;   // 樂譜最上面的文字離樂譜區上緣至少幾 px
 function updatePlaylineExtent(){
   const stage = $("stage"), scroller = $("scroller"), pl = $("playline");
   const svg = scroller && scroller.querySelector("svg");
@@ -11230,6 +11246,21 @@ function updatePlaylineExtent(){
   const prevS = scoreFit.s;
   if (Math.abs(s - 1) < 0.01 && boxTop + cTop >= margin && boxTop + cBot <= Hs - margin) scoreFit = { s: 1, ty: 0 };
   else scoreFit = { s, ty: Hs / 2 - boxTop - s * (cTop + cBot) / 2 };
+  // 播放軸上方的文字(段落記號、速度文字、和弦名稱)不能跑出樂譜區(使用者反映 2026-10:第 52 小節 Outro 被頂欄蓋住):
+  // 整首最上面的內容至少留 TOP_TEXT_PAD;往下移會讓播放軸下端出界時才縮小樂譜
+  const ext = scoreContentExtent();
+  if (ext) {
+    const topC = svgTop + ext.top * svgH, padT = TOP_TEXT_PAD;
+    const topPx = boxTop + scoreFit.ty + scoreFit.s * topC;
+    if (topPx < padT) {
+      const room = (Hs - margin) - (boxTop + scoreFit.ty + scoreFit.s * cBot);
+      if (padT - topPx <= room) scoreFit = { s: scoreFit.s, ty: scoreFit.ty + padT - topPx };
+      else {
+        const s2 = Math.max(0.3, (Hs - margin - padT) / (cBot - topC));
+        scoreFit = { s: s2, ty: padT - boxTop - s2 * topC };
+      }
+    }
+  }
   pl.style.left = playlinePosX() + "px";
   // 放大時讓瀏覽器重新點陣化(will-change: transform 的圖層換比例後會沿用舊的點陣、放大會糊)
   if (Math.abs(scoreFit.s - prevS) > 0.005) { scroller.style.willChange = "auto"; requestAnimationFrame(() => { scroller.style.willChange = ""; }); }
@@ -11288,7 +11319,7 @@ function applyArticulation(sustain, peakGain, dur, artic){
   else if (artic.staccato) s = dur * 0.5;        // 斷奏:縮短到約一半
   else if (artic.detachedLegato) s = dur * 0.75; // 半斷音(斷奏+保持音的折衷):稍微縮短
   if (artic.tenuto) s = Math.max(s, dur * 0.98); // 保持音:確保彈滿全部時值,不被縮短
-  if (artic.fermata) s = s * 1.8 * FERMATA.normal / FERMATA[artic.fermataLen || "normal"];                // 延長記號:明顯拉長
+  if (artic.fermata) s = s * fermataHoldMul(artic);                // 延長記號:明顯拉長
   if (artic.strongAccent) g = g * 1.5;           // 強音記號(marcato):音量大幅加強
   else if (artic.accent) g = g * 1.3;            // 重音:音量加強
   else if (artic.softAccent) g = g * 1.15;       // 次強音:小幅加強
