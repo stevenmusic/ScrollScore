@@ -6626,6 +6626,18 @@ function rubatoPredict(x){
 // 「最高音 ≠ 樂句目標」、右手伴奏被當成旋律、固定一拍門檻都會判錯,加錯的停留比不加更糟)。非古典只剩整首最後漸慢 + 譜上 rit./延長記號
 const SECTION_ARC = { amp: 5, arcLow: 0.5, repeat: 2.5 };
 const POP_BREATH = { sectionEnd: 1, toChorus: 1, phraseEnd: 1, peak: 1, peakPrev: 1, endBars: 2, end: 0.85 };
+/* 快歌、慢歌(使用者選的,2026-10;只用在非古典):流行的快歌要穩、照拍子走,慢歌(抒情)才有呼吸。
+   速度 = 樂譜寫的速度換成「每分鐘幾拍」(拍 = beatLen,6/8 是附點四分音符;沒寫速度用目前的速度),
+   ≤ slowBpm 跟以前一樣(×1),≥ fastBpm 剩 minScale,中間線性。縮的是模型的放慢量與曲尾漸慢(0.85 → 1 − 0.15×倍數);
+   譜上的 rit./accel./延長記號照做。古典不套用(模型本身有「譜上速度」特徵,學到的是古典鋼琴家快板/慢板的差別) */
+const POP_SPEED = { slowBpm: 90, fastBpm: 140, minScale: 0.35 };
+function popTempoScale(){
+  const qpm = scoreSoundTempo > 0 ? scoreSoundTempo : bpm();
+  const beatLen = events.find(ev => ev.beatLen > 0)?.beatLen || 0.25;
+  const beats = qpm * 0.25 / beatLen;
+  const x = Math.max(0, Math.min(1, (beats - POP_SPEED.slowBpm) / (POP_SPEED.fastBpm - POP_SPEED.slowBpm)));
+  return { scale: 1 - (1 - POP_SPEED.minScale) * x, beats };
+}
 function popBreathFactors(){
   const n = events.length, f = new Array(n).fill(1), eps = 1e-6;
   const src = events.map(ev => ev.srcT != null ? ev.srcT : ev.tWhole);
@@ -6638,6 +6650,7 @@ function popBreathFactors(){
       f[i] = Math.min(f[i], 1 + (target - 1) * Math.max(0, Math.min(1, p)));
     }
   };
+  const tScale = popTempoScale().scale;
   const S = scoreSections;
   // ① 段落交界
   for (let k = 1; k < S.length; k++) slowTo(S[k].t - beat, S[k].t, S[k].kind === "chorus" ? POP_BREATH.toChorus : POP_BREATH.sectionEnd);
@@ -6665,7 +6678,7 @@ function popBreathFactors(){
     }
   }
   // ④ 曲尾
-  slowTo(endT - POP_BREATH.endBars * barLen, endT, POP_BREATH.end);
+  slowTo(endT - POP_BREATH.endBars * barLen, endT, 1 - (1 - POP_BREATH.end) * tScale);
   return f;
 }
 /* 每個事件的速度倍率 → 等效全音符座標表(rubatoMap / tempoWordMap 共用) */
@@ -6713,7 +6726,7 @@ function buildRubatoMap(){
   // 模型學到古典鋼琴家在密集的音符往前推,流行/抒情伴奏的十六分音符要穩)
   const cp = scoreClassicalProb();
   const popBreath = cp < 0.5 ? popBreathFactors() : null;   // 非古典:流行抒情的呼吸(只放慢,見 POP_BREATH)
-  const style = RUBATO_NONCLASSICAL + (1 - RUBATO_NONCLASSICAL) * cp;
+  const style = (RUBATO_NONCLASSICAL + (1 - RUBATO_NONCLASSICAL) * cp) * (cp < 0.5 ? popTempoScale().scale : 1);   // 非古典的快歌放慢得更少(POP_SPEED)
   const fastStyle = Math.max(0, (cp - 0.25) / 0.75);   // p ≤ 0.25 不加快,p = 1 跟以前一樣
   const mult = y.map(v => Math.exp((v - med) * (v < med ? RUBATO_AMOUNT.slow * style : RUBATO_AMOUNT.fast * fastStyle)));
   // 延長記號是罕見但明確的情況,模型會低估(訓練時佔比太小):一般延長照 ASAP 真人平均補(那一拍慢 42%、前一個音慢 38%),
@@ -8532,13 +8545,13 @@ function harmonyOffsets(plan, t, beatLen){
       短的弱拍音連到重拍的長音/和弦是「導入重拍」,第二個才是目的地(第一版沒分:〈土耳其進行曲〉十六分音符連到重拍和弦被減 20、K310 −24) */
 const PHRASE_NUANCE = {
   decay:  { minSec: 1.0, k: 0.2, max: 5, floor: 0.8, leap: 5, maxDb: 18, follow: 0.5 },
-  pickup: { max: 5, below: 1 },
+  pickup: { max: 1.5, below: 3 },   // 2026-10 照真人收斂(使用者同意):(n)ASAP 弱起音幾乎不漸強、最後一個比重拍輕約 3 力度;以前最多 +5、只比重拍輕 1
   repeat: { step: 1.5, max: 5 },
   legato: { frac: 0.15, min: 0.015, max: 0.045 },
   breath: { frac: 0.2, max: 0.12, minKeep: 0.6 },
   sync:   { mel: 4, other: 2 },
   fill:   { after: 0.4, ramp: 1.2, max: 4, below: 8 },
-  sigh:   { first: 2, ratio: 0.85, arrival: 1.1, minF: 0.8, frac: 0.3, max: 0.2, minKeep: 0.5, longWhole: 0.5 },
+  sigh:   { first: 1, ratio: 0.95, arrival: 1.1, minF: 0.92, frac: 0.3, max: 0.2, minKeep: 0.5, longWhole: 0.5 },   // 2026-10 照真人收斂:第二個音真人只輕約 0.8dB(力度 ×0.955);以前 ×0.85、最多 ×0.8(約 −4dB),第一個 +2 → +1;提早放鍵照舊
   lyric:  { end: 3 }
 };
 const PEDAL_CHANGE = { lag: 0.05, up: 0.04, down: 0.13 };
