@@ -9607,6 +9607,11 @@ function popBeatProfile(){
     if (Math.abs(drift) > 1e-4) { cum += drift; for (const n of allN) n.pvel = Math.max(8, Math.min(124, n.pvel - drift)); }
   }
 }
+/* 非古典的「譜上有力度記號、自動的起伏要退讓」:要有會改變大小的記號(dynMarkIsLevel),而且有兩種以上的大小或有髮夾 */
+function popHasShapeMarks(){
+  const lv = new Set(scoreDynMarks.filter(d => dynMarkIsLevel(d)).map(d => Math.round(dynMarkLevel(d) * 1000)));
+  return lv.size >= 2 || (lv.size >= 1 && (scoreWedges || []).length > 0);
+}
 function popDynamicsCalibrate(){
   if (classicalProbInfo().p >= 0.5) return;
   const c = Object.assign({}, POP_CAL_DEFAULT, window.POP_CAL || {});
@@ -9614,7 +9619,7 @@ function popDynamicsCalibrate(){
   for (const ev of events) for (const n of ev.notes) if (!n.drum && n.freq && n.pvel != null) notes.push({ n, ev });
   if (!notes.length) return;
   const clampV = v => Math.max(8, Math.min(124, v));
-  const hasMarks = scoreDynMarks.some(d => dynMarkIsLevel(d));   // 只有 sf/fz 等瞬間記號不算(見 computePianoDynamics 的 popMarks)
+  const hasMarks = popHasShapeMarks();   // 只有 sf/fz 等瞬間記號、或整首只有一種大小時不算(見 computePianoDynamics 的 popMarks)
   // r = 「自動推測」的那一份力度:扣掉譜上力度記號造成的部分(mk;有力度記號時那是作曲者寫的大小聲,校正不壓它),
   // 段落倍率與結尾倍率(_secF)還沒乘(段落名稱不算進高潮的能量,不會重複計算)
   let lvlMean = 0; for (const x of notes) lvlMean += x.n._lvl || 0; lvlMean /= notes.length;
@@ -9875,7 +9880,9 @@ function computePianoDynamics(){
   const hasMarks = scoreDynMarks.length > 0;
   // 非古典的「有力度記號時退讓」只看會改變大小的記號(p/f/文字力度…):只有 sf/fz/rf 這種瞬間重音時,以前段落倍率與高潮倍率也開根號、
   // 自動段落起伏 ×0.4(2026-10 檢查:主歌寫了一個 sf,主歌/副歌旋律 61/91 → 66/80)。古典照舊用 hasMarks
-  const popMarks = scoreDynMarks.some(d => dynMarkIsLevel(d));
+  // 也不看「整首只有一種大小」的記號(例如只在開頭寫一個 mp,沒有髮夾):只說了整體多大聲,沒有說哪裡大哪裡小,
+  // 以前一樣讓自動的段落/高潮起伏減半(開頭寫 mf 的測試譜,主歌/副歌旋律 61/91 → 66/80)。整體大小照樣依記號(pianoLevelAt)
+  const popMarks = popHasShapeMarks();
   const pop = classicalProbInfo().p < 0.5, popSections = pop && scoreSections.length > 0 && !!perfSections().levelOk;   // 非古典的彈法(PIANO_POP);段落名稱要真的有對比才用(sectionLevelOk)
   // 有和弦記號就用和聲安排(張力/樂句弧線/倚音),古典非古典都一樣(使用者 2026-10:通用的改動古典也要);古典譜很少有和弦記號
   const hplan = buildHarmonyPlan();
