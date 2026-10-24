@@ -9036,7 +9036,7 @@ function popEndFade(hasMarks){
   let len = END_SHAPE.bars * bl, ritEnd = false;
   for (const r of scoreTempoSpans || []) if (r.kind === "rit" && r.end >= srcEnd - bl / 4) { ritEnd = true; if (srcEnd - r.start <= END_SHAPE.maxBars * bl + 1e-6) len = Math.max(len, srcEnd - r.start); }
   const t1 = last.tWhole, t0 = t1 - len;   // 到最後一個起音(最後的和弦)剛好到目標
-  if (hasMarks && scoreDynMarks.some(d => d.t >= srcEnd - len - 1e-6 && d.t <= srcEnd + 1e-6)) return null;
+  if (hasMarks && scoreDynMarks.some(d => dynMarkIsLevel(d) && d.t >= srcEnd - len - 1e-6 && d.t <= srcEnd + 1e-6)) return null;
   if ((scoreWedges || []).some(w => w.end > srcEnd - len + 1e-6 && w.start < srcEnd - 1e-6)) return null;
   const pit = ev => ev.notes.filter(n => !n.drum && n.freq);
   const multi = events.some(ev => pit(ev).some(n => (n.staff || 1) > 1));
@@ -9614,7 +9614,7 @@ function popDynamicsCalibrate(){
   for (const ev of events) for (const n of ev.notes) if (!n.drum && n.freq && n.pvel != null) notes.push({ n, ev });
   if (!notes.length) return;
   const clampV = v => Math.max(8, Math.min(124, v));
-  const hasMarks = scoreDynMarks.length > 0;
+  const hasMarks = scoreDynMarks.some(d => dynMarkIsLevel(d));   // 只有 sf/fz 等瞬間記號不算(見 computePianoDynamics 的 popMarks)
   // r = 「自動推測」的那一份力度:扣掉譜上力度記號造成的部分(mk;有力度記號時那是作曲者寫的大小聲,校正不壓它),
   // 段落倍率與結尾倍率(_secF)還沒乘(段落名稱不算進高潮的能量,不會重複計算)
   let lvlMean = 0; for (const x of notes) lvlMean += x.n._lvl || 0; lvlMean /= notes.length;
@@ -9873,6 +9873,9 @@ function pianoVelocityAsync(){
 function computePianoDynamics(){
   const multiStaff = events.some(ev => ev.notes.some(n => !n.drum && n.freq && (n.staff || 1) > 1));
   const hasMarks = scoreDynMarks.length > 0;
+  // 非古典的「有力度記號時退讓」只看會改變大小的記號(p/f/文字力度…):只有 sf/fz/rf 這種瞬間重音時,以前段落倍率與高潮倍率也開根號、
+  // 自動段落起伏 ×0.4(2026-10 檢查:主歌寫了一個 sf,主歌/副歌旋律 61/91 → 66/80)。古典照舊用 hasMarks
+  const popMarks = scoreDynMarks.some(d => dynMarkIsLevel(d));
   const pop = classicalProbInfo().p < 0.5, popSections = pop && scoreSections.length > 0 && !!perfSections().levelOk;   // 非古典的彈法(PIANO_POP);段落名稱要真的有對比才用(sectionLevelOk)
   // 有和弦記號就用和聲安排(張力/樂句弧線/倚音),古典非古典都一樣(使用者 2026-10:通用的改動古典也要);古典譜很少有和弦記號
   const hplan = buildHarmonyPlan();
@@ -9998,9 +10001,9 @@ function computePianoDynamics(){
     for (let j = i + 1; j < events.length && events[j].tWhole <= t + w + 1e-6; j++) if (lhLows[j] != null) mn = Math.min(mn, lhLows[j]);
     return m - mn >= PIANO_POP.lineGap;
   };
-  const auto = pianoAutoMacro(hasMarks);
+  const auto = pianoAutoMacro(pop ? popMarks : hasMarks);
   const endContour = pianoEndContour(auto.nb, multiStaff);
-  const popEnd = pop ? popEndFade(hasMarks) : null;   // 非古典的結尾:依樂譜判斷漸弱或漸強(取代照旋律線條的曲尾)
+  const popEnd = pop ? popEndFade(popMarks) : null;   // 非古典的結尾:依樂譜判斷漸弱或漸強(取代照旋律線條的曲尾)
   // 和聲張力 + 樂句弧線整條曲線在前後約 PIANO_HARM.smoothBeats 拍做高斯平滑(使用者 2026-10:段落/樂句之間不要階梯;
   // 主歌停在屬和弦〔張力最高、樂句高點〕、導歌從 Bbmaj7 開新樂句時以前一下掉 11 力度):平滑整條曲線,不是固定長度的漸強漸弱——
   // 變化大的地方花比較久接過去,變化小的地方幾乎不變
@@ -10096,7 +10099,7 @@ function computePianoDynamics(){
         // 非古典:段落倍率、高潮、小節大小聲校正與重音都在 popDynamicsCalibrate / applyAccentRatios 一起算(只算一次,不互相拉扯),
         // 這裡只記下來:_secF = 段落倍率,_lvl = 譜上力度記號造成的那一份(校正不壓它)。結尾倍率(popEndFade)照舊乘在這裡(跟整理前一樣的幅度)
         let secF = 1, endF = 1;
-        if (popSections) secF = Math.pow(pianoSectionOffset(ev.tWhole, ev.beatLen, PIANO_SECTION_MUL, ev.barLen), hasMarks ? 0.5 : 1);   // 有力度記號時退讓:倍率開根號
+        if (popSections) secF = Math.pow(pianoSectionOffset(ev.tWhole, ev.beatLen, PIANO_SECTION_MUL, ev.barLen), popMarks ? 0.5 : 1);   // 有力度記號時退讓:倍率開根號
         if (popEnd) { endF = popEnd(ev.tWhole); v *= endF; }
         if (n._micro != null) { n._mul = endF; n._t = ev.tWhole; n._bl = ev.barLen > 0 ? ev.barLen : 1; }
         n._v0 = v; n._accDb = accDb - momDb; n._momDb = momDb; n._role = rh ? (n === top && !n._inner ? 1 : 2) : 3; delete n._inner;
