@@ -8055,11 +8055,11 @@ function ensureAudio(){
 /* 手機喇叭補償(SPEAKER_COMP,使用者要求 2026-10,只有 iOS App 偵測得到「聲音從內建喇叭出來」才開):
    手機/iPad 內建小喇叭 450Hz 以下幾乎發不出,但放大器要把低頻補償(約 +8dB,350Hz 以下)推它,低頻大的瞬間就削波(爆音)。
    所以內建喇叭時,鋼琴/吉他母帶鏈最後(loudnessComp、makeup 之後、masterBus 之前)多一個低頻架式濾波器收掉 250Hz 以下(只收喇叭本來就發不出的部分,
-   450Hz 以上幾乎不變);換耳機/藍牙/AirPlay 立刻放回(setTargetAtTime 約 0.1 秒平滑)。鼓不經過這段(鼓已凍結)。
+   450Hz 以上幾乎不變);換耳機/藍牙/AirPlay 立刻放回(setTargetAtTime 約 0.1 秒平滑)。鼓(使用者同意的鼓凍結例外,2026-10)在鼓匯流排最後另有一個(drumF/drumGainDb:250Hz −12dB,大鼓低頻多,手機模型削波失真 −14 → −20dB)。
    偵測只靠原生外掛 AudioRoute(app/ios/App/App/AudioRoutePlugin.swift,AVAudioSession 目前路由的 portType),網頁用瀏覽器 API 猜不準,所以網頁版永遠不開。
    匯出影片永遠不套(影片要給所有裝置看;匯出開始/結束時 speakerCompUpdate(true) 立即切)。
    window.SPEAKER_PROFILE_OVERRIDE = true/false 可在電腦上強制測試(匯出時仍關)。參數依 tools/audiotest/translation_check.py 的手機模型量決定 */
-const SPEAKER_COMP = { f: 250, gainDb: -8, tau: 0.03 };
+const SPEAKER_COMP = { f: 250, gainDb: -8, tau: 0.03, drumF: 250, drumGainDb: -12 };   // drum*:鼓匯流排自己一個低頻架(getDrumBus 最後),參數可跟鋼琴分開
 let speakerRoute = { builtInSpeaker: false, portType: "", portName: "" }, speakerRouteInit = false;
 function speakerWanted(){
   if (exporting) return false;
@@ -8068,10 +8068,13 @@ function speakerWanted(){
 }
 function speakerCompUpdate(immediate){
   try {
-    const sh = audioCtx && audioCtx.__spkShelf; if (!sh) return;
-    const g = speakerWanted() ? SPEAKER_COMP.gainDb : 0, t = audioCtx.currentTime;
-    sh.gain.cancelScheduledValues(t);
-    if (immediate) sh.gain.setValueAtTime(g, t); else sh.gain.setTargetAtTime(g, t, SPEAKER_COMP.tau);
+    if (!audioCtx) return;
+    const on = speakerWanted(), t = audioCtx.currentTime;
+    for (const [sh, g] of [[audioCtx.__spkShelf, on ? SPEAKER_COMP.gainDb : 0], [audioCtx.__spkShelfDrum, on ? SPEAKER_COMP.drumGainDb : 0]]) {
+      if (!sh) continue;
+      sh.gain.cancelScheduledValues(t);
+      if (immediate) sh.gain.setValueAtTime(g, t); else sh.gain.setTargetAtTime(g, t, SPEAKER_COMP.tau);
+    }
   } catch (e) {}
 }
 function setSpeakerRoute(r){
@@ -8091,9 +8094,14 @@ function initSpeakerRoute(){
     const AR = window.IN_NATIVE_APP && window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.AudioRoute;
     if (!AR) return;   // 網頁版、或外掛不存在:完全不變
     refreshSpeakerRoute();
-    let ok = false;
-    try { if (AR.addListener) { const h = AR.addListener("routeChange", setSpeakerRoute); ok = true; if (h && h.catch) h.catch(() => { ok = false; }); } } catch (e) {}
-    if (!ok) setInterval(refreshSpeakerRoute, 3000);   // 沒有事件時每 3 秒問一次(換耳機最多 3 秒才切)
+    let polling = false;
+    const poll = () => { if (polling) return; polling = true; setInterval(() => { if (!document.hidden) refreshSpeakerRoute(); }, 3000); };   // 沒有事件時每 3 秒問一次(換耳機最多 3 秒才切;背景不問)
+    try {
+      if (AR.addListener) { const h = AR.addListener("routeChange", setSpeakerRoute); if (h && h.catch) h.catch(poll); }   // Capacitor 8 回傳 Promise:失敗(非同步)時才改輪詢
+      else poll();
+    } catch (e) { poll(); }
+    // 回到前景再問一次:App 在背景時換了耳機/藍牙,routeChange 不一定會補送
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshSpeakerRoute(); });
   } catch (e) {}
 }
 /* 鋼琴/吉他母帶處理的節點(見 PIANO_MASTER)。回傳 { input, output };window.PIANO_MASTER_OVERRIDE 可覆寫參數({ on:false } 關掉,測試用) */
@@ -12352,7 +12360,7 @@ function pickDrumLayer(name, s){
    整條路徑繞過主輸出的響度壓縮器(那是給鋼琴的),只有主限幅器當安全網。
    參數由自動量測挑出來:小鼓餘韻長度、殘響/直接音比、立體聲寬度、力度傳遞、響度與峰值 */
 const DRUM_BUS = {
-  makeup: 0.70,   // 0.62 → 0.70:補回舊限幅器自動加的 +1.1dB。試過再大 3dB:響度只多 1.5~2dB、LRA 少 1.5LU(力度被限幅器吃掉),不划算
+  makeup: 0.85,   // 2026-10 使用者同意的鼓凍結例外:0.70 → 0.85(+1.7dB,播放響度往 −14 靠,但最大聲段落被限幅器壓掉 ≤ 3dB、LRA 掉 ≤ 1 LU 為上限,見 CLAUDE.md「鼓音量」)。以前 0.62 → 0.70:補回舊限幅器自動加的 +1.1dB。試過再大 3dB:響度只多 1.5~2dB、LRA 少 1.5LU(力度被限幅器吃掉),不划算
   parallel: 0.35, compThreshold: -32, compRatio: 8, compAttack: 0.003, compRelease: 0.12,
   verb: 3.5, verbSeconds: 2.6, verbRT60: 2.2, verbPreDelay: 0.012, verbHighpass: 250,
   eqBoxFreq: 350, eqBoxGain: -1.5, eqAirGain: 1.5,
@@ -12399,7 +12407,11 @@ function getDrumBus(){
   // 匯流排 EQ
   const box = audioCtx.createBiquadFilter(); box.type = "peaking"; box.frequency.value = B.eqBoxFreq; box.Q.value = 1.0; box.gain.value = B.eqBoxGain;
   const air = audioCtx.createBiquadFilter(); air.type = "highshelf"; air.frequency.value = 10000; air.gain.value = B.eqAirGain;
-  out.connect(box); box.connect(air); air.connect(masterBus || masterGain);
+  out.connect(box); box.connect(air);
+  // 手機喇叭補償(SPEAKER_COMP.drum*):只有 App 偵測到內建喇叭才收低頻,其他情況 0dB;匯出時永遠 0(見 speakerCompUpdate)
+  const spk = audioCtx.createBiquadFilter(); spk.type = "lowshelf"; spk.frequency.value = SPEAKER_COMP.drumF;
+  spk.gain.value = speakerWanted() ? SPEAKER_COMP.drumGainDb : 0; audioCtx.__spkShelfDrum = spk;
+  air.connect(spk); spk.connect(masterBus || masterGain);
   // 1) 乾聲
   input.connect(out);
   // 2) 平行壓縮
