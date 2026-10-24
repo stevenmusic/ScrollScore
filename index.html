@@ -9283,10 +9283,21 @@ function pianoSectionOffsetRaw(G, t, beatLen, T, barLen){
   // 下一段比較大聲:在這一段的後半段慢慢漸強(最多 SECTION_JOIN.upBars 小節),到下一段第一拍剛好到位;
   // 下一段比較小聲:只在這一段最後 downBeats 拍收(4/4 = 最後一個長音或和弦稍微收,前面的旋律照段落的大小)(使用者同意,漏洞檢查第 2 項:以前副歌最後 3 小節就開始收,副歌最後一句
   // 常常是整首最高潮,被削弱;真人是唱滿再在段落交界放輕)。S 形曲線,開頭結尾都不突兀
-  const cur = val(i, t);
+  let cur = val(i, t);
+  const bl0 = barLen || 1, bt0 = beatLen || bl0 / 4;
+  // 上一段結尾是往上走的過門(sectionFillRun)而且這一段比較小聲:上一段結尾不收,改在這一段開頭落地——
+  // 第一拍從兩段中間開始,fillBeats 拍內回到這一段的大小(收的量移到過門之後)
+  if (i > 0) {
+    const prev = val(i - 1, G[i].t - 1e-6), base = val(i, G[i].t);
+    if (prev > base + 1e-6 && sectionFillRun(G, i - 1, bt0)) {
+      const wl = Math.min(SECTION_JOIN.fillBeats * bt0, (G[i].end - G[i].t) * SECTION_JOIN.downFrac), x = wl > 1e-6 ? (t - G[i].t) / wl : 1;
+      if (x < 1) { const k = x <= 0 ? 0 : x * x * (3 - 2 * x); cur += (prev - base) * SECTION_JOIN.fillLand * (1 - k); }
+    }
+  }
   if (i + 1 < G.length) {
-    const next = val(i + 1, G[i + 1].t), len = G[i + 1].t - G[i].t, bl = barLen || 1, bt = beatLen || bl / 4;
+    const next = val(i + 1, G[i + 1].t), len = G[i + 1].t - G[i].t, bl = bl0, bt = bt0;
     const up = next > cur;
+    if (!up && sectionFillRun(G, i, bt)) return cur;   // 往上走的過門不逆著旋律收(見上面)
     const w = up ? Math.min(SECTION_JOIN.upBars * bl, len * SECTION_JOIN.upFrac) : Math.min(SECTION_JOIN.downBeats * bt, len * SECTION_JOIN.downFrac);
     const t0 = G[i + 1].t - w;
     if (w > 1e-6 && t > t0) {
@@ -9297,7 +9308,36 @@ function pianoSectionOffsetRaw(G, t, beatLen, T, barLen){
   }
   return cur;
 }
-const SECTION_JOIN = { upBars: 4, upFrac: 0.5, downBeats: 3, downFrac: 0.25 };
+const SECTION_JOIN = { upBars: 4, upFrac: 0.5, downBeats: 3, downFrac: 0.25, fillBeats: 2, fillLand: 0.5 };
+/* 第 i 段結尾是不是往上走的過門/經過句(2026-10 複查:副歌最後一小節的上行音階接安靜的主歌,「最後 3 拍收」讓音階一路變弱 67 → 51,跟旋律走向相反):
+   看這一段最後 downBeats 拍裡,每個起音右手(第 1 譜表)最高的音:連續 ≥ FILL_RUN.minNotes 個比一拍短的音、一路不往下(同音可以)、
+   每步 ≤ FILL_RUN.maxStep 半音、總共往上 ≥ FILL_RUN.minRise 半音,而且最後一拍裡還在走(過門接到下一段)→ 是過門。
+   一小節前同一個位置有一樣的音(repeatFrac 以上)= 一直重複的伴奏音型(右手每拍往上的分解和弦),不算過門。
+   長音/和弦結尾、往下走的經過句照舊收。看樂譜結構,不看段落名稱 */
+const FILL_RUN = { minNotes: 4, maxStep: 5, minRise: 5, repeatFrac: 0.75 };
+function sectionFillRun(G, i, bt){
+  const memo = G._fill || (G._fill = {});
+  if (memo[i] != null) return memo[i];
+  let res = false;
+  const tB = G[i].end, w = Math.min(SECTION_JOIN.downBeats * bt, (tB - G[i].t) * SECTION_JOIN.downFrac);
+  const tops = [];
+  if (i + 1 < G.length && w > 1e-6) for (const ev of events) {
+    if (ev.tWhole < tB - w - 1e-6 || ev.tWhole >= tB - 1e-6) continue;
+    let top = null;
+    for (const n of ev.notes) if (!n.drum && n.freq && (n.staff || 1) === 1 && (!top || n.freq > top.freq)) top = n;
+    if (top) tops.push({ p: freqToMidi(top.freq), t: ev.tWhole, d: top.durWhole || 0, bl: ev.barLen > 0 ? ev.barLen : 1 });
+  }
+  // 一小節前同一個位置是一樣的音 → 是一直重複的伴奏音型(右手分解和弦每拍往上),不是過門
+  const topAt = t => { let top = null; for (const ev of events) { if (Math.abs(ev.tWhole - t) > 1e-6) continue; for (const n of ev.notes) if (!n.drum && n.freq && (n.staff || 1) === 1 && (!top || n.freq > top.freq)) top = n; } return top ? freqToMidi(top.freq) : null; };
+  const repeated = (a, b) => { let k = 0; for (let j = a; j <= b; j++) { const q = topAt(tops[j].t - tops[j].bl); if (q != null && Math.abs(q - tops[j].p) < 0.5) k++; } return k >= FILL_RUN.repeatFrac * (b - a + 1); };
+  for (let a = 0; a < tops.length && !res; a++) {
+    let b = a;
+    while (b + 1 < tops.length && tops[b].d < bt - 1e-6 && tops[b + 1].d < bt - 1e-6 && tops[b + 1].p >= tops[b].p - 0.01 && tops[b + 1].p - tops[b].p <= FILL_RUN.maxStep + 0.01) b++;
+    if (b - a + 1 >= FILL_RUN.minNotes && tops[b].p - tops[a].p >= FILL_RUN.minRise - 0.01 && tops[b].t + tops[b].d >= tB - bt - 1e-6 && !repeated(a, b)) res = true;
+    a = b > a ? b - 1 : a;
+  }
+  return memo[i] = res;
+}
 /* 和聲張力(0 = 最穩 ~ 1 = 最緊):依和弦根音在調裡的級數,再看和弦性質(屬七/掛留/減/增更緊、大七稍鬆;
    不在 V 的屬七 = 副屬和弦;主和弦第二轉位 I64 = 終止前的懸置) */
 const HARM_DEG_MAJ = { 0: 0, 2: 0.4, 4: 0.3, 5: 0.35, 7: 0.65, 9: 0.2, 11: 0.8, 10: 0.45, 3: 0.45, 8: 0.45, 1: 0.6, 6: 0.6 };
@@ -9769,6 +9809,80 @@ function popClimaxFactors(e){
   const ss = x => { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); };
   return sm1(sm1(e.map(v => 1 + (up ? X.lift * ss((v - lo) / (hi - lo)) : 0) - (down ? (X.drop || 0) * ss((ql - v) / (ql - qb)) : 0))));
 }
+/* 後面的副歌不比前面的副歌小聲(SECTION_REPEAT / popRepeatFloor,2026-10 複查;非古典、有段落記號):
+   POP909 量到最後一次副歌跟第一次一樣大,使用者的段落設計也是。高潮倍率照每小節能量前後平滑,從安靜的橋段進最後一次副歌時,
+   副歌開頭兩三小節被橋段拖低 9~14(整段 87 vs 第一次 94)。規則:kinds 裡的段落(副歌),第 k 次出現的第 j 小節(從段落開頭數)
+   的平均力度(旋律音;不夠就全部的音)不低於前面同一種段落第 j 小節的最大值;不夠的照比例補(最多 maxLift 倍),
+   小節之間的倍率在小節中點之間線性內插(不會一小節一個台階),開頭補的量在前一段最後 upBars 小節(最多半段)慢慢漸強接上
+   (不在進副歌那一下跳上去)。只往上補、不往下收;譜上力度記號寫了這次比較小聲(markDrop 以上)就照譜 */
+const SECTION_REPEAT = Object.assign({ kinds: { chorus: 1 }, maxLift: 1.3, markDrop: 3 }, window.SECTION_REPEAT_OVERRIDE || {});
+function popRepeatFloor(){
+  const X = SECTION_REPEAT;
+  if (!X || classicalProbInfo().p >= 0.5 || !scoreSections.length) return;
+  const G = perfSections();
+  if (G.length < 2) return;
+  const clampV = v => Math.max(8, Math.min(124, v));
+  const mean = a => a.length ? a.reduce((s2, x) => s2 + x, 0) / a.length : null;
+  const segOf = t => { let k = -1; for (let j = 0; j < G.length; j++) if (G[j].t <= t + 1e-6) k = j; return k; };
+  // 每段的小節(照演奏順序):{ t0, t1, notes:[{n,t}] }
+  const segBars = G.map(() => []);
+  let lastKey = null;
+  for (const ev of events) {
+    const k = segOf(ev.tWhole); if (k < 0) continue;
+    const ps = ev.notes.filter(n => !n.drum && n.freq && n.pvel != null);
+    const B = segBars[k];
+    if (!B.length || B[B.length - 1].m !== ev.mIdx || lastKey !== k) { const t0 = ev.tWhole - (ev.barPos > 0 ? ev.barPos : 0); B.push({ m: ev.mIdx, t0, t1: t0 + (ev.barLen > 0 ? ev.barLen : 1), notes: [] }); }
+    lastKey = k;
+    for (const n of ps) B[B.length - 1].notes.push({ n, t: ev.tWhole });
+  }
+  // 往下一段收的那幾拍(SECTION_JOIN 的 downBeats;過門不收時沒有)不算進小節大小,也不往上補(補了會跟段落銜接打架:
+  // 副歌最後一小節收到尾奏 82 → 48 一下子掉)
+  const mulOn = !!G.levelOk;
+  const joinT = G.map((g, i) => {
+    if (i + 1 >= G.length) return Infinity;
+    const tB = g.end, ev0 = events.find(e => e.tWhole >= tB - 1e-6) || events[events.length - 1];
+    const bt = ev0 && ev0.beatLen > 0 ? ev0.beatLen : 0.25;
+    const down = mulOn ? sectionMulVal(G, i + 1, tB, PIANO_SECTION_MUL) < sectionMulVal(G, i, tB - 1e-6, PIANO_SECTION_MUL) - 1e-3 : false;
+    if (!down || sectionFillRun(G, i, bt)) return Infinity;
+    return tB - Math.min(SECTION_JOIN.downBeats * bt, (tB - g.t) * SECTION_JOIN.downFrac);
+  });
+  for (let i = 0; i < G.length; i++) for (const b of segBars[i]) for (const x of b.notes) x.join = x.t >= joinT[i] - 1e-6 ? Math.min(1, (x.t - joinT[i]) / Math.max(1e-6, G[i].end - joinT[i])) : null;
+  const barLevel = b => { const ok = b.notes.filter(x => x.join == null), m = ok.filter(x => x.n.pmel); return mean((m.length >= 2 ? m : ok).map(x => x.n.pvel)); };
+  const barLvl = b => mean(b.notes.map(x => x.n._lvl || 0));
+  const ss = x => { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); };
+  for (const kind of Object.keys(X.kinds)) {
+    const occ = G.map((g, i) => i).filter(i => G[i].kind === kind && segBars[i].length);
+    for (let a = 1; a < occ.length; a++) for (let pass = 0; pass < 3; pass++) {   // 小節之間內插會讓小節平均差一點,補三次收斂
+      const i = occ[a], B = segBars[i];
+      // 前面同一種段落各小節的最大值(這次的力度已經補過,後面的跟補過的比)
+      // 對齊用「離段落開頭多遠」(小節中點),不用第幾小節:段落從弱起拍開始時(〈甲乙丙丁〉第一次副歌從前一小節最後一拍進來)小節序號會差一個
+      const ref = B.map(b => { let r = null; const off = (Math.max(b.t0, G[i].t) + Math.min(b.t1, G[i].end)) / 2 - G[i].t;
+        for (let q = 0; q < a; q++) { const g0 = G[occ[q]], tq = g0.t + off; if (tq >= g0.end - 1e-6) continue;
+          const b0 = segBars[occ[q]].find(x => x.t0 <= tq + 1e-6 && tq < x.t1 - 1e-6); if (!b0 || !b0.notes.length) continue; const v = barLevel(b0); if (v != null && (r == null || v > r.v)) r = { v, l: barLvl(b0) }; } return r; });
+      const f = B.map((b, j) => {
+        const v = barLevel(b), r = ref[j];
+        if (v == null || !r || !(v > 0) || r.v <= v + 0.5) return 1;
+        if (barLvl(b) < r.l - X.markDrop) return 1;   // 譜上寫了這次比較小聲
+        return Math.min(X.maxLift, r.v / v);
+      });
+      if (f.every(x => x <= 1 + 1e-6)) continue;
+      // 小節中點之間線性內插;開頭那一小節的前半照第一小節的倍率
+      const mids = B.map(b => (Math.max(b.t0, G[i].t) + Math.min(b.t1, G[i].end)) / 2);
+      const facAt = t => {
+        if (t <= mids[0]) return f[0];
+        for (let j = 0; j + 1 < B.length; j++) if (t <= mids[j + 1]) { const u = (t - mids[j]) / Math.max(1e-6, mids[j + 1] - mids[j]); return f[j] + (f[j + 1] - f[j]) * u; }
+        return f[f.length - 1];
+      };
+      for (const b of B) for (const x of b.notes) { const F = facAt(x.t), k = x.join == null ? 0 : ss(x.join); x.n.pvel = clampV(x.n.pvel * (F + (1 - F) * k)); }
+      // 前一段結尾漸強接上(前一段不是同一種段落時;每一輪都接,累積到開頭補的總量)
+      const lift = f[0] - 1, pi = i - 1;
+      if (lift > 1e-3 && pi >= 0 && G[pi].kind !== kind) {
+        const bl = B[0].t1 - B[0].t0, D = Math.min(SECTION_JOIN.upBars * bl, (G[pi].end - G[pi].t) * SECTION_JOIN.upFrac), tB = G[i].t;
+        if (D > 1e-6) for (const b of segBars[pi]) for (const x of b.notes) if (x.t >= tB - D - 1e-6) x.n.pvel = clampV(x.n.pvel * (1 + lift * ss((x.t - (tB - D)) / D)));
+      }
+    }
+  }
+}
 /* 往下一段漸強時,下一段開頭不低於前一段結尾(SECTION_RISE / popSectionJoin,2026-10 檢查;非古典、有段落記號):
    使用者要「段落情感要銜接」「漸強進副歌」。小節校正與高潮倍率照每小節的和聲張力/織度算,導歌最後一小節常是屬和弦(張力最高)、
    副歌第一小節是主和弦,〈甲乙丙丁〉第二次導歌 → 副歌旋律 94.5 → 82.2(掉 12),進副歌反而像收掉。
@@ -10047,6 +10161,26 @@ function pianoDynSync(){
   if (!events.length || pianoDynBpm == null || Math.abs(pianoDynBpm - bpm()) < 1e-9) return;
   if (classicalProbInfo().p >= 0.5) return;
   computePianoDynamics();
+  pianoTopUpLayers();
+}
+/* 改速度後重算的力度可能落在沒載入的力度層(2026-10 複查:〈甲乙丙丁〉改 0.5 倍速 2 個、40 BPM 測試譜改 2 倍速 6 個),
+   以前照最近的層彈(音量照新力度,音色差一層)。這裡背景補載:等目前的載入做完,再照同一套記憶體預算(pianoPlan)重排一次——
+   已經有的不重載、用不到的釋放;補好之前照舊用最近的層,補好後之後排程的音就用正確的層。預算不夠、計畫裡本來就省掉的層(pianoPlanSkip)不追。
+   離線合成(匯出/量響度)時不補(那時 audioCtx 是離線的那組;改速度時已經在背景補過,匯出按鈕會等補完) */
+let pianoPlanSkip = new Set();
+function pianoTopUpLayers(){
+  if (currentInstrument() !== "piano" || !pianoMan || pianoFallback || !audioCtx) return;
+  if (typeof OfflineAudioContext !== "undefined" && audioCtx instanceof OfflineAudioContext) return;
+  const missing = () => { let k = 0; for (const [key, e] of pianoComputeNeeds()) if (e.uses > 0 && pianoMan.samples[key] && !pianoBuf[key] && !pianoPlanSkip.has(key)) k++; return k; };
+  if (!missing()) return;
+  const ev0 = events;
+  Promise.resolve(pianoLoading).catch(() => {}).then(() => {
+    if (events !== ev0 || currentInstrument() !== "piano" || pianoFallback) return;
+    if (typeof OfflineAudioContext !== "undefined" && audioCtx instanceof OfflineAudioContext) return;
+    if (!missing()) return;
+    pianoLoadingFor = null;
+    loadPianoSamples({ quiet: true });
+  });
 }
 function pianoDynSyncLater(){ clearTimeout(pianoDynTimer); pianoDynTimer = setTimeout(pianoDynSync, PIANO_DYN_RESYNC_MS); }
 function computePianoDynamics(){
@@ -10360,6 +10494,7 @@ function computePianoDynamics(){
   popBeatProfile();         // 拍位置放在低音區平衡之後(平衡會動低音區的力度、連帶改變各拍位置的平均)
   popMelodyOnTop();         // 安全網:旋律不要比同時彈的伴奏小聲
   popSectionJoin();         // 非古典:往下一段漸強時,下一段開頭不低於前一段結尾(SECTION_RISE;放在各項校正之後,結果才不會被後面的步驟改掉)
+  popRepeatFloor();         // 非古典:後面的副歌不比前面的小聲(SECTION_REPEAT;放在 popSectionJoin 之後,跟它補過的副歌開頭比)
   if (pop) applyAccentRatios(true);   // 非古典的重音最後才加(見上面)
   pianoVelocityAsync();
   pianoWideChordRoll(multiStaff);
@@ -10461,8 +10596,9 @@ async function fetchPianoBuffer(file, lenSec, ch){
   return out;
 }
 let pianoLoadingFor = null;
-function loadPianoSamples(){
+function loadPianoSamples(opts){
   ensureAudio();
+  const quiet = !!(opts && opts.quiet);   // 改速度後背景補載(pianoTopUpLayers):不顯示載入進度
   if (pianoLoading && pianoLoadingFor === events) return pianoLoading;   // 同一份樂譜已經在載/載好了
   pianoLoadingFor = events;
   if (!pianoManPromise) pianoManPromise = (async () => {
@@ -10491,6 +10627,7 @@ function loadPianoSamples(){
     const auxBytes = auxList.reduce((t, a) => t + pianoMan.aux[a].frames / 48000 * audioCtx.sampleRate * 4 * (auxMono ? 1 : 2), 0);
     const plan = pianoPlan(need, auxBytes);
     const want = new Set(plan.map(p => p.key));
+    pianoPlanSkip = new Set([...need.values()].filter(p => p.uses > 0 && !want.has(p.key)).map(p => p.key));
     for (const k of Object.keys(pianoBuf)) if (!want.has(k)) delete pianoBuf[k];   // 換曲/移調後用不到的釋放掉
     // 先每個音各載一層(用最多次的那層),馬上可以播;再補其餘的層
     const seen = new Set(), first = [], rest = [];
@@ -10508,17 +10645,17 @@ function loadPianoSamples(){
     }, { aux: a }));
     const total = first.length + rest.length + auxJobs.length;
     let done = 0;
-    const tick = () => { done++; if (gen === pianoGen && done % 8 === 0) setStatus(T("statusLoadingPiano", { pct: Math.round(done / total * 100) })); };
+    const tick = () => { done++; if (!quiet && gen === pianoGen && done % 8 === 0) setStatus(T("statusLoadingPiano", { pct: Math.round(done / total * 100) })); };
     const job = p => async () => {
       try { const b = await fetchPianoBuffer(pianoFileFor(p.c, p.L) + ".flac", p.len, p.ch); if (gen === pianoGen) pianoBuf[p.key] = { buf: b, len: p.len, ch: p.ch, c: p.c, L: p.L }; } catch (e) {}
       tick();
     };
-    if (total) setStatus(T("statusLoadingPiano", { pct: 0 }));
+    if (total && !quiet) setStatus(T("statusLoadingPiano", { pct: 0 }));
     // 音樂廳 IR 跟第一批一起載(播放中才換殘響會斷一下),其餘放鍵聲/踏板聲跟剩下的層一起
     const early = auxJobs.filter(j => j.aux === "hall" || j.aux === "room"), otherAux = auxJobs.filter(j => !early.includes(j));
     await runLimited([...early.map(j => async () => { await j(); tick(); }), ...first.map(job)], SAMPLE_FETCH_CONCURRENCY);
     await runLimited([...otherAux.map(j => async () => { await j(); tick(); }), ...rest.map(job)], SAMPLE_FETCH_CONCURRENCY);
-    if (gen === pianoGen) setStatus(T("statusPianoReady", { n: Object.keys(pianoBuf).length }));
+    if (gen === pianoGen && !quiet) setStatus(T("statusPianoReady", { n: Object.keys(pianoBuf).length }));
   })();
   refreshExportReady();
   return pianoLoading;
