@@ -7150,10 +7150,10 @@ function popBreathFactors(){
   const src = events.map(ev => ev.srcT != null ? ev.srcT : ev.tWhole);
   const barLen = events.find(ev => ev.barLen > 0)?.barLen || 1, beat = events.find(ev => ev.beatLen > 0)?.beatLen || 0.25;
   const endT = Math.max(...src) + 1e-3;
-  const slowTo = (t0, t1, target) => {   // [t0, t1) 線性放慢到 target(用每個音到下一個音這段的中點算進度)
-    for (let i = 0; i < n; i++) if (src[i] >= t0 - eps && src[i] < t1 - eps) {
-      const nx = i + 1 < n && src[i + 1] > src[i] ? Math.min(src[i + 1], t1) : t1;
-      const p = ((src[i] + nx) / 2 - t0) / Math.max(eps, t1 - t0);
+  const slowTo = (t0, t1, target, X = src) => {   // [t0, t1) 線性放慢到 target(用每個音到下一個音這段的中點算進度);X = 用哪種位置(記譜/演奏)
+    for (let i = 0; i < n; i++) if (X[i] >= t0 - eps && X[i] < t1 - eps) {
+      const nx = i + 1 < n && X[i + 1] > X[i] ? Math.min(X[i + 1], t1) : t1;
+      const p = ((X[i] + nx) / 2 - t0) / Math.max(eps, t1 - t0);
       f[i] = Math.min(f[i], 1 + (target - 1) * Math.max(0, Math.min(1, p)));
     }
   };
@@ -7184,8 +7184,10 @@ function popBreathFactors(){
       if (arrives) { f[bi] = Math.min(f[bi], POP_BREATH.peak); if (bi > 0 && src[bi - 1] >= a - eps) f[bi - 1] = Math.min(f[bi - 1], POP_BREATH.peakPrev); }
     }
   }
-  // ④ 曲尾
-  slowTo(endT - POP_BREATH.endBars * barLen, endT, 1 - (1 - POP_BREATH.end) * tScale);
+  // ④ 曲尾:照演奏位置(2026-10 檢查:以前用記譜位置,D.C. al Fine / D.S. al Coda 的譜在樂譜最後兩小節〔演奏到一半、還要跳回去〕
+  // 漸慢到 0.85,真正結束的地方反而照拍子;一般反覆在樂譜最後結束,兩者相同)
+  const perf = events.map(ev => ev.tWhole), endP = Math.max(...perf) + 1e-3;
+  slowTo(endP - POP_BREATH.endBars * barLen, endP, 1 - (1 - POP_BREATH.end) * tScale, perf);
   return f;
 }
 /* 每個事件的速度倍率 → 等效全音符座標表(rubatoMap / tempoWordMap 共用) */
@@ -9029,7 +9031,8 @@ function popEndFade(hasMarks){
   let last = null; for (let k = events.length - 1; k >= 0 && !last; k--) if (events[k].notes.some(n => !n.drum && n.freq)) last = events[k];
   if (!last) return null;
   const bl = last.barLen > 0 ? last.barLen : 1, bt = last.beatLen > 0 ? last.beatLen : bl / 4;
-  let srcEnd = 0; for (const ev of events) if (ev.srcT != null) for (const n of ev.notes) srcEnd = Math.max(srcEnd, ev.srcT + (n.durWhole || 0));
+  // 結尾的記譜位置:只看演奏最後幾小節的事件(D.C. al Fine 等在樂譜中間結束時,樂譜最後的位置不是結尾)
+  let srcEnd = 0; for (const ev of events) if (ev.srcT != null && ev.tWhole >= last.tWhole - (END_SHAPE.maxBars + 1) * bl - 1e-6) for (const n of ev.notes) srcEnd = Math.max(srcEnd, ev.srcT + (n.durWhole || 0));
   let len = END_SHAPE.bars * bl, ritEnd = false;
   for (const r of scoreTempoSpans || []) if (r.kind === "rit" && r.end >= srcEnd - bl / 4) { ritEnd = true; if (srcEnd - r.start <= END_SHAPE.maxBars * bl + 1e-6) len = Math.max(len, srcEnd - r.start); }
   const t1 = last.tWhole, t0 = t1 - len;   // 到最後一個起音(最後的和弦)剛好到目標
