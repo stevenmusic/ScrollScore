@@ -48,8 +48,8 @@ await page.addInitScript(([taps, fixedSec]) => {
     return ctx;
   };
 }, [TAPS, +opt("sec", 0)]);
-// 環境變數:SPEAKER=1/0 強制手機喇叭補償開/關(window.SPEAKER_PROFILE_OVERRIDE);NOWK=1 模擬 iPhone 沒有 AudioWorklet
-if (process.env.SPEAKER) await page.addInitScript(v => { window.SPEAKER_PROFILE_OVERRIDE = (v === "1"); }, process.env.SPEAKER);
+// 環境變數:SPEAKER=1/0/ext 強制手機喇叭補償開/關/外接耳機等的低音補回(window.SPEAKER_PROFILE_OVERRIDE);NOWK=1 模擬 iPhone 沒有 AudioWorklet
+if (process.env.SPEAKER) await page.addInitScript(v => { window.SPEAKER_PROFILE_OVERRIDE = v === "ext" ? "external" : (v === "1"); }, process.env.SPEAKER);
 if (process.env.NOWK) await page.addInitScript(() => { window.FORCE_NO_WORKLET = true; });
 await page.goto(`http://127.0.0.1:${port}/index.html`);
 await page.waitForFunction(() => typeof loadScoreFile === "function");

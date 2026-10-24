@@ -1999,7 +1999,8 @@ const MASTER = {
   // 響度壓縮器維持原本的設定(試過慢起音壓縮,p→ff 被壓扁)。makeup 1.6 → 1.82:舊的限幅器(DynamicsCompressor)會自動
   // 補約 +1.1dB 到整個訊號,換成真峰值限幅器後補回來,整體響度跟以前一樣(實測 11 首差 ≤ 0.3 LU)
   // makeup 1.82 → 1.5(2026-10 母帶計畫 B,使用者要求):播放音量統一到 −14 LUFS(跟匯出影片、YouTube 一樣),典型鋼琴曲(〈甲乙丙丁〉)−12.5 → −14;只動鋼琴/吉他這條,鼓有自己的 DRUM_BUS.makeup
-  compThreshold: -18, compKnee: 8, compRatio: 3, compAttack: 0.008, compRelease: 0.18, makeup: 1.5,
+  // 2026-10 動態放寬(使用者要求,參考專業翻彈):threshold −18 → −12(只壓最大聲的段落,中等起伏不再被吃掉)、makeup 1.5 → 1.39(壓得少、自動補增益變小,〈甲乙丙丁〉維持約 −14 LUFS)
+  compThreshold: -12, compKnee: 8, compRatio: 3, compAttack: 0.008, compRelease: 0.18, makeup: 1.39,
   ceilingDb: -1.3,      // 限幅器上限(dBFS,4 倍超取樣量):實測 16 倍超取樣的真峰值最壞(寬頻雜訊突波)−1.0dBTP,一般 ≤ −1.1
   lookahead: 0.005,     // 預讀 5ms:峰值到之前就先把音量降好
   release: 0.09,        // 放開:單一尖峰很快回復(60ms 會在 40Hz 低音的一個週期內起伏,低音失真)
@@ -8062,18 +8063,29 @@ function ensureAudio(){
    偵測只靠原生外掛 AudioRoute(app/ios/App/App/AudioRoutePlugin.swift,AVAudioSession 目前路由的 portType),網頁用瀏覽器 API 猜不準,所以網頁版永遠不開。
    匯出影片永遠不套(影片要給所有裝置看;匯出開始/結束時 speakerCompUpdate(true) 立即切)。
    window.SPEAKER_PROFILE_OVERRIDE = true/false 可在電腦上強制測試(匯出時仍關)。參數依 tools/audiotest/translation_check.py 的手機模型量決定 */
-const SPEAKER_COMP = { f: 250, gainDb: -8, tau: 0.03, drumF: 250, drumGainDb: -12 };   // drum*:鼓匯流排自己一個低頻架(getDrumBus 最後),參數可跟鋼琴分開
-let speakerRoute = { builtInSpeaker: false, portType: "", portName: "" }, speakerRouteInit = false;
+/* extBassDb(使用者要求 2026-10):App 確定「不是內建喇叭」(耳機/藍牙/AirPlay/車用…,AudioRoute 回報過 builtInSpeaker false)時,同一個鋼琴低頻架改成 +extBassDb,
+   補回為了手機喇叭與 PIANO_MASTER 低段壓縮收掉的低音(參考的專業翻彈 60~125Hz 比 App 多 8~10dB)。網頁版(沒有外掛、不知道路由)與匯出影片照舊 0dB;鼓不套 */
+const SPEAKER_COMP = { f: 250, gainDb: -8, extBassDb: 5, tau: 0.03, drumF: 250, drumGainDb: -12 };   // drum*:鼓匯流排自己一個低頻架(getDrumBus 最後),參數可跟鋼琴分開
+let speakerRoute = { builtInSpeaker: false, portType: "", portName: "" }, speakerRouteInit = false, speakerRouteKnown = false;
 function speakerWanted(){
   if (exporting) return false;
   if (typeof window.SPEAKER_PROFILE_OVERRIDE === "boolean") return window.SPEAKER_PROFILE_OVERRIDE;
   return !!speakerRoute.builtInSpeaker;
 }
+// 鋼琴低頻架的增益:內建喇叭 gainDb、確定是外接(耳機等)extBassDb、其他(網頁版、匯出)0。SPEAKER_PROFILE_OVERRIDE = "external" 可在電腦上強制測外接
+function pianoShelfDb(){
+  if (exporting) return 0;
+  const o = window.SPEAKER_PROFILE_OVERRIDE;
+  if (o === "external") return SPEAKER_COMP.extBassDb;
+  if (speakerWanted()) return SPEAKER_COMP.gainDb;
+  if (typeof o === "boolean") return 0;
+  return speakerRouteKnown ? SPEAKER_COMP.extBassDb : 0;
+}
 function speakerCompUpdate(immediate){
   try {
     if (!audioCtx) return;
     const on = speakerWanted(), t = audioCtx.currentTime;
-    for (const [sh, g] of [[audioCtx.__spkShelf, on ? SPEAKER_COMP.gainDb : 0], [audioCtx.__spkShelfDrum, on ? SPEAKER_COMP.drumGainDb : 0], [audioCtx.__spkShelfDrumWet, on ? SPEAKER_COMP.drumGainDb : 0]]) {
+    for (const [sh, g] of [[audioCtx.__spkShelf, pianoShelfDb()], [audioCtx.__spkShelfDrum, on ? SPEAKER_COMP.drumGainDb : 0], [audioCtx.__spkShelfDrumWet, on ? SPEAKER_COMP.drumGainDb : 0]]) {
       if (!sh) continue;
       sh.gain.cancelScheduledValues(t);
       if (immediate) sh.gain.setValueAtTime(g, t); else sh.gain.setTargetAtTime(g, t, SPEAKER_COMP.tau);
@@ -8083,6 +8095,7 @@ function speakerCompUpdate(immediate){
 function setSpeakerRoute(r){
   if (!r || typeof r !== "object") return;
   speakerRoute = { builtInSpeaker: !!r.builtInSpeaker, portType: String(r.portType || ""), portName: String(r.portName || "") };
+  speakerRouteKnown = true;
   speakerCompUpdate(false);
 }
 function refreshSpeakerRoute(){
@@ -8272,7 +8285,7 @@ function initAudioGraph(){
     masterBus = audioCtx.createGain();
     // 手機喇叭補償(SPEAKER_COMP):只有內建喇叭才收低頻,其他情況增益 0dB(= 沒有效果);匯出時永遠 0
     const spkShelf = audioCtx.createBiquadFilter(); spkShelf.type = "lowshelf"; spkShelf.frequency.value = SPEAKER_COMP.f;
-    spkShelf.gain.value = speakerWanted() ? SPEAKER_COMP.gainDb : 0; audioCtx.__spkShelf = spkShelf;
+    spkShelf.gain.value = pianoShelfDb(); audioCtx.__spkShelf = spkShelf;
     const pBm = buildBassMono(audioCtx);   // 120Hz 以下收成單聲道(BASS_MONO)
     makeupGain.connect(spkShelf); spkShelf.connect(pBm.input); pBm.output.connect(masterBus);
     masterOut = audioCtx.createGain();
@@ -9452,7 +9465,13 @@ const POP_BEAT = Object.assign({ down: -2, back: 1.5, beat: 0, off: 0 }, window.
    (四分位 6.4~17.6)、同時彈的最高音比其他大 6.7、旋律每半音力度 0.47;App 以前 44.9、10.7、1.34(真人的 2~3 倍,
    是之前「感情不夠」把段落/旋律起伏加大後累積的)。bar 縮每小節平均離整首平均的距離、mel 縮同時彈的最高音與其他音的差、
    contour 縮旋律音離前後 8 個旋律音平均的距離。取真人較有情感那一端(四分位上緣附近),不是平均值 */
-const POP_CAL_DEFAULT = { bar: 0.33, mel: 0.65, contour: 0.3 };
+const POP_CAL_DEFAULT = { bar: 0.45, mel: 0.65, contour: 0.3 };   // bar 0.33 → 0.45(2026-10 動態放寬,使用者要求:參考的專業翻彈 LRA 7~15 LU;小節 p90−p10 13.5 → 約 17,真人四分位上緣)
+/* 高潮段落彈重一點(POP_CLIMAX,使用者要求 2026-10:「副歌/高潮力度彈重一點,讓大聲段用到較亮的錄音層」;非古典):
+   專業翻彈的大聲段 4~8kHz(對 1kHz)約 −17~−21dB,App〈甲乙丙丁〉−26:流行曲力度整體偏輕,副歌也停在中強的錄音層(柔、暗)。
+   能量 = 校正前每小節平均力度(前後小節 1:2:1 平滑;已含段落記號、織度估的段落大小聲、旋律走向,沒有段落記號的譜也有),
+   高於整首第 lo 百分位的小節依 (能量 − p_lo)/(p_hi − p_lo) 的 smoothstep 乘 1 + lift(伴奏與旋律同比例),倍率再前後小節平滑兩次(約兩小節漸進,不會一小節一個台階)。
+   前奏、主歌(能量低)完全不動 */
+const POP_CLIMAX = Object.assign({ lo: 60, hi: 92, lift: 0.24, qlo: 40, qbot: 5, drop: 0.10 }, window.POP_CLIMAX_OVERRIDE || {});
 /* 旋律每半音力度與旋律/其他差距照真人(第二輪,使用者 2026-10「要接近真人」;POP_EXPOSE):Pop1K7 慢歌真人「每個同時起音群的最高音(≥ C4,skyline)」
    的力度,離前後 8 個最高音平均的高低 vs 音高,每半音 0.47(四分位 0.31~0.62);App〈甲乙丙丁〉0.94。查出來:旋律音自己的起伏只有 0.26,
    多出來的是 skyline 裡混了 132/509 個「旋律休息時露在最上面的伴奏音」(多數是右手單音音型的內聲部,力度 61、音高比旋律低 8 半音),
@@ -9500,6 +9519,7 @@ function popDynamicsCalibrate(){
   for (const ev of events) for (const n of ev.notes) if (!n.drum && n.freq && n.pvel != null) notes.push({ n, ev });
   if (!notes.length) return;
   const clampV = v => Math.max(8, Math.min(124, v));
+  const climax = popClimaxPlan(notes);   // 校正前的小節能量 → 高潮倍率(見 POP_CLIMAX)
   if (c.bar != null && c.bar !== 1) {
     const sum = new Map(), cnt = new Map();
     for (const { n, ev } of notes) { sum.set(ev.mIdx, (sum.get(ev.mIdx) || 0) + n.pvel); cnt.set(ev.mIdx, (cnt.get(ev.mIdx) || 0) + 1); }
@@ -9521,7 +9541,26 @@ function popDynamicsCalibrate(){
       top.pvel = clampV(top.pvel + sh); for (const n of others) n.pvel = clampV(n.pvel - sh);
     }
   }
+  if (climax) for (const { n, ev } of notes) { const f = climax.get(ev.mIdx); if (f != null && f !== 1) n.pvel = clampV(n.pvel * f); }
   popExposeAccomp();
+}
+function popClimaxPlan(notes){
+  const X = POP_CLIMAX;
+  if (!X || !(X.lift > 0)) return null;
+  const sum = new Map(), cnt = new Map();
+  for (const { n, ev } of notes) { if (ev.mIdx == null) continue; sum.set(ev.mIdx, (sum.get(ev.mIdx) || 0) + n.pvel); cnt.set(ev.mIdx, (cnt.get(ev.mIdx) || 0) + 1); }
+  const bars = [...sum.keys()].sort((a, b) => a - b);
+  if (bars.length < 8) return null;
+  const bm = bars.map(b => sum.get(b) / cnt.get(b));
+  const sm1 = a => a.map((v, i) => (a[Math.max(0, i - 1)] + 2 * v + a[Math.min(a.length - 1, i + 1)]) / 4);
+  const e = sm1(bm), srt = e.slice().sort((a, b) => a - b);
+  const pct = q => srt[Math.min(srt.length - 1, Math.max(0, Math.round(q / 100 * (srt.length - 1))))];
+  const lo = pct(X.lo), hi = pct(X.hi), ql = pct(X.qlo), qb = pct(X.qbot);
+  if (!(hi > lo + 1)) return null;
+  const ss = x => { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); };
+  let f = e.map(v => 1 + X.lift * ss((v - lo) / (hi - lo)) - (ql > qb + 1 ? (X.drop || 0) * ss((ql - v) / (ql - qb)) : 0));
+  f = sm1(sm1(f));
+  return new Map(bars.map((b, i) => [b, f[i]]));
 }
 /* 露在最上面的伴奏音拉近旋律 + 旋律與其他的差距收到真人範圍(見 POP_EXPOSE) */
 function popExposeAccomp(){
