@@ -9130,8 +9130,42 @@ function perfSections(){
     if (!last || last.k !== k) { last = { k, kind: k >= 0 ? S[k].kind : null, t: ev.tWhole }; segs.push(last); }
   }
   segs.forEach((g, n) => { g.end = n + 1 < segs.length ? segs[n + 1].t : Math.max(totalWhole, g.t + 1e-6); });
+  sectionTexture(segs);
   perfSectionsCache = { events, S, segs };
   return segs;
+}
+/* 段落的織度(使用者反映 2026-10:〈甲乙丙丁〉「間奏太小聲了(音符比較密)應該強一點吧」):段落名稱只是先驗,織度才是實際的能量。
+   間奏/獨奏常是器樂取代人聲、跟副歌一樣密,以前只因為叫「間奏」就 −2×2 力度、×0.8,整段比主歌還輕(〈甲乙丙丁〉間奏是整首最密的一段:
+   每全音符 23.5 個音,主歌 11~16、副歌 20~22)。做法(看樂譜結構,所有有段落記號的譜):每小節三個織度特徵(音符密度、每個起音幾個音、
+   最高音高度,跟 pianoAutoMacro 同一組與權重)整首標準化後,段落平均 = 段落織度;再換成「主歌 = 0、副歌 = 1」的位置 g.tex
+   (主歌、副歌都要有,而且副歌比主歌密 SECTION_TEX.minGap 以上,不然不調整)。SECTION_TEX.kinds 裡的段落(前奏/間奏/獨奏/尾奏)
+   的段落力度與倍率依 smoothstep(g.tex) 從表上的值往副歌的值內插(最多 reach):織度不比主歌密 → 照表上的柔和(前奏稀疏照舊輕);
+   跟副歌一樣密 → 接近副歌。只往上不往下 */
+const SECTION_TEX = { kinds: { intro: 1, interlude: 1, solo: 1, outro: 1 }, reach: 0.9, minGap: 0.3, w: [0.45, 0.25, 0.45] };
+function sectionTexture(segs){
+  for (const g of segs) g.tex = null;
+  const bars = []; let cur = null, lastM = null, segI = 0;
+  for (const ev of events) {
+    while (segI + 1 < segs.length && segs[segI + 1].t <= ev.tWhole + 1e-6) segI++;
+    if (!cur || ev.mIdx !== lastM || cur.seg !== segI) { cur = { seg: segI, n: 0, on: 0, top: 0, len: ev.barLen > 0 ? ev.barLen : 1 }; bars.push(cur); }
+    lastM = ev.mIdx;
+    const ps = ev.notes.filter(n => !n.drum && n.freq);
+    if (!ps.length) continue;
+    cur.n += ps.length; cur.on++; cur.top += Math.max(...ps.map(n => freqToMidi(n.freq)));
+  }
+  const B = bars.filter(b => b.on > 0);
+  if (B.length < 4) return;
+  const feats = B.map(b => [b.n / b.len, b.n / b.on, b.top / b.on]);
+  const z = [0, 1, 2].map(j => { const col = feats.map(f => f[j]), m = col.reduce((a, x) => a + x, 0) / col.length;
+    const sd = Math.sqrt(col.reduce((a, x) => a + (x - m) * (x - m), 0) / col.length) || 1; return col.map(x => (x - m) / sd); });
+  const inten = B.map((b, i) => SECTION_TEX.w.reduce((a, w, j) => a + w * z[j][i], 0));
+  const segI2 = segs.map(() => []);
+  B.forEach((b, i) => segI2[b.seg].push(inten[i]));
+  const avg = a => a.length ? a.reduce((p, x) => p + x, 0) / a.length : null;
+  const kindMean = k => avg(segs.flatMap((g, i) => g.kind === k ? segI2[i] : []));
+  const lo = kindMean("verse"), hi = kindMean("chorus");
+  if (lo == null || hi == null || !(hi - lo >= SECTION_TEX.minGap)) return;
+  segs.forEach((g, i) => { const e = avg(segI2[i]); if (e != null) g.tex = (e - lo) / (hi - lo); });
 }
 function pianoSectionOffset(t, beatLen, table, barLen){
   const G = perfSections(), T = table || PIANO_SECTION, none = table ? 1 : 0;
@@ -9139,7 +9173,11 @@ function pianoSectionOffset(t, beatLen, table, barLen){
   let i = 0; for (let j = 0; j < G.length; j++) if (G[j].t <= t + 1e-6) i = j;
   if (G[i].t > t + 1e-6) return none;
   const val = (k, x) => {
-    const v = G[k].kind ? T[G[k].kind] : null;
+    let v = G[k].kind ? T[G[k].kind] : null;
+    // 前奏/間奏/獨奏/尾奏依織度往副歌的大小內插(SECTION_TEX)
+    if (v != null && !Array.isArray(v) && SECTION_TEX.kinds[G[k].kind] && G[k].tex != null && typeof T.chorus === "number" && T.chorus > v) {
+      const x = Math.max(0, Math.min(1, G[k].tex)); v += (T.chorus - v) * SECTION_TEX.reach * x * x * (3 - 2 * x);
+    }
     if (!Array.isArray(v)) return v != null ? v : none;
     const p = Math.max(0, Math.min(1, (x - G[k].t) / Math.max(1e-6, G[k].end - G[k].t)));
     return v[0] + (v[1] - v[0]) * p;
