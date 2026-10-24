@@ -9777,8 +9777,20 @@ function popDynamicsCalibrate(){
   for (const x of notes) { x.mk = (x.n._lvl || 0) - lvlMean; x.r = x.n.pvel - x.mk; }
   // ① 旋律音離前後 8 個旋律音平均的幅度 × contour(旋律起伏照真人)
   if (c.contour != null && c.contour !== 1) {
+    // 段落結尾往上走的過門(sectionFillRun)裡的音,前後 8 個旋律音的平均不被下一段往下拉(2026-10 複查:後面 8 個音落在安靜的主歌,
+    // 平均一路往下拉,往上走的音階反而越來越輕):取「跨段落」與「只取同一段」兩種平均較大的。其他音照舊跨段落取(段落交界比較平順)
     const mel = notes.filter(x => x.n.pmel), v0 = mel.map(x => x.r);
-    mel.forEach((x, i) => { let s2 = 0, k = 0; for (let j = Math.max(0, i - 8); j <= Math.min(mel.length - 1, i + 8); j++) { s2 += v0[j]; k++; } x.r = s2 / k + c.contour * (v0[i] - s2 / k); });
+    const SG = scoreSections.length ? perfSections() : null, fillFrom = [];
+    if (SG) SG.forEach((g, i) => {
+      const ev0 = events.find(e => e.tWhole >= g.end - 1e-6) || events[events.length - 1], bt = ev0 && ev0.beatLen > 0 ? ev0.beatLen : 0.25;
+      fillFrom.push(i + 1 < SG.length && sectionFillRun(SG, i, bt) ? g.end - Math.min(SECTION_JOIN.downBeats * bt, (g.end - g.t) * SECTION_JOIN.downFrac) : Infinity);
+    });
+    const segIdx = t => { if (!SG) return 0; let k = 0; for (let j = 0; j < SG.length; j++) if (SG[j].t <= t + 1e-6) k = j; return k; };
+    const sg = mel.map(x => segIdx(x.ev.tWhole));
+    mel.forEach((x, i) => { const own = SG && x.ev.tWhole >= fillFrom[sg[i]] - 1e-6; let s2 = 0, k = 0, s3 = 0, k3 = 0;
+      for (let j = Math.max(0, i - 8); j <= Math.min(mel.length - 1, i + 8); j++) { s2 += v0[j]; k++; if (sg[j] === sg[i]) { s3 += v0[j]; k3++; } }
+      const avg = own && k3 ? Math.max(s2 / k, s3 / k3) : s2 / k;   // 只擋「被下一段往下拉」,下一段比較大聲時照舊
+      x.r = avg + c.contour * (v0[i] - avg); });
   }
   // ② 小節大小聲:同一份能量(每小節 r 的平均,前後小節 1:2:1 平滑)同一個基準(整首平均 G),一次算出每小節的目標 =
   //    (G + bar × (能量 − G)) × 高潮倍率(能量)。以前先用校正前的能量算高潮、再把校正後的值乘上去,兩步互相拉扯
