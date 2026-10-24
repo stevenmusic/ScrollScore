@@ -6071,7 +6071,11 @@ function computeLeftHandHolds(chordSegs){
     } else if (chordSegs.length && sT >= chordSegs[0].start - eps) {
       const c = chordSegs.find(c => sT >= c.start - eps && sT < c.end - eps);
       B = c ? toPerf(c.end) : barEnd;
-    } else B = barEnd;
+    } else {
+      // 沒有和弦記號:到小節結束,小節中間換低音(自動踏板在那裡換踩,見 buildTimeline 的 popNoChordCap)也放開
+      const ap = !chordSegs.length ? autoPedalRanges.find(r => inRange(sT, r)) : null;
+      B = ap ? Math.min(barEnd, toPerf(ap.end)) : barEnd;
+    }
     let end = Math.min(B, a.t + LH_HOLD.maxWhole);
     const written = a.t + a.n.durWhole;
     if (end <= written + eps) continue;
