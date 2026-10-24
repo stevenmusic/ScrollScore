@@ -8073,7 +8073,7 @@ function speakerCompUpdate(immediate){
   try {
     if (!audioCtx) return;
     const on = speakerWanted(), t = audioCtx.currentTime;
-    for (const [sh, g] of [[audioCtx.__spkShelf, on ? SPEAKER_COMP.gainDb : 0], [audioCtx.__spkShelfDrum, on ? SPEAKER_COMP.drumGainDb : 0]]) {
+    for (const [sh, g] of [[audioCtx.__spkShelf, on ? SPEAKER_COMP.gainDb : 0], [audioCtx.__spkShelfDrum, on ? SPEAKER_COMP.drumGainDb : 0], [audioCtx.__spkShelfDrumWet, on ? SPEAKER_COMP.drumGainDb : 0]]) {
       if (!sh) continue;
       sh.gain.cancelScheduledValues(t);
       if (immediate) sh.gain.setValueAtTime(g, t); else sh.gain.setTargetAtTime(g, t, SPEAKER_COMP.tau);
@@ -12396,7 +12396,9 @@ const DRUM_MASTER = { on: true,
   clip: { driveDb: 0, kneeDb: -3, ceilDb: 0.7, range: 4 },
   // glue 之後的高頻架:glue 的偵測是峰值(DynamicsCompressor 沒有 sidechain 濾波),壓的主要是大鼓/小鼓,銅鈸幾乎不被壓,
   // 補回音量後 4kHz 以上相對整體多約 +2dB(搖滾/抒情/放克;金屬 +0.5)。這裡收回來,讓鼓組的音色比例跟原本混音一樣
-  tilt: { f: 5000, gainDb: -1.5 } };
+  tilt: { f: 5000, gainDb: -1.5 },
+  // 殘響回送繞過 glue 時的音量(dB,相對沒有母帶處理時);依「擊打後 0.15~0.3 秒的尾巴相對擊打峰值」回到加母帶之前的比例挑的
+  wetGainDb: -3 };
 function buildDrumClipCurve(C){
   const n = 16385, c = new Float32Array(n), R = C.range, Cl = Math.pow(10, C.ceilDb / 20), K = Cl * Math.pow(10, C.kneeDb / 20);
   for (let i = 0; i < n; i++) {
@@ -12410,7 +12412,11 @@ function buildDrumMaster(ctx){
   const G = Object.assign({}, DRUM_MASTER.glue, C.glue || {}), K = Object.assign({}, DRUM_MASTER.clip, C.clip || {});
   const input = ctx.createGain(); input.channelCount = 2; input.channelCountMode = "explicit"; input.channelInterpretation = "speakers";
   const output = ctx.createGain();
-  if (C.on === false) { input.connect(output); return { input, output }; }
+  // 殘響回送(plate + 鼓房)不經過 glue(2026-10,使用者反映「鼓的回音那麼多」):glue 壓的是擊打、補回音量時把擊打之間的殘響尾巴
+  // 一起抬高約 4dB(搖滾擊打後 0.15~0.3 秒 −19.7 → −16.0dB)。商業混音的慣例是只壓乾的鼓,殘響在壓縮器之後才加回去;
+  // 這裡照 glue 的預讀延遲 6ms 對齊、用 wetGainDb 讓殘響對乾聲的比例回到加母帶之前,再一起進削波器
+  const wetIn = ctx.createGain(); wetIn.channelCount = 2; wetIn.channelCountMode = "explicit"; wetIn.channelInterpretation = "speakers";
+  if (C.on === false) { input.connect(output); wetIn.connect(output); return { input, wetIn, output }; }
   const glue = ctx.createDynamicsCompressor();
   glue.threshold.value = G.threshold; glue.knee.value = G.knee; glue.ratio.value = G.ratio; glue.attack.value = G.attack; glue.release.value = G.release;
   const gg = ctx.createGain(); gg.gain.value = Math.pow(10, (G.gainDb - G.makeupDb + K.driveDb) / 20) / K.range;   // 曲線涵蓋 ±range,先縮進 [−1, 1]
@@ -12418,8 +12424,11 @@ function buildDrumMaster(ctx){
   const T = Object.assign({}, DRUM_MASTER.tilt, C.tilt || {});
   const tilt = ctx.createBiquadFilter(); tilt.type = "highshelf"; tilt.frequency.value = T.f; tilt.gain.value = T.gainDb;
   input.connect(glue); glue.connect(tilt); tilt.connect(gg); gg.connect(sh); sh.connect(output);
+  const wd = ctx.createDelay(0.05); wd.delayTime.value = Math.floor(0.006 * ctx.sampleRate) / ctx.sampleRate;
+  const wg = ctx.createGain(); wg.gain.value = Math.pow(10, ((C.wetGainDb != null ? C.wetGainDb : DRUM_MASTER.wetGainDb) + K.driveDb) / 20) / K.range;
+  wetIn.connect(wd); wd.connect(wg); wg.connect(sh);
   ctx.__drumClipIn = gg;   // 測試用:削波器的輸入(已縮 1/range)
-  return { input, output };
+  return { input, wetIn, output };
 }
 let drumRoomBuf = null, drumRoomConv = null, drumRoomWet = null, drumRoomIn = null;
 let drumBus = null, drumVerbIn = null, drumVerbWet = null;
@@ -12468,6 +12477,13 @@ function getDrumBus(){
   spk.gain.value = speakerWanted() ? SPEAKER_COMP.drumGainDb : 0; audioCtx.__spkShelfDrum = spk;
   const dm = buildDrumMaster(audioCtx);
   air.connect(spk); spk.connect(dm.input); dm.output.connect(masterBus || masterGain);
+  // 殘響回送另一條:同樣的 makeup、匯流排 EQ、手機喇叭補償,但不經過 glue(見 buildDrumMaster 的 wetIn)
+  const wetOut = audioCtx.createGain(); wetOut.gain.value = B.makeup;
+  const box2 = audioCtx.createBiquadFilter(); box2.type = "peaking"; box2.frequency.value = B.eqBoxFreq; box2.Q.value = 1.0; box2.gain.value = B.eqBoxGain;
+  const air2 = audioCtx.createBiquadFilter(); air2.type = "highshelf"; air2.frequency.value = 10000; air2.gain.value = B.eqAirGain;
+  const spk2 = audioCtx.createBiquadFilter(); spk2.type = "lowshelf"; spk2.frequency.value = SPEAKER_COMP.drumF;
+  spk2.gain.value = spk.gain.value; audioCtx.__spkShelfDrumWet = spk2;
+  wetOut.connect(box2); box2.connect(air2); air2.connect(spk2); spk2.connect(dm.wetIn);
   // 1) 乾聲
   input.connect(out);
   // 2) 平行壓縮
@@ -12484,13 +12500,13 @@ function getDrumBus(){
   const pre = audioCtx.createDelay(0.1); pre.delayTime.value = B.verbPreDelay;
   const conv = audioCtx.createConvolver(); conv.buffer = buildDrumPlateIR(B.verbSeconds, B.verbRT60);
   drumVerbWet = audioCtx.createGain(); drumVerbWet.gain.value = drumVerbWetTarget();
-  drumVerbIn.connect(hp); hp.connect(pre); pre.connect(conv); conv.connect(drumVerbWet); drumVerbWet.connect(out);
+  drumVerbIn.connect(hp); hp.connect(pre); pre.connect(conv); conv.connect(drumVerbWet); drumVerbWet.connect(wetOut);
   // 5) 鼓房:每一擊都送(drumRoomIn 的增益就是送出量),IR 載到才接上
   drumRoomIn = audioCtx.createGain(); drumRoomIn.gain.value = B.roomSend;
   const rhp = audioCtx.createBiquadFilter(); rhp.type = "highpass"; rhp.frequency.value = B.roomHighpass;
   drumRoomConv = audioCtx.createConvolver();
   drumRoomWet = audioCtx.createGain(); drumRoomWet.gain.value = drumRoomWetTarget();
-  drumRoomIn.connect(rhp); rhp.connect(drumRoomConv); drumRoomConv.connect(drumRoomWet); drumRoomWet.connect(out);
+  drumRoomIn.connect(rhp); rhp.connect(drumRoomConv); drumRoomConv.connect(drumRoomWet); drumRoomWet.connect(wetOut);
   drumUseRoom();
   drumBus = input;
   return drumBus;
