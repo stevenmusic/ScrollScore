@@ -30,6 +30,7 @@ page.on("console", m => { if (m.type() === "error" || m.type() === "warning" || 
 if (flags.has("--noearly")) await page.addInitScript(() => { window.FAST_EARLY_AUDIO_OFF = true; });
 if (flags.has("--rectest")) await page.addInitScript(() => { window.__rectest = true; });
 if (flags.has("--noworklet")) await page.addInitScript(() => { window.FORCE_NO_WORKLET = true; });
+if (process.env.DRUM_MASTER_OVERRIDE) await page.addInitScript(o => { window.DRUM_MASTER_OVERRIDE = JSON.parse(o); }, process.env.DRUM_MASTER_OVERRIDE);   // 測試用:鼓母帶參數覆寫(JSON)
 await page.goto(`http://127.0.0.1:${server.address().port}/index.html`);
 if (opt("inst")) await page.selectOption("#instrument", opt("inst"));
 await page.setInputFiles("#fileInput", path.resolve(score));

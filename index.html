@@ -8107,6 +8107,97 @@ function initSpeakerRoute(){
     document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshSpeakerRoute(); });
   } catch (e) {}
 }
+/* ── 原生節點做的「音訊速率控制訊號」(2026-10;iPhone/Safari 不能用 AudioWorklet,只能用 Gain/Delay/Biquad/WaveShaper)──
+   控制訊號(增益、壓縮量)都是單聲道、值在 [0, 1]。基本積木:
+   · |x|:WaveShaper 曲線 [1, 0, 1](線性內插 = 精確的絕對值,不用超取樣)
+   · max(a, b) = (a + b + |a − b|) / 2、min = (a + b − |a − b|) / 2(精確)
+   · 滑動最大值(視窗 M = 2^k 取樣):k 級「max(x, x 延遲 1、2、4…)」= 精確的視窗最大值(van Herk 那類的倍增法)
+   · 移動平均(長度 B = 2^k):k 級「(x + x 延遲 1、2、4…) / 2」= 精確的方框濾波
+   · 放開(釋放):D(t) = max(x(t), r·D(t − 128 取樣)):Web Audio 的迴圈裡一定要有 DelayNode、最少延遲一個 render quantum(128 取樣),
+     所以每 128 取樣衰減一次 r = exp(−128 / (取樣率 × τ)) → 指數放開(階梯,後面再用 128 的方框濾波接成平滑的折線)
+   整條鏈各一組(不是每個音一組),都是最簡單的節點,CPU 很小(見 CLAUDE.md「iPhone 備援限幅器」) */
+function nativeCtl(ctx){
+  const sr = ctx.sampleRate;
+  const mono = n => { n.channelCount = 1; n.channelCountMode = "explicit"; n.channelInterpretation = "speakers"; return n; };
+  const gain = (v, ...srcs) => { const g = mono(ctx.createGain()); g.gain.value = v; srcs.forEach(s => s.connect(g)); return g; };
+  const ABS = new Float32Array([1, 0, 1]);
+  const abs = src => { const w = mono(ctx.createWaveShaper()); w.curve = ABS; src.connect(w); return w; };
+  const delay = (src, n) => { const d = mono(ctx.createDelay(Math.max(0.05, n / sr + 0.01))); d.delayTime.value = n / sr; src.connect(d); return d; };
+  const absDiff = (a, b) => abs(gain(1, a, gain(-1, b)));
+  const max = (a, b) => gain(0.5, a, b, absDiff(a, b));
+  const maxHold = (src, M) => { let x = src; for (let k = 1; k < M; k <<= 1) x = max(x, delay(x, k)); return x; };
+  const box = (src, B) => { let x = src; for (let k = 1; k < B; k <<= 1) x = gain(0.5, x, delay(x, k)); return x; };
+  const relR = tau => Math.exp(-128 / (sr * Math.max(1e-3, tau)));
+  const release = (src, tau) => {
+    const fd = mono(ctx.createDelay(0.05)); fd.delayTime.value = 128 / sr;
+    const fr = gain(relR(tau), fd);
+    const out = max(src, fr); out.connect(fd);
+    return { out, setTau: t => { fr.gain.value = relR(t); } };
+  };
+  // 曲線:f 定義在 [lo, hi](輸入先縮放進 [−1, 1] 的那一段),n 點
+  const shaper = (src, n, f) => { const w = mono(ctx.createWaveShaper()); const c = new Float32Array(n); for (let i = 0; i < n; i++) c[i] = f(i / (n - 1) * 2 - 1); w.curve = c; src.connect(w); return w; };
+  return { sr, mono, gain, abs, delay, max, maxHold, box, release, shaper };
+}
+/* iPhone/Safari 播放用的預讀限幅器(2026-10,取代 DynamicsCompressor + 軟削波的舊備援;只有 workletAudioOk() 為 false 時用)。
+   做法跟 AudioWorklet 限幅器(MASTER_LIMITER_SRC)同一套:需要的壓縮量 d = 1 − min(1, 上限/峰值) → 滑動最大值(視窗 hold)
+   → 128 方框 → 指數放開 → 128 方框 → 增益 1 − d 乘在延遲 D 取樣後的音訊上。峰值 = max(|L|, |R|, 取樣中點的 4 點內插)(近似 2 倍超取樣的真峰值)。
+   推導:兩個 128 方框合起來 255 取樣,偵測延遲 δ = 2(中點內插要往後看 1 個取樣、統一延遲 2),視窗 M 要涵蓋 [t−D+δ];D ≥ 254 + δ、D ≤ M − 1 + δ → D = 256、M = 256。
+   最後一個很淡的軟削波(超過上限 +0.3dB 才彎)只當安全網。匯出時 setCeilingDb 改偵測的增益(= 上限降低)、setRelease 改放開 */
+const FB_LIMITER = { ceilingDb: -1.4, release: 0.1, hold: 256, D: 256, tp: false, clipKneeDb: -1.1, clipCeilDb: -0.8 };
+function buildNativeLimiter(ctx, opt){
+  const C = Object.assign({}, FB_LIMITER, opt || {});
+  const N = nativeCtl(ctx), S = 8;   // 偵測訊號縮 1/8(+18dBFS 以內不截斷)
+  const input = ctx.createGain(); input.channelCount = 2; input.channelCountMode = "explicit"; input.channelInterpretation = "speakers";
+  const split = ctx.createChannelSplitter(2); input.connect(split);
+  const detL = N.mono(ctx.createGain()), detR = N.mono(ctx.createGain()); detL.gain.value = detR.gain.value = 1 / S;
+  split.connect(detL, 0); split.connect(detR, 1);
+  // 取樣中點(x[n−2] 與 x[n−1] 之間)的 4 點 Lagrange 內插:(−x[n−3] + 9x[n−2] + 9x[n−1] − x[n]) / 16
+  const mid = x => N.gain(1, N.gain(-1 / 16, x), N.gain(9 / 16, N.delay(x, 1)), N.gain(9 / 16, N.delay(x, 2)), N.gain(-1 / 16, N.delay(x, 3)));
+  const pkS = N.delay(N.max(N.abs(detL), N.abs(detR)), 2);
+  const pk = C.tp === false ? pkS : N.max(pkS, N.max(N.abs(mid(detL)), N.abs(mid(detR))));
+  const ceil = Math.pow(10, C.ceilingDb / 20);
+  const need = N.shaper(pk, 16385, u => { const p = u * S; return p > ceil ? 1 - ceil / p : 0; });
+  const held = N.box(N.maxHold(need, C.hold), 128);
+  const rel = N.release(held, C.release);
+  const d = N.box(rel.out, 128);
+  const vca = ctx.createGain(); vca.gain.value = 1; N.gain(-1, d).connect(vca.gain);
+  const dl = ctx.createDelay(0.05); dl.delayTime.value = C.D / N.sr; input.connect(dl); dl.connect(vca);
+  // 安全網:clipKnee 以下完全線性,以上 tanh 壓向 clipCeil(4 倍超取樣)
+  const R = 2, Kn = Math.pow(10, C.clipKneeDb / 20), Cl = Math.pow(10, C.clipCeilDb / 20);
+  const cpre = ctx.createGain(), cpost = ctx.createGain(); cpre.gain.value = 1 / R;
+  const sh = ctx.createWaveShaper(); sh.oversample = C.clipOS || "4x";
+  const curve = new Float32Array(8193);
+  for (let i = 0; i < curve.length; i++) { const x = (i / (curve.length - 1) * 2 - 1) * R, a = Math.abs(x); curve[i] = a <= Kn ? x : Math.sign(x) * (Kn + (Cl - Kn) * Math.tanh((a - Kn) / (Cl - Kn))); }
+  sh.curve = curve;
+  vca.connect(cpre); cpre.connect(sh); sh.connect(cpost);
+  const setCeilingDb = db => {   // 上限改成 db(播放 C.ceilingDb 附近;匯出降低):偵測放大、安全網一起移
+    const k = Math.pow(10, (C.ceilingDb - db) / 20);
+    detL.gain.value = detR.gain.value = k / S; cpre.gain.value = k / R; cpost.gain.value = 1 / k;
+  };
+  return { input, output: cpost, setCeilingDb, setRelease: t => rel.setTau(t), opts: C };
+}
+/* 低頻收成單聲道(BASS_MONO,使用者要求 2026-10,商業母帶慣例:低音左右一樣,手機/單聲道喇叭不會抵消、黑膠/串流編碼不浪費、低頻聽起來集中):
+   M = (L+R)/2、S = (L−R)/2,只把 S 過二階 Butterworth 高通(120Hz),L' = M + HP(S)、R' = M − HP(S)。
+   M(= L+R)完全不變(只有浮點誤差),120Hz 以下的 S 每八度 −12dB(60Hz −12dB、30Hz −24dB),240Hz 以上 S 的大小 ≥ −0.3dB。
+   為什麼不是「L −= LR4低通(S)」:最小相位的低通在通帶有相位落後,1 − LR4 低通在 60Hz 反而把 S 放大 +2.5dB、120Hz +3.5dB(更寬);
+   1 − 低通 要等於乾淨的高通,低通就得是 (√2s+1)/(s²+√2s+1) → 直接用高通最簡單。高通在通帶會轉一點相位(1kHz 約 10°、4kHz 約 2°),
+   只影響左右之間的相位、不影響大小;單邊聲音(只在左聲道)漏到另一邊 1.2kHz 約 −17dB、4kHz −27dB(更高階的高通漏得更多,所以用二階)。
+   鋼琴/吉他匯流排與鼓匯流排最後各一組(線性處理,放在 masterBus 之前 = 限幅器、響度分析、匯出都經過);window.BASS_MONO_OVERRIDE 可覆寫({ on:false } 關掉) */
+const BASS_MONO = { on: true, f: 120 };
+function buildBassMono(ctx){
+  const C = Object.assign({}, BASS_MONO, window.BASS_MONO_OVERRIDE || {});
+  const input = ctx.createGain(); input.channelCount = 2; input.channelCountMode = "explicit"; input.channelInterpretation = "speakers";
+  if (C.on === false) return { input, output: input };
+  const N = nativeCtl(ctx);
+  const sp = ctx.createChannelSplitter(2); input.connect(sp);
+  const l = N.mono(ctx.createGain()), r = N.mono(ctx.createGain()), nr = N.mono(ctx.createGain());
+  sp.connect(l, 0); sp.connect(r, 1); sp.connect(nr, 1); nr.gain.value = -1;
+  const m = N.gain(0.5, l, r), sd = N.gain(0.5, l, nr);
+  const hp = N.mono(ctx.createBiquadFilter()); hp.type = "highpass"; hp.frequency.value = C.f; hp.Q.value = -3.0103; sd.connect(hp);   // Q 單位是 dB:Butterworth
+  const outL = N.gain(1, m, hp), outR = N.gain(1, m, N.gain(-1, hp));
+  const mg = ctx.createChannelMerger(2); outL.connect(mg, 0, 0); outR.connect(mg, 0, 1);
+  return { input, output: mg };
+}
 /* 鋼琴/吉他母帶處理的節點(見 PIANO_MASTER)。回傳 { input, output };window.PIANO_MASTER_OVERRIDE 可覆寫參數({ on:false } 關掉,測試用) */
 function buildPianoMaster(ctx){
   const C = Object.assign({}, PIANO_MASTER, window.PIANO_MASTER_OVERRIDE || {});
@@ -8132,11 +8223,17 @@ function buildPianoMaster(ctx){
   hiO.connect(dly); dly.connect(out);
   return { input, output: out };
 }
-let masterFbOut = null;
-// 匯出期間把限幅器上限降到 EXPORT_CEILING_DB(AudioWorklet 限幅器用 port 訊息;備援限幅器在後面乘 EXPORT_FB_TRIM_DB),結束改回播放的 MASTER.ceilingDb
+let masterFbOut = null, masterNativeLim = null;
+// 匯出期間把限幅器上限降到 EXPORT_CEILING_DB(AudioWorklet 限幅器用 port 訊息;原生備援限幅器 setCeilingDb 一樣降 1dB;舊備援在後面乘 EXPORT_FB_TRIM_DB),結束改回播放的 MASTER.ceilingDb
 function setExportCeiling(on){
   if (masterLimiterNode) masterLimiterNode.port.postMessage({ ceilingDb: on ? EXPORT_CEILING_DB : MASTER.ceilingDb });
-  if (masterFbOut) masterFbOut.gain.value = on ? Math.pow(10, EXPORT_FB_TRIM_DB / 20) : 1;
+  if (masterNativeLim) masterNativeLim.setCeilingDb(masterNativeLim.opts.ceilingDb + (on ? EXPORT_CEILING_DB - MASTER.ceilingDb : 0));
+  else if (masterFbOut) masterFbOut.gain.value = on ? Math.pow(10, EXPORT_FB_TRIM_DB / 20) : 1;
+}
+// 匯出含鼓的曲子時限幅器改快放開(AudioWorklet 用 port 訊息、原生備援改放開時間),匯出完改回
+function setLimiterRelease(fast){
+  if (masterLimiterNode) masterLimiterNode.port.postMessage(fast ? { release: fast } : { release: MASTER.release, releaseSlow: MASTER.releaseSlow });
+  if (masterNativeLim) masterNativeLim.setRelease(fast || masterNativeLim.opts.release);
 }
 function initAudioGraph(){
   {
@@ -8176,23 +8273,37 @@ function initAudioGraph(){
     // 手機喇叭補償(SPEAKER_COMP):只有內建喇叭才收低頻,其他情況增益 0dB(= 沒有效果);匯出時永遠 0
     const spkShelf = audioCtx.createBiquadFilter(); spkShelf.type = "lowshelf"; spkShelf.frequency.value = SPEAKER_COMP.f;
     spkShelf.gain.value = speakerWanted() ? SPEAKER_COMP.gainDb : 0; audioCtx.__spkShelf = spkShelf;
-    makeupGain.connect(spkShelf); spkShelf.connect(masterBus);
+    const pBm = buildBassMono(audioCtx);   // 120Hz 以下收成單聲道(BASS_MONO)
+    makeupGain.connect(spkShelf); spkShelf.connect(pBm.input); pBm.output.connect(masterBus);
     masterOut = audioCtx.createGain();
     // monitorOut:只給喇叭的音量(匯出影片時靜音,見 exportVideo;影片從 masterOut 取,不受影響)
     monitorOut = audioCtx.createGain();
     masterOut.connect(monitorOut); monitorOut.connect(audioCtx.destination);
-    /* 備援(不支援 AudioWorklet 的瀏覽器才用):快起音壓縮器 + 4 倍超取樣軟削波。
-       Web Audio 的 DynamicsCompressor 沒有預讀、又會自動補增益(約 +1.6dB),擋不住峰值,
-       所以後面還要一段軟削波:−3dBFS 以下線性,以上平滑壓向 −1.4dBFS(真峰值 ≤ −1dBTP),但會有一點失真 */
-    masterLimiter = audioCtx.createDynamicsCompressor();
-    masterLimiter.threshold.value = -3; masterLimiter.knee.value = 3; masterLimiter.ratio.value = 12;
-    masterLimiter.attack.value = 0.001; masterLimiter.release.value = 0.25;
-    const ceilPre = audioCtx.createGain(); ceilPre.gain.value = 1 / MASTER_CEIL_RANGE;
-    const ceilShaper = audioCtx.createWaveShaper(); ceilShaper.curve = buildCeilingCurve(); ceilShaper.oversample = "4x";
-    // 這個壓縮器會自動補約 +1.6dB,前面先扣掉,備援跟正式限幅器的音量才一樣
-    const fbTrim = audioCtx.createGain(); fbTrim.gain.value = Math.pow(10, -1.6 / 20);
-    masterFbOut = audioCtx.createGain();   // 匯出時 EXPORT_FB_TRIM_DB(上限跟著降),平常 1
-    masterBus.connect(fbTrim); fbTrim.connect(masterLimiter); masterLimiter.connect(ceilPre); ceilPre.connect(ceilShaper); ceilShaper.connect(masterFbOut); masterFbOut.connect(masterOut);
+    /* 備援(不用 AudioWorklet 時:iPhone/iPad/Mac Safari,見 workletAudioOk):原生節點做的預讀限幅器(buildNativeLimiter,2026-10)。
+       以前是快起音 DynamicsCompressor(沒有預讀、會自動補約 +1.6dB)+ 4 倍超取樣軟削波(−3dBFS 起彎),尖峰靠削波擋、會失真;
+       現在跟 AudioWorklet 限幅器同一套做法(預讀 5.3ms、滑動最小值 + 方框 + 指數放開),軟削波只當安全網。
+       window.FB_LIMITER_OVERRIDE = { legacy: true } 走舊的(A/B 測試用) */
+    const FBO = window.FB_LIMITER_OVERRIDE || {};
+    masterFbOut = audioCtx.createGain();   // 舊備援:匯出時 EXPORT_FB_TRIM_DB(上限跟著降),平常 1;新備援一律 1(上限在 buildNativeLimiter 裡改)
+    let fbIn;
+    // Chrome 等會載 AudioWorklet 的瀏覽器:載好前(通常不到 0.1 秒)先用舊的簡單備援,不建原生限幅器(省 CPU)
+    const wkSoon = !!(audioCtx.audioWorklet && typeof AudioWorkletNode !== "undefined" && workletAudioOk());
+    if (FBO.legacy || (wkSoon && !FBO.native)) {
+      masterLimiter = audioCtx.createDynamicsCompressor();
+      masterLimiter.threshold.value = -3; masterLimiter.knee.value = 3; masterLimiter.ratio.value = 12;
+      masterLimiter.attack.value = 0.001; masterLimiter.release.value = 0.25;
+      const ceilPre = audioCtx.createGain(); ceilPre.gain.value = 1 / MASTER_CEIL_RANGE;
+      const ceilShaper = audioCtx.createWaveShaper(); ceilShaper.curve = buildCeilingCurve(); ceilShaper.oversample = "4x";
+      // 這個壓縮器會自動補約 +1.6dB,前面先扣掉,備援跟正式限幅器的音量才一樣
+      fbIn = audioCtx.createGain(); fbIn.gain.value = Math.pow(10, -1.6 / 20);
+      fbIn.connect(masterLimiter); masterLimiter.connect(ceilPre); ceilPre.connect(ceilShaper); ceilShaper.connect(masterFbOut);
+      masterNativeLim = null;
+    } else {
+      masterNativeLim = masterLimiter = buildNativeLimiter(audioCtx, FBO);
+      fbIn = masterNativeLim.input; masterNativeLim.output.connect(masterFbOut);
+    }
+    const fbTrim = fbIn;
+    masterBus.connect(fbTrim); masterFbOut.connect(masterOut);
     /* 正式的母帶限幅器(AudioWorklet,見 MASTER_LIMITER_SRC):預讀 5ms、真峰值偵測、立體聲連動,
        峰值來之前就把音量平滑地降好,沒有失真;載好之後把備援換掉(通常在取樣載完之前就好了) */
     masterReady = (async () => {
@@ -12392,6 +12503,13 @@ const DRUM_MASTER = { on: true,
   // glue:−22dB / 4:1 / 起音 20ms / 釋放 0.1s;搖滾平常壓約 3.6dB(中位數)。makeupDb 8.75 = Chrome 自動補的(comp_makeup.mjs 實測),gainDb 8.25 = 扣掉之後真正補回的音量
   // 起音 10~15ms 響度可以再大 1~2 LU,但小鼓起音斜率少 3.3~3.8dB(打擊感)、金屬變大聲 1~2 LU;ratio 3 金屬多 0.3 LU;release 0.2 壓得較多、LRA 少 0.3
   glue: { threshold: -22, knee: 6, ratio: 4, attack: 0.02, release: 0.1, makeupDb: 8.75, gainDb: 8.25 },
+  // glueMode:"sc" = 原生節點的側鏈高通 glue(buildScGlue,預設,2026-10);"dc" = 舊版 DynamicsCompressor(上面的 glue 參數)。
+  // sc 參數依測試台(同一份鼓匯流排輸入)挑的:偵測高通 100Hz、−20dB / 4:1 / knee 6、起音 τ 3ms(臨界阻尼)+ 預讀 6ms、放開 τ 0.1s、補 8.5dB。
+  // 起音:20ms 那類慢起音配上側鏈高通,大鼓/小鼓的峰值都穿過去、全交給削波器(搖滾削掉的能量 −28 → −17dB,破音);舊版 DynamicsCompressor 的「attack 20ms」
+  // 實測擊打那一刻就已經壓了 3.7dB(它的起音比名字快),所以這裡 3ms 的實際反應跟舊版差不多。low:{…}(另外壓低頻段,見 buildScGlue)測過不採用:匯出到得了 −14,
+  // 但大鼓峰值被壓、擊打後尾巴相對變大(金屬 −9.7 → −6.9dB)、大鼓峰值因數少 0.4~1.4dB。shelfDb(偵測改低頻架)、hpf 60 抽吸沒有比較少、削波一樣
+  glueMode: "sc",
+  sc: { hpf: 100, hpOrder: 2, hold: 256, threshold: -20, knee: 6, ratio: 4, attack: 0.003, release: 0.1, look: 0.006, gainDb: 8.5 },
   // clip:−2.3dBFS 以下完全線性,以上 tanh 壓向 +0.7dBFS(後面限幅器再收 ≤ 2dB);knee −1.5/−4.5 差 ≤ 0.35 LU。增益依「搖滾削掉的能量比整體小 30dB」挑的
   clip: { driveDb: 0, kneeDb: -3, ceilDb: 0.7, range: 4 },
   // glue 之後的高頻架:glue 的偵測是峰值(DynamicsCompressor 沒有 sidechain 濾波),壓的主要是大鼓/小鼓,銅鈸幾乎不被壓,
@@ -12407,6 +12525,58 @@ function buildDrumClipCurve(C){
   }
   return c;
 }
+/* 鼓的 glue(側鏈高通版,2026-10,glueMode "sc"):DynamicsCompressor 沒有側鏈,偵測看的是整個訊號,大鼓的低頻(50~100Hz、能量最大)
+   每一下都把整組鼓壓下去再放開 → hi-hat/銅鈸跟著大鼓一抽一抽(抽吸)。商業鼓匯流排壓縮器的慣例是偵測先過高通(SSL 匯流排壓縮器的
+   sidechain HPF),讓大鼓低頻不觸發。這裡用原生節點自己做(nativeCtl):偵測 = 高通(二階 Butterworth)→ max(|L|, |R|)
+   → 滑動最大值(hold,= 峰值偵測,至少半個 100Hz 週期)→ 靜態曲線(threshold/ratio/knee,dB;knee 從 threshold 往上,跟 Chrome 一樣)
+   → 起音:臨界阻尼二階低通(τ attack)→ 放開:指數(τ release,max 迴圈)→ 128 方框 → dB 換成增益 → 乘在延遲 look 秒的主訊號上。
+   壓縮量在 dB 做平滑(跟一般壓縮器一樣,起音/放開速度跟壓多少無關)。主訊號延遲固定 6ms(跟殘響回送對齊、跟舊版一樣) */
+function buildScGlue(ctx, input, Q){
+  const N = nativeCtl(ctx), S = 8, RMAX = 40;
+  // 低頻段(< lowF)自己的峰值控制(Q.low):側鏈高通讓大鼓不觸發 glue,大鼓低頻的身體就沒人管、峰值直接衝進削波器/限幅器。
+  // 所以低頻段另外一個 DynamicsCompressor(只看、只壓低頻段:壓的是大鼓自己的低頻,hi-hat/銅鈸不會跟著一抽一抽)。
+  // LR4 分頻(低 + 高 = 全通),高頻段延遲 6ms 對齊壓縮器內建的預讀
+  let main = null;
+  if (Q.low) {
+    const bq = (t, f, from) => { const n = ctx.createBiquadFilter(); n.type = t; n.frequency.value = f; n.Q.value = -3.0103; from.connect(n); return n; };
+    const lo = bq("lowpass", Q.lowF, bq("lowpass", Q.lowF, input)), hi = bq("highpass", Q.lowF, bq("highpass", Q.lowF, input));
+    const L = Q.low, c = ctx.createDynamicsCompressor();
+    c.threshold.value = L.threshold; c.knee.value = L.knee; c.ratio.value = L.ratio; c.attack.value = L.attack; c.release.value = L.release;
+    const mk = ctx.createGain(); mk.gain.value = Math.pow(10, -L.makeupDb / 20);   // 扣掉自動補的增益
+    main = ctx.createGain(); lo.connect(c); c.connect(mk); mk.connect(main);
+    const hd = ctx.createDelay(0.05); hd.delayTime.value = Math.floor(0.006 * ctx.sampleRate) / ctx.sampleRate; hi.connect(hd); hd.connect(main);
+  }
+  const hp1 = ctx.createBiquadFilter(); hp1.frequency.value = Q.hpf;
+  if (Q.shelfDb != null) { hp1.type = "lowshelf"; hp1.gain.value = Q.shelfDb; } else { hp1.type = "highpass"; hp1.Q.value = -3.0103; }
+  input.connect(hp1); let det = hp1;
+  if (Q.hpOrder === 4) { const hp2 = ctx.createBiquadFilter(); hp2.type = "highpass"; hp2.frequency.value = Q.hpf; hp2.Q.value = -3.0103; hp1.connect(hp2); det = hp2; }
+  const sp = ctx.createChannelSplitter(2); det.connect(sp);
+  const dl = N.mono(ctx.createGain()), dr = N.mono(ctx.createGain()); dl.gain.value = dr.gain.value = 1 / S;
+  sp.connect(dl, 0); sp.connect(dr, 1);
+  let pk = N.max(N.abs(dl), N.abs(dr));
+  if (Q.hold > 1) pk = N.maxHold(pk, Q.hold);
+  const T = Q.threshold, K = Math.max(1e-3, Q.knee), sl = 1 - 1 / Q.ratio;
+  const red = N.shaper(pk, 32769, u => {
+    if (u <= 0) return 0;
+    const L = 20 * Math.log10(u * S); let r = 0;
+    if (L > T + K) r = sl * (L - T - K / 2); else if (L > T) r = sl * (L - T) * (L - T) / (2 * K);
+    return Math.min(1, r / RMAX);
+  });
+  const atk = N.mono(ctx.createBiquadFilter()); atk.type = "lowpass"; atk.frequency.value = 1 / (2 * Math.PI * Q.attack); atk.Q.value = -6.0206;   // 線性 Q 0.5 = 臨界阻尼(不過衝)
+  red.connect(atk);
+  const rel = N.release(atk, Q.release);
+  const sm = N.box(rel.out, 128);
+  const g = N.shaper(sm, 4097, x => x <= 0 ? 1 : Math.pow(10, -x * RMAX / 20));
+  const vca = ctx.createGain(); vca.gain.value = 0; g.connect(vca.gain);
+  const md = ctx.createDelay(0.05); md.delayTime.value = Math.floor(0.006 * ctx.sampleRate) / ctx.sampleRate;
+  if (Q.look < 0.006) {   // 偵測也延遲(預讀變短):look = 0 時壓縮器看不到未來,擊打瞬間完全通過
+    const dd = ctx.createDelay(0.05); dd.delayTime.value = Math.floor((0.006 - Q.look) * ctx.sampleRate) / ctx.sampleRate;
+    input.disconnect(hp1); input.connect(dd); dd.connect(hp1);
+  }
+  if (main) main.connect(vca); else { input.connect(md); md.connect(vca); }
+  ctx.__drumGlueGain = g;   // 測試用:glue 的增益(單聲道)
+  return vca;
+}
 function buildDrumMaster(ctx){
   const C = Object.assign({}, DRUM_MASTER, window.DRUM_MASTER_OVERRIDE || {});
   const G = Object.assign({}, DRUM_MASTER.glue, C.glue || {}), K = Object.assign({}, DRUM_MASTER.clip, C.clip || {});
@@ -12417,13 +12587,22 @@ function buildDrumMaster(ctx){
   // 這裡照 glue 的預讀延遲 6ms 對齊、用 wetGainDb 讓殘響對乾聲的比例回到加母帶之前,再一起進削波器
   const wetIn = ctx.createGain(); wetIn.channelCount = 2; wetIn.channelCountMode = "explicit"; wetIn.channelInterpretation = "speakers";
   if (C.on === false) { input.connect(output); wetIn.connect(output); return { input, wetIn, output }; }
-  const glue = ctx.createDynamicsCompressor();
-  glue.threshold.value = G.threshold; glue.knee.value = G.knee; glue.ratio.value = G.ratio; glue.attack.value = G.attack; glue.release.value = G.release;
-  const gg = ctx.createGain(); gg.gain.value = Math.pow(10, (G.gainDb - G.makeupDb + K.driveDb) / 20) / K.range;   // 曲線涵蓋 ±range,先縮進 [−1, 1]
+  const mode = C.glueMode || DRUM_MASTER.glueMode;
+  let glue, glueGainDb;
+  if (mode === "dc") {   // 舊版:DynamicsCompressor(偵測沒有濾波,大鼓低頻也會觸發)
+    glue = ctx.createDynamicsCompressor();
+    glue.threshold.value = G.threshold; glue.knee.value = G.knee; glue.ratio.value = G.ratio; glue.attack.value = G.attack; glue.release.value = G.release;
+    input.connect(glue); glueGainDb = G.gainDb - G.makeupDb;
+  } else {
+    const Q = Object.assign({}, DRUM_MASTER.sc, C.sc || {});
+    glue = buildScGlue(ctx, input, Q); glueGainDb = Q.gainDb;
+  }
+  const gg = ctx.createGain(); gg.gain.value = Math.pow(10, (glueGainDb + K.driveDb) / 20) / K.range;   // 曲線涵蓋 ±range,先縮進 [−1, 1]
   const sh = ctx.createWaveShaper(); sh.curve = buildDrumClipCurve(K); sh.oversample = "4x";
   const T = Object.assign({}, DRUM_MASTER.tilt, C.tilt || {});
   const tilt = ctx.createBiquadFilter(); tilt.type = "highshelf"; tilt.frequency.value = T.f; tilt.gain.value = T.gainDb;
-  input.connect(glue); glue.connect(tilt); tilt.connect(gg); gg.connect(sh); sh.connect(output);
+  glue.connect(tilt); tilt.connect(gg); gg.connect(sh); sh.connect(output);
+  ctx.__drumMasterIn = input; ctx.__drumMasterWet = wetIn;   // 測試用
   const wd = ctx.createDelay(0.05); wd.delayTime.value = Math.floor(0.006 * ctx.sampleRate) / ctx.sampleRate;
   const wg = ctx.createGain(); wg.gain.value = Math.pow(10, ((C.wetGainDb != null ? C.wetGainDb : DRUM_MASTER.wetGainDb) + K.driveDb) / 20) / K.range;
   wetIn.connect(wd); wd.connect(wg); wg.connect(sh);
@@ -12476,7 +12655,8 @@ function getDrumBus(){
   const spk = audioCtx.createBiquadFilter(); spk.type = "lowshelf"; spk.frequency.value = SPEAKER_COMP.drumF;
   spk.gain.value = speakerWanted() ? SPEAKER_COMP.drumGainDb : 0; audioCtx.__spkShelfDrum = spk;
   const dm = buildDrumMaster(audioCtx);
-  air.connect(spk); spk.connect(dm.input); dm.output.connect(masterBus || masterGain);
+  const dBm = buildBassMono(audioCtx);   // 120Hz 以下收成單聲道(BASS_MONO)
+  air.connect(spk); spk.connect(dm.input); dm.output.connect(dBm.input); dBm.output.connect(masterBus || masterGain);
   // 殘響回送另一條:同樣的 makeup、匯流排 EQ、手機喇叭補償,但不經過 glue(見 buildDrumMaster 的 wetIn)
   const wetOut = audioCtx.createGain(); wetOut.gain.value = B.makeup;
   const box2 = audioCtx.createBiquadFilter(); box2.type = "peaking"; box2.frequency.value = B.eqBoxFreq; box2.Q.value = 1.0; box2.gain.value = B.eqBoxGain;
@@ -14304,7 +14484,7 @@ function solveExportGain(E, P, block, releaseSec){
 }
 function exportHasDrums(){ return events.some(ev => ev.notes.some(n => n.drum)); }
 // 離線算聲音時要暫時換掉的全域狀態(audioCtx 與所有快取的匯流排),算完還原
-const EXPORT_AUDIO_KEEP = ["audioCtx", "masterGain", "masterLimiter", "masterOut", "monitorOut", "masterBus", "masterLimiterNode", "masterFbOut", "masterReady", "reverbBus", "reverbConvolver", "reverbWet", "reverbPreDelay",
+const EXPORT_AUDIO_KEEP = ["audioCtx", "masterGain", "masterLimiter", "masterOut", "monitorOut", "masterBus", "masterLimiterNode", "masterFbOut", "masterNativeLim", "masterReady", "reverbBus", "reverbConvolver", "reverbWet", "reverbPreDelay",
     "pianoRoomBus", "pianoBusIn", "pianoBusCtx", "pianoVerbIn", "pianoVerbWet", "pianoVerbCtx", "pianoVerbConv", "pianoVerbPre", "pianoVerbHp", "pianoVerbHall", "pianoRoomConv", "pianoRoomWet", "pianoVerbPop", "pianoResIn", "pianoResGate", "pianoResCtx", "gtrVerbIn", "gtrVerbWet", "gtrVerbCtx", "drumBus", "drumVerbIn", "drumVerbWet", "drumRoomConv", "drumRoomWet", "drumRoomIn",
     "scheduled", "startCtxTime", "ringingOpenHat", "ringingCymbals", "noteSched", "pianoPedalQueue", "pianoVoices", "pianoLastByKey", "pianoRRFlip", "gtrRR"];
 /* 匯出中途按「取消」:各階段(準備、試編、離線合成、限幅器)都要停得下來,不能等整段算完(審查發現:以前要等到聲音全部算完才看取消) */
@@ -15726,7 +15906,7 @@ async function exportVideo(cfg){
           $("exportFill").style.width = pct + "%";
         });
         masterBus.gain.value = g || 1;
-        if (g && exportHasDrums() && masterLimiterNode) masterLimiterNode.port.postMessage({ release: EXPORT_DRUM_RELEASE });
+        if (g && exportHasDrums()) setLimiterRelease(EXPORT_DRUM_RELEASE);
         setExportCeiling(true);
       }
       if (exportCancelled) throw new Error("cancelled");
@@ -15880,7 +16060,7 @@ async function exportVideo(cfg){
   if (aDest) { try { masterOut.disconnect(aDest); } catch(e){} }
   if (monitorOut) { monitorOut.gain.cancelScheduledValues(0); monitorOut.gain.value = 1; }
   if (masterBus) masterBus.gain.value = 1;   // 響度標準化只用在匯出,App 裡播放恢復原本音量
-  if (masterLimiterNode) masterLimiterNode.port.postMessage({ release: MASTER.release, releaseSlow: MASTER.releaseSlow });
+  setLimiterRelease(0);
   setExportCeiling(false);
   stopAudioOnly();
   releaseWakeLock();
