@@ -2058,9 +2058,12 @@ class SSMasterLimiter extends AudioWorkletProcessor {
     this.grMax = 0; this.grSamples = 0; this.total = 0;
     this.port.onmessage = e => {
       if (e.data === "stats") this.port.postMessage({ grMaxDb: -20 * Math.log10(Math.max(1e-9, 1 - this.grMax)), grPct: 100 * this.grSamples / Math.max(1, this.total) });
-      else if (e.data && e.data.release) {   // 匯出含鼓的曲子時改快放開(只削尖峰),匯出完再改回來
-        this.relFast = Math.exp(-1 / (sampleRate * e.data.release));
-        this.relSlow = Math.exp(-1 / (sampleRate * (e.data.releaseSlow || e.data.release)));
+      else if (e.data && typeof e.data === "object") {
+        if (e.data.release) {   // 匯出含鼓的曲子時改快放開(只削尖峰),匯出完再改回來
+          this.relFast = Math.exp(-1 / (sampleRate * e.data.release));
+          this.relSlow = Math.exp(-1 / (sampleRate * (e.data.releaseSlow || e.data.release)));
+        }
+        if (e.data.ceilingDb != null) this.ceil = Math.pow(10, e.data.ceilingDb / 20);   // 匯出時上限改 EXPORT_CEILING_DB(有損編碼的餘裕),匯出完改回來
       }
     };
   }
@@ -8129,6 +8132,12 @@ function buildPianoMaster(ctx){
   hiO.connect(dly); dly.connect(out);
   return { input, output: out };
 }
+let masterFbOut = null;
+// 匯出期間把限幅器上限降到 EXPORT_CEILING_DB(AudioWorklet 限幅器用 port 訊息;備援限幅器在後面乘 EXPORT_FB_TRIM_DB),結束改回播放的 MASTER.ceilingDb
+function setExportCeiling(on){
+  if (masterLimiterNode) masterLimiterNode.port.postMessage({ ceilingDb: on ? EXPORT_CEILING_DB : MASTER.ceilingDb });
+  if (masterFbOut) masterFbOut.gain.value = on ? Math.pow(10, EXPORT_FB_TRIM_DB / 20) : 1;
+}
 function initAudioGraph(){
   {
     masterGain = audioCtx.createGain();
@@ -8182,7 +8191,8 @@ function initAudioGraph(){
     const ceilShaper = audioCtx.createWaveShaper(); ceilShaper.curve = buildCeilingCurve(); ceilShaper.oversample = "4x";
     // 這個壓縮器會自動補約 +1.6dB,前面先扣掉,備援跟正式限幅器的音量才一樣
     const fbTrim = audioCtx.createGain(); fbTrim.gain.value = Math.pow(10, -1.6 / 20);
-    masterBus.connect(fbTrim); fbTrim.connect(masterLimiter); masterLimiter.connect(ceilPre); ceilPre.connect(ceilShaper); ceilShaper.connect(masterOut);
+    masterFbOut = audioCtx.createGain();   // 匯出時 EXPORT_FB_TRIM_DB(上限跟著降),平常 1
+    masterBus.connect(fbTrim); fbTrim.connect(masterLimiter); masterLimiter.connect(ceilPre); ceilPre.connect(ceilShaper); ceilShaper.connect(masterFbOut); masterFbOut.connect(masterOut);
     /* 正式的母帶限幅器(AudioWorklet,見 MASTER_LIMITER_SRC):預讀 5ms、真峰值偵測、立體聲連動,
        峰值來之前就把音量平滑地降好,沒有失真;載好之後把備援換掉(通常在取樣載完之前就好了) */
     masterReady = (async () => {
@@ -12357,7 +12367,7 @@ function pickDrumLayer(name, s){
       8.5×6.5×3.6m 錄音室、RT60 約 0.55 秒、早期反射與各頻率衰減是物理算的),每一擊都同樣送進去(房間麥克風
       收得到整組鼓),跟 plate 並聯:鼓房給「鼓在房間裡」的真實感,plate 保留延音與亮度。殘響滑桿一起控制
    plate 的低頻左右相關性修正成約 0.6(以前左右是各自獨立的亂數,低頻會飄、有相位感;真實殘響低頻左右幾乎一樣)
-   整條路徑繞過主輸出的響度壓縮器(那是給鋼琴的),只有主限幅器當安全網。
+   整條路徑繞過主輸出的響度壓縮器(那是給鋼琴的),後面接鼓自己的母帶處理(DRUM_MASTER:glue + 軟削波),主限幅器只當安全網。
    參數由自動量測挑出來:小鼓餘韻長度、殘響/直接音比、立體聲寬度、力度傳遞、響度與峰值 */
 const DRUM_BUS = {
   makeup: 0.85,   // 2026-10 使用者同意的鼓凍結例外:0.70 → 0.85(+1.7dB,播放響度往 −14 靠,但最大聲段落被限幅器壓掉 ≤ 3dB、LRA 掉 ≤ 1 LU 為上限,見 CLAUDE.md「鼓音量」)。以前 0.62 → 0.70:補回舊限幅器自動加的 +1.1dB。試過再大 3dB:響度只多 1.5~2dB、LRA 少 1.5LU(力度被限幅器吃掉),不划算
@@ -12366,6 +12376,51 @@ const DRUM_BUS = {
   eqBoxFreq: 350, eqBoxGain: -1.5, eqAirGain: 1.5,
   roomSend: 0.9, roomWet: 1.0, roomHighpass: 70   // roomSend 0.9:鼓房比乾聲小約 12dB(小鼓)~14dB(大鼓、hi-hat),真實錄音房間麥克風常見 −6~−12dB;0.35 時 −20dB 聽不出來
 };
+/* 鼓的母帶處理(DRUM_MASTER / buildDrumMaster,使用者決定 2026-10:「照商業鼓的做法」;鼓凍結的例外,只動鼓匯流排之後這一段,
+   取樣、力度、人性化、殘響、鼓房都不動)。鼓匯流排(乾聲 + 平行壓縮 + plate + 鼓房 + EQ + 手機喇叭補償)→
+   ① 黏合壓縮 glue(DynamicsCompressor,慢起音讓鼓棒打下去的瞬間通過、自動感的釋放,平常壓 2~4dB,把整組鼓黏在一起、段落大小聲收近)
+   → 高頻架 tilt(把 glue 讓銅鈸相對變大的部分收回來)→ 扣掉壓縮器自動補的增益(makeupDb,Chrome 離線 100Hz 小訊號實測;改參數要重測)+ 補回音量 gainDb
+   → ② 軟削波 clipper(WaveShaper 4 倍超取樣;knee 以下完全線性,以上 tanh 平滑壓向 ceil):只削大鼓/小鼓最尖的 1~3dB,
+   比限幅器保留打擊感(限幅器會把整段音量拉下來、會抽吸)→ masterBus → ③ 共用的母帶限幅器只當安全網。
+   平行壓縮(快起音 3ms、ratio 8、混 0.35)負責「鼓的身體」,glue 是慢起音、低 ratio 的整體壓縮,兩者做的事不一樣、不重複。
+   只用原生節點(iPhone 不能用 AudioWorklet)。手機喇叭補償(鼓 250Hz −12dB)接在這段前面:手機上低頻少了,glue 與削波器就不用處理那些喇叭發不出的低音。
+   DynamicsCompressor 內建 6ms 預讀延遲,鼓整條路徑一起延遲 6ms(鋼琴的母帶鏈也有,反而比較對齊)。
+   結果(播放,改前 → 改後 LUFS):搖滾 −18.1 → −15.9、放克 −18.0 → −15.8、抒情 −22.2 → −19.8、爵士 −26.2 → −20.0、金屬 −12.7 → −12.4;
+   限幅器每一擊壓掉的量 p95 5.5 → 1.8dB;削掉的能量比整體小 30~40dB。到不了 −14 的原因見 CLAUDE.md「鼓的母帶處理」
+   window.DRUM_MASTER_OVERRIDE 可覆寫({ on:false } 關掉做 A/B) */
+const DRUM_MASTER = { on: true,
+  // glue:−22dB / 4:1 / 起音 20ms / 釋放 0.1s;搖滾平常壓約 3.6dB(中位數)。makeupDb 8.75 = Chrome 自動補的(comp_makeup.mjs 實測),gainDb 8.25 = 扣掉之後真正補回的音量
+  // 起音 10~15ms 響度可以再大 1~2 LU,但小鼓起音斜率少 3.3~3.8dB(打擊感)、金屬變大聲 1~2 LU;ratio 3 金屬多 0.3 LU;release 0.2 壓得較多、LRA 少 0.3
+  glue: { threshold: -22, knee: 6, ratio: 4, attack: 0.02, release: 0.1, makeupDb: 8.75, gainDb: 8.25 },
+  // clip:−2.3dBFS 以下完全線性,以上 tanh 壓向 +0.7dBFS(後面限幅器再收 ≤ 2dB);knee −1.5/−4.5 差 ≤ 0.35 LU。增益依「搖滾削掉的能量比整體小 30dB」挑的
+  clip: { driveDb: 0, kneeDb: -3, ceilDb: 0.7, range: 4 },
+  // glue 之後的高頻架:glue 的偵測是峰值(DynamicsCompressor 沒有 sidechain 濾波),壓的主要是大鼓/小鼓,銅鈸幾乎不被壓,
+  // 補回音量後 4kHz 以上相對整體多約 +2dB(搖滾/抒情/放克;金屬 +0.5)。這裡收回來,讓鼓組的音色比例跟原本混音一樣
+  tilt: { f: 5000, gainDb: -1.5 } };
+function buildDrumClipCurve(C){
+  const n = 16385, c = new Float32Array(n), R = C.range, Cl = Math.pow(10, C.ceilDb / 20), K = Cl * Math.pow(10, C.kneeDb / 20);
+  for (let i = 0; i < n; i++) {
+    const x = (i / (n - 1) * 2 - 1) * R, a = Math.abs(x);
+    c[i] = a <= K ? x : Math.sign(x) * (K + (Cl - K) * Math.tanh((a - K) / (Cl - K)));
+  }
+  return c;
+}
+function buildDrumMaster(ctx){
+  const C = Object.assign({}, DRUM_MASTER, window.DRUM_MASTER_OVERRIDE || {});
+  const G = Object.assign({}, DRUM_MASTER.glue, C.glue || {}), K = Object.assign({}, DRUM_MASTER.clip, C.clip || {});
+  const input = ctx.createGain(); input.channelCount = 2; input.channelCountMode = "explicit"; input.channelInterpretation = "speakers";
+  const output = ctx.createGain();
+  if (C.on === false) { input.connect(output); return { input, output }; }
+  const glue = ctx.createDynamicsCompressor();
+  glue.threshold.value = G.threshold; glue.knee.value = G.knee; glue.ratio.value = G.ratio; glue.attack.value = G.attack; glue.release.value = G.release;
+  const gg = ctx.createGain(); gg.gain.value = Math.pow(10, (G.gainDb - G.makeupDb + K.driveDb) / 20) / K.range;   // 曲線涵蓋 ±range,先縮進 [−1, 1]
+  const sh = ctx.createWaveShaper(); sh.curve = buildDrumClipCurve(K); sh.oversample = "4x";
+  const T = Object.assign({}, DRUM_MASTER.tilt, C.tilt || {});
+  const tilt = ctx.createBiquadFilter(); tilt.type = "highshelf"; tilt.frequency.value = T.f; tilt.gain.value = T.gainDb;
+  input.connect(glue); glue.connect(tilt); tilt.connect(gg); gg.connect(sh); sh.connect(output);
+  ctx.__drumClipIn = gg;   // 測試用:削波器的輸入(已縮 1/range)
+  return { input, output };
+}
 let drumRoomBuf = null, drumRoomConv = null, drumRoomWet = null, drumRoomIn = null;
 let drumBus = null, drumVerbIn = null, drumVerbWet = null;
 function buildDrumPlateIR(seconds, rt60){
@@ -12411,7 +12466,8 @@ function getDrumBus(){
   // 手機喇叭補償(SPEAKER_COMP.drum*):只有 App 偵測到內建喇叭才收低頻,其他情況 0dB;匯出時永遠 0(見 speakerCompUpdate)
   const spk = audioCtx.createBiquadFilter(); spk.type = "lowshelf"; spk.frequency.value = SPEAKER_COMP.drumF;
   spk.gain.value = speakerWanted() ? SPEAKER_COMP.drumGainDb : 0; audioCtx.__spkShelfDrum = spk;
-  air.connect(spk); spk.connect(masterBus || masterGain);
+  const dm = buildDrumMaster(audioCtx);
+  air.connect(spk); spk.connect(dm.input); dm.output.connect(masterBus || masterGain);
   // 1) 乾聲
   input.connect(out);
   // 2) 平行壓縮
@@ -14179,6 +14235,14 @@ function drawExportPageFrame(ctx, layout, cfg, pg, songSec, calib){
 const EXPORT_TARGET_LUFS = -14;
 const EXPORT_MAX_LOUD_SQUASH = 3;      // 最大聲的段落(3 秒短期響度的前 5%)最多被限幅器壓掉 2dB:等於大小聲範圍(LRA)最多少約 2 LU。動態平的曲子到得了 −14,起伏大的停在稍小聲,保住段落大小聲
 const EXPORT_DRUM_RELEASE = 0.04;       // 含鼓的曲子匯出時限幅器用 40ms 快放開:只削打擊瞬間的尖峰,尖峰之間不被壓著
+/* 匯出時限幅器上限(2026-10,商業交付規範):播放 −1.3dBFS(MASTER.ceilingDb),匯出改 −2.3。AAC/Opus 有損編碼解碼後真峰值會比編碼前高
+   (以前鼓的影片解碼後 −0.5~−0.8dBTP,超過 Spotify/YouTube 建議的 −1dBTP)。實測編碼前 −1.8 時抒情鼓解碼後 −0.6~−0.9dBTP(多 0.9~1.2dB,
+   鼓的銅鈸高頻、限幅很密的段落最多),−2.3 時鋼琴/鼓都 ≤ −1.4dBTP、響度一樣 −14(Spotify 對大聲母帶也建議 −2dBTP)。
+   即時錄影(AudioWorklet 限幅器 port 訊息、備援限幅器後面多 EXPORT_FB_TRIM_DB)、快速匯出(runLimiterOffline)、響度模型(solveExportGain)都用這個值 */
+const EXPORT_CEILING_DB = -2.3;
+// 備援限幅器(DynamicsCompressor + 軟削波,上限約 −1.4dBFS,不是真峰值偵測)匯出時後面再乘這麼多:跟 AudioWorklet 一樣降 1dB 再多留 1dB
+// (實測只降 1dB 時抒情鼓即時錄影解碼後 −0.4dBTP、搖滾 −0.9~−1.8,軟削波器的 4 倍超取樣還原濾波 + 編碼器的過衝比真峰值限幅器大)
+const EXPORT_FB_TRIM_DB = EXPORT_CEILING_DB - (-1.3) - 1.0;
 const lkfs = e => -0.691 + 10 * Math.log10(e + 1e-20);
 function gatedLoudness(E, gainSq, block){   // BS.1770 門檻:400ms 視窗、75% 重疊、絕對 −70、相對 −10
   const W = Math.max(1, Math.round(0.4 / block)), H = Math.max(1, Math.round(0.1 / block)), win = [];
@@ -14199,7 +14263,7 @@ function loudPartLoudness(E, gainSq, block){   // 3 秒短期響度(依 EBU 門�
   return a[Math.min(a.length - 1, Math.floor(a.length * 0.95))];
 }
 function solveExportGain(E, P, block, releaseSec){
-  const ceil = Math.pow(10, MASTER.ceilingDb / 20), rel = Math.exp(-block / releaseSec), gsq = new Float32Array(E.length);
+  const ceil = Math.pow(10, EXPORT_CEILING_DB / 20), rel = Math.exp(-block / releaseSec), gsq = new Float32Array(E.length);
   const shape = g => {   // 限幅器簡化模型:每格需要的增益 = 上限/峰值,往下立刻跟、往上依放開時間回復
     let env = 1;
     const LA = Math.max(1, Math.round(MASTER.lookahead / block));   // 預讀:尖峰前 5ms 就開始降
@@ -14224,7 +14288,7 @@ function solveExportGain(E, P, block, releaseSec){
 }
 function exportHasDrums(){ return events.some(ev => ev.notes.some(n => n.drum)); }
 // 離線算聲音時要暫時換掉的全域狀態(audioCtx 與所有快取的匯流排),算完還原
-const EXPORT_AUDIO_KEEP = ["audioCtx", "masterGain", "masterLimiter", "masterOut", "monitorOut", "masterBus", "masterLimiterNode", "masterReady", "reverbBus", "reverbConvolver", "reverbWet", "reverbPreDelay",
+const EXPORT_AUDIO_KEEP = ["audioCtx", "masterGain", "masterLimiter", "masterOut", "monitorOut", "masterBus", "masterLimiterNode", "masterFbOut", "masterReady", "reverbBus", "reverbConvolver", "reverbWet", "reverbPreDelay",
     "pianoRoomBus", "pianoBusIn", "pianoBusCtx", "pianoVerbIn", "pianoVerbWet", "pianoVerbCtx", "pianoVerbConv", "pianoVerbPre", "pianoVerbHp", "pianoVerbHall", "pianoRoomConv", "pianoRoomWet", "pianoVerbPop", "pianoResIn", "pianoResGate", "pianoResCtx", "gtrVerbIn", "gtrVerbWet", "gtrVerbCtx", "drumBus", "drumVerbIn", "drumVerbWet", "drumRoomConv", "drumRoomWet", "drumRoomIn",
     "scheduled", "startCtxTime", "ringingOpenHat", "ringingCymbals", "noteSched", "pianoPedalQueue", "pianoVoices", "pianoLastByKey", "pianoRRFlip", "gtrRR"];
 /* 匯出中途按「取消」:各階段(準備、試編、離線合成、限幅器)都要停得下來,不能等整段算完(審查發現:以前要等到聲音全部算完才看取消) */
@@ -14645,7 +14709,7 @@ async function renderExportAudioFast(rangeStart, rangeEnd, onProgress){
   if (!gOk) g = 1;   // 增益算不出來就照原本音量(不要把整段乘成 NaN)
   fastExportGainCache = { rangeStart, rangeEnd, g };
   if (g !== 1) for (let i = 0; i < L.length; i++) { L[i] *= g; R[i] *= g; }
-  await runLimiterOffline(L, R, sr, { ceilingDb: MASTER.ceilingDb, lookahead: MASTER.lookahead,
+  await runLimiterOffline(L, R, sr, { ceilingDb: EXPORT_CEILING_DB, lookahead: MASTER.lookahead,
     release: drums ? EXPORT_DRUM_RELEASE : MASTER.release, releaseSlow: drums ? EXPORT_DRUM_RELEASE : MASTER.releaseSlow },
     f => onProgress && onProgress(0.85 + 0.15 * f));
   const st1 = pcmHealth(L, R, sr);
@@ -15647,6 +15711,7 @@ async function exportVideo(cfg){
         });
         masterBus.gain.value = g || 1;
         if (g && exportHasDrums() && masterLimiterNode) masterLimiterNode.port.postMessage({ release: EXPORT_DRUM_RELEASE });
+        setExportCeiling(true);
       }
       if (exportCancelled) throw new Error("cancelled");
       $("exportOverlayTitle").textContent = T("exportRenderingPct", { pct: 0 });
@@ -15800,6 +15865,7 @@ async function exportVideo(cfg){
   if (monitorOut) { monitorOut.gain.cancelScheduledValues(0); monitorOut.gain.value = 1; }
   if (masterBus) masterBus.gain.value = 1;   // 響度標準化只用在匯出,App 裡播放恢復原本音量
   if (masterLimiterNode) masterLimiterNode.port.postMessage({ release: MASTER.release, releaseSlow: MASTER.releaseSlow });
+  setExportCeiling(false);
   stopAudioOnly();
   releaseWakeLock();
   $("exportOverlay").classList.remove("show");
