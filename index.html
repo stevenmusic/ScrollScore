@@ -7446,8 +7446,9 @@ $("tempo").addEventListener("input", () => {
   if (playing) { // 播放中改速度:重新以目前位置起算
     const cur = currentSec();
     stopAudioOnly();
-    startAudioFrom(cur);
+    pianoDynSkipSync = true; try { startAudioFrom(cur); } finally { pianoDynSkipSync = false; }
   }
+  pianoDynSyncLater();
   updateTimeLabel(playing ? currentSec() : pausedAtSec);
 });
 
@@ -7461,8 +7462,9 @@ function applyTempo(t){
   if (playing) {
     const cur = currentSec();
     stopAudioOnly();
-    startAudioFrom(cur);
+    pianoDynSkipSync = true; try { startAudioFrom(cur); } finally { pianoDynSkipSync = false; }
   }
+  pianoDynSyncLater();
   updateTimeLabel(playing ? currentSec() : pausedAtSec);
 }
 
@@ -8726,6 +8728,7 @@ function startAudioFrom(fromSec){
   scheduled = []; ringingCymbals = {}; ringingOpenHat = null;
   const calib = useCalib();
   computeDrumPerformance(); // 依目前的速度重算(速度會影響「越快越輕」)
+  if (!pianoDynSkipSync) pianoDynSync();   // 鋼琴力度也依目前的速度(播放中拖速度時改由 pianoDynSyncLater 稍後算)
   pianoResetVoices(); gtrRR = {}; pianoPedalQueue = [];
   if (currentInstrument() === "piano") pianoSchedulePedalNoise(fromSec, Infinity, sec => startCtxTime + sec);
   startNoteScheduler(fromSec, Infinity, startCtxTime, calib);
@@ -9216,20 +9219,22 @@ function pianoSectionOffset(t, beatLen, table, barLen){
   if (T === PIANO_SECTION_MUL && G.mulNorm && G.mulNorm !== 1) return pianoSectionOffsetRaw(G, t, beatLen, T, barLen) * G.mulNorm;   // 見 sectionLevelOk
   return pianoSectionOffsetRaw(G, t, beatLen, T, barLen);
 }
+/* 第 k 段在位置 x 自己的段落倍率(不含段落之間的銜接) */
+function sectionMulVal(G, k, x, T){
+  let v = G[k].kind ? T[G[k].kind] : null;
+  // 前奏/間奏/獨奏/尾奏依織度往副歌的大小內插(SECTION_TEX)
+  if (v != null && !Array.isArray(v) && SECTION_TEX.kinds[G[k].kind] && G[k].tex != null && typeof T.chorus === "number" && T.chorus > v) {
+    const y = Math.max(0, Math.min(1, G[k].tex)); v += (T.chorus - v) * SECTION_TEX.reach * y * y * (3 - 2 * y);
+  }
+  if (!Array.isArray(v)) return v != null ? v : 1;
+  const p = Math.max(0, Math.min(1, (x - G[k].t) / Math.max(1e-6, G[k].end - G[k].t)));
+  return v[0] + (v[1] - v[0]) * p;
+}
 function pianoSectionOffsetRaw(G, t, beatLen, T, barLen){
   const none = 1;
   let i = 0; for (let j = 0; j < G.length; j++) if (G[j].t <= t + 1e-6) i = j;
   if (G[i].t > t + 1e-6) return none;
-  const val = (k, x) => {
-    let v = G[k].kind ? T[G[k].kind] : null;
-    // 前奏/間奏/獨奏/尾奏依織度往副歌的大小內插(SECTION_TEX)
-    if (v != null && !Array.isArray(v) && SECTION_TEX.kinds[G[k].kind] && G[k].tex != null && typeof T.chorus === "number" && T.chorus > v) {
-      const x = Math.max(0, Math.min(1, G[k].tex)); v += (T.chorus - v) * SECTION_TEX.reach * x * x * (3 - 2 * x);
-    }
-    if (!Array.isArray(v)) return v != null ? v : none;
-    const p = Math.max(0, Math.min(1, (x - G[k].t) / Math.max(1e-6, G[k].end - G[k].t)));
-    return v[0] + (v[1] - v[0]) * p;
-  };
+  const val = (k, x) => sectionMulVal(G, k, x, T);
   // 段落之間銜接(使用者 2026-10:「每個段落的情感應該銜接上,而不是像階梯式的直接進入另一個力度」「固定一小節變強變弱還是很不正常」):
   // 下一段比較大聲:在這一段的後半段慢慢漸強(最多 SECTION_JOIN.upBars 小節),到下一段第一拍剛好到位;
   // 下一段比較小聲:只在這一段最後 downBeats 拍收(4/4 = 最後一個長音或和弦稍微收,前面的旋律照段落的大小)(使用者同意,漏洞檢查第 2 項:以前副歌最後 3 小節就開始收,副歌最後一句
@@ -9582,7 +9587,7 @@ const POP_EXPOSE = Object.assign({ frac: 0.4, cap: 6, melGap: 5.0, melMaxCut: 6,
 /* 拍位置的力度照真人(POP_BEAT_PROFILE,偶數拍子〔4/4、2/4〕的非古典):Pop1K7 慢歌真人各拍平均力度相對整首:第 1 拍 −2.6、第 2 拍 +0.4、
    第 3 拍 +0.1、第 4 拍 +0.9、反拍 +0.1(第 1 拍反而輕、後拍略重)。整首算完後各拍位置的平均往真人拉近 strength、每個位置最多 ±max;
    每一輪後把整首平均拉回原本的值(2026-10 力度規則整理:以前反覆 12 輪讓整首一直往下沉,〈甲乙丙丁〉−0.75dB)。4/4、2/4 的拍子輕重只由這裡決定(主迴圈的 POP_BEAT 不再加) */
-const POP_BEAT_PROFILE = { target: [-2.6, 0.4, 0.1, 0.9], off: 0.1, strength: 0.7, max: 5 };
+const POP_BEAT_PROFILE = Object.assign({ target: [-2.6, 0.4, 0.1, 0.9], off: 0.1, strength: 0.7, max: 5, melMax: 2, accMax: 6 }, window.POP_BEAT_PROFILE_OVERRIDE || {});
 function popBeatProfile(){
   if (classicalProbInfo().p >= 0.5) return;
   const P = POP_BEAT_PROFILE, groups = {}, all = [];
@@ -9604,15 +9609,21 @@ function popBeatProfile(){
   // 每組總共最多動 ±max,往真人拉近的比例 strength(單位:離目標差距)
   // ±max 是「每組實際動了多少」(含每輪把整首平均拉回的共同位移 cum;2026-10 檢查:以前只限制自己那一份,拉回的部分另外累加,
   // 實際動到 −6.2〔抒情測試譜第 1 拍〕、−8.0〔全是和弦的測試譜反拍:旋律一下一下差 20〕)
+  // 分角色(2026-10 檢查:以前整組一起加減,〈甲乙丙丁〉第 2 拍多半是左手夾在中間的輕音〔isLHFiller〕,整組 +5.2,旋律也跟著 +5,
+  // 第 41 小節旋律 79 → 92 跳出來):拍位置的目標照樣量全部的音,但旋律只動 ±melMax(保留旋律原本的拍子輕重),其餘由伴奏負擔(最多 ±accMax)
+  const clampA = (x, m) => Math.max(-m, Math.min(m, x));
   const acc = {}, M0 = mean(allN);
   let cum = 0;
   for (let it = 0; it < 12; it++) {
     for (const key of Object.keys(groups)) {
       const g = groups[key]; if (g.length < 10) continue;
-      const tgt = key === "off" ? P.off : P.target[+key], eff = (acc[key] || 0) - cum;
-      const want = Math.max(-P.max, Math.min(P.max, eff + (tgt - (mean(g) - mean(allN))) * P.strength));
-      const d = want - eff; acc[key] = (acc[key] || 0) + d;
-      for (const n of g) n.pvel = Math.max(8, Math.min(124, n.pvel + d));
+      const a = acc[key] = acc[key] || { m: 0, o: 0, nm: g.filter(n => n.pmel).length };
+      const N = g.length, Nm = a.nm, No = N - Nm;
+      const tgt = key === "off" ? P.off : P.target[+key], eff = (a.m * Nm + a.o * No) / N - cum;
+      const want = clampA(eff + (tgt - (mean(g) - mean(allN))) * P.strength, P.max);
+      const M = clampA(want, P.melMax), O = No ? clampA((want * N - M * Nm) / No, P.accMax) : 0;
+      const dm = (M + cum) - a.m, dO = (O + cum) - a.o; a.m += dm; a.o += dO;
+      for (const n of g) n.pvel = Math.max(8, Math.min(124, n.pvel + (n.pmel ? dm : dO)));
     }
     // 每一輪後把整首平均拉回原本的值(只調各拍位置的相對輕重,不改整首音量;以前反覆 12 輪讓整首平均一直往下沉,〈甲乙丙丁〉−0.75dB)
     const drift = mean(allN) - M0;
@@ -9670,6 +9681,55 @@ function popClimaxFactors(e){
   if (!up && !down) return null;
   const ss = x => { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); };
   return sm1(sm1(e.map(v => 1 + (up ? X.lift * ss((v - lo) / (hi - lo)) : 0) - (down ? (X.drop || 0) * ss((ql - v) / (ql - qb)) : 0))));
+}
+/* 往下一段漸強時,下一段開頭不低於前一段結尾(SECTION_RISE / popSectionJoin,2026-10 檢查;非古典、有段落記號):
+   使用者要「段落情感要銜接」「漸強進副歌」。小節校正與高潮倍率照每小節的和聲張力/織度算,導歌最後一小節常是屬和弦(張力最高)、
+   副歌第一小節是主和弦,〈甲乙丙丁〉第二次導歌 → 副歌旋律 94.5 → 82.2(掉 12),進副歌反而像收掉。
+   規則:下一段的段落倍率比這一段大(沒用段落倍率時:下一段平均力度大 energyGap 以上)、而且譜上力度記號沒有寫變小時,
+   比較交界前後各一小節的平均(旋律音;旋律音不夠就用全部的音)。下一段開頭比較小聲時:
+   ① 下一段開頭往上補到跟前一段結尾一樣大,補的量在 liftBars 小節內平滑退回 0(副歌進來那一下最大,之後回到原本的起伏);
+   ② 補的倍率最多 maxLift,還不夠的部分才把前一段最後一小節收一點(最多 maxCut;導歌結尾的推力保留大部分)。旋律伴奏同比例 */
+const SECTION_RISE = Object.assign({ liftBars: 4, maxLift: 1.15, maxCut: 0.12, energyGap: 3, markDrop: 3 }, window.SECTION_RISE_OVERRIDE || {});
+function popSectionJoin(){
+  const X = SECTION_RISE;
+  if (!X || classicalProbInfo().p >= 0.5 || !scoreSections.length) return;
+  const G = perfSections();
+  if (G.length < 2) return;
+  const mulOn = !!G.levelOk;
+  const A = [];
+  for (const ev of events) for (const n of ev.notes) if (!n.drum && n.freq && n.pvel != null) A.push({ n, t: ev.tWhole, bl: ev.barLen > 0 ? ev.barLen : 1 });
+  if (!A.length) return;
+  const mean = a => a.length ? a.reduce((s2, x) => s2 + x, 0) / a.length : null;
+  const ss = x => { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); };
+  const clampV = v => Math.max(8, Math.min(124, v));
+  const inSeg = (g, x) => x.t >= g.t - 1e-6 && x.t < g.end - 1e-6;
+  for (let i = 0; i + 1 < G.length; i++) {
+    const g0 = G[i], g1 = G[i + 1], tB = g1.t;
+    let up;
+    if (mulOn && (g0.kind || g1.kind)) up = sectionMulVal(G, i + 1, tB, PIANO_SECTION_MUL) > sectionMulVal(G, i, tB - 1e-6, PIANO_SECTION_MUL) + 1e-3;
+    else { const a0 = mean(A.filter(x => inSeg(g0, x)).map(x => x.n.pvel)), a1 = mean(A.filter(x => inSeg(g1, x)).map(x => x.n.pvel)); up = a0 != null && a1 != null && a1 > a0 + X.energyGap; }
+    if (!up) continue;
+    const bl = (A.find(x => x.t >= tB - 1e-6) || A[A.length - 1]).bl;
+    const w0 = A.filter(x => x.t >= Math.max(g0.t, tB - bl) - 1e-6 && x.t < tB - 1e-6), w1 = A.filter(x => x.t >= tB - 1e-6 && x.t < Math.min(g1.end, tB + bl) - 1e-6);
+    // 譜上寫了變小聲(前後一小節的力度記號那一份往下)就照譜
+    const l0 = mean(w0.map(x => x.n._lvl || 0)), l1 = mean(w1.map(x => x.n._lvl || 0));
+    if (l0 != null && l1 != null && l1 < l0 - X.markDrop) continue;
+    const m0 = w0.filter(x => x.n.pmel), m1 = w1.filter(x => x.n.pmel);
+    const useMel = m0.length >= 2 && m1.length >= 2, s0 = useMel ? m0 : w0, s1 = useMel ? m1 : w1;
+    if (s0.length < 2 || s1.length < 2) continue;
+    const P = mean(s0.map(x => x.n.pvel)), N = mean(s1.map(x => x.n.pvel));
+    if (!(P > N + 0.5)) continue;
+    // ① 下一段開頭往上補:f(t) = 1 + a·(1 − ss((t − tB)/D)),a 讓開頭那一小節(量的那組音)的平均剛好 = 前一段結尾
+    const D = Math.max(bl, Math.min(X.liftBars * bl, (g1.end - tB) / 2));
+    const wN = mean(s1.map(x => x.n.pvel * (1 - ss((x.t - tB) / D))));
+    const a = wN > 0 ? Math.min(X.maxLift - 1, (P - N) / wN) : 0;
+    const lifted = N + a * (wN || 0);
+    // ② 還不夠的部分把前一段最後一小節收一點:g(t) = 1 − c·ss((t − (tB − bl))/bl)
+    const wP = mean(s0.map(x => x.n.pvel * ss((x.t - (tB - bl)) / bl)));
+    const c = P > lifted + 0.5 && wP > 0 ? Math.min(X.maxCut, (P - lifted) / wP) : 0;
+    if (a > 0) for (const x of A) if (x.t >= tB - 1e-6 && x.t < tB + D - 1e-6 && inSeg(g1, x)) x.n.pvel = clampV(x.n.pvel * (1 + a * (1 - ss((x.t - tB) / D))));
+    if (c > 0) for (const x of A) if (x.t >= tB - bl - 1e-6 && x.t < tB - 1e-6 && inSeg(g0, x)) x.n.pvel = clampV(x.n.pvel * (1 - c * ss((x.t - (tB - bl)) / bl)));
+  }
 }
 /* 露在最上面的伴奏音拉近旋律 + 旋律與其他的差距收到真人範圍(見 POP_EXPOSE) */
 function popExposeAccomp(){
@@ -9887,7 +9947,21 @@ function pianoVelocityAsync(){
     }
   }
 }
+/* 鋼琴力度依當下速度重算(2026-10 檢查):有幾條規則用秒數(長音衰減後的音量、旋律長音時伴奏透出、太寬的和弦滾開的間隔),
+   以前只在載入/移調時算一次,改速度滑桿後最多差 5 力度。跟鼓的 n.perf 一樣:播放/匯出前速度變了就重算(pianoDynSync);
+   播放中拖速度時不在每一格重算,停 PIANO_DYN_RESYNC_MS 後才算一次(邊播邊排程只排 3 秒,之後排的音就用新的力度,不用重新開始)。
+   只用在非古典(古典照舊載入時算一次) */
+let pianoDynBpm = null, pianoDynTimer = null, pianoDynSkipSync = false;
+const PIANO_DYN_RESYNC_MS = 250;
+function pianoDynSync(){
+  clearTimeout(pianoDynTimer); pianoDynTimer = null;
+  if (!events.length || pianoDynBpm == null || Math.abs(pianoDynBpm - bpm()) < 1e-9) return;
+  if (classicalProbInfo().p >= 0.5) return;
+  computePianoDynamics();
+}
+function pianoDynSyncLater(){ clearTimeout(pianoDynTimer); pianoDynTimer = setTimeout(pianoDynSync, PIANO_DYN_RESYNC_MS); }
 function computePianoDynamics(){
+  pianoDynBpm = bpm();
   const multiStaff = events.some(ev => ev.notes.some(n => !n.drum && n.freq && (n.staff || 1) > 1));
   const hasMarks = scoreDynMarks.length > 0;
   // 非古典的「有力度記號時退讓」只看會改變大小的記號(p/f/文字力度…):只有 sf/fz/rf 這種瞬間重音時,以前段落倍率與高潮倍率也開根號、
@@ -10187,6 +10261,7 @@ function computePianoDynamics(){
   popExposeAccomp();        // 旋律與伴奏的整體差距(唯一的一道校正,POP_EXPOSE.melGap;放在和弦形狀、低音平衡之後,它們會動到這個差距)
   popBeatProfile();         // 拍位置放在低音區平衡之後(平衡會動低音區的力度、連帶改變各拍位置的平均)
   popMelodyOnTop();         // 安全網:旋律不要比同時彈的伴奏小聲
+  popSectionJoin();         // 非古典:往下一段漸強時,下一段開頭不低於前一段結尾(SECTION_RISE;放在各項校正之後,結果才不會被後面的步驟改掉)
   if (pop) applyAccentRatios(true);   // 非古典的重音最後才加(見上面)
   pianoVelocityAsync();
   pianoWideChordRoll(multiStaff);
@@ -14754,7 +14829,7 @@ async function measureExportGain(rangeStart, rangeEnd, onProgress){
       else { masterBus.connect(audioCtx.destination); cap = attachPcmCapture(masterBus, len); }   // 不用 AudioWorklet:讀成品(壞的話用抄本)、在主執行緒分析
       scheduled = []; ringingOpenHat = null; ringingCymbals = {}; pianoResetVoices();
       startCtxTime = LEAD;
-      computeDrumPerformance();
+      computeDrumPerformance(); pianoDynSync();
       scheduleExportRange(rangeStart, rangeEnd, useCalib(), { defer: true });
       await scheduleOfflineInSlices(f => onProgress && onProgress(Math.round(f * SCH * 100)));
       tick = renderProgressTicker(total * 0.3, f => onProgress && onProgress(Math.round((SCH + (1 - SCH) * f) * 100)));
@@ -15037,7 +15112,7 @@ async function renderExportAudioFast(rangeStart, rangeEnd, onProgress){
     }
     scheduled = []; ringingOpenHat = null; ringingCymbals = {}; pianoResetVoices();
     startCtxTime = lead;
-    computeDrumPerformance();
+    computeDrumPerformance(); pianoDynSync();
     let tp = performance.now();
     const lap = k => { const now = performance.now(); fastTimes[k] = (now - tp) / 1000; tp = now; };
     lap("aInit");
@@ -15851,7 +15926,7 @@ async function fastExportVideo(cfg){
   } catch (e) { if (e.cancelled) return bail(cancelledNow()); console.warn(e); return bail(fastFallback("error", e.message)); }
   if (cancelledNow()) return bail(true);
   stopFastPrepTick();
-  computeDrumPerformance();   // 試編畫了鼓組面板,重算一次讓正式匯出從頭開始
+  computeDrumPerformance(); pianoDynSync();   // 試編畫了鼓組面板,重算一次讓正式匯出從頭開始
   /* 3) 聲音跟畫面同時做(2026-10-17,使用者:匯出不能比影片長)。OfflineAudioContext 在音訊執行緒合成,主執行緒同時畫畫面、
      編影片,總時間約等於兩者較久的那個。以前(7f9cbd5)試過一次,iPhone 反而變慢——當時聲音本身就要 108 秒(整首先排好,
      見 OFFLINE_SCHED),現在邊合成邊排,聲音快很多才再開。
@@ -16133,7 +16208,7 @@ async function exportVideo(cfg){
       rec.start(3000); // 每3秒分段一次:避免資料完全不釋放而累積過多記憶體,又不會像每秒切一次那麼頻繁
 
       const calib = useCalib();
-      computeDrumPerformance();
+      computeDrumPerformance(); pianoDynSync();
       pianoResetVoices();
       // 匯出區間(手動輸入的開始/結束時間);沒指定就是整首曲子,跟以前行為一樣
       const rangeStart = cfg.startSec != null ? Math.max(0, cfg.startSec) : 0;
