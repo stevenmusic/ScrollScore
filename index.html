@@ -9203,10 +9203,21 @@ function sectionLevelOk(segs){
   for (const g of segs) if (g.kind) by[g.kind] = (by[g.kind] || 0) + Math.max(0, g.end - g.t);
   const edge = ["intro", "interlude", "solo", "outro"].reduce((a, k) => a + (by[k] || 0), 0);
   segs.levelOk = tot > 0 && Object.keys(by).length > 0 && edge <= SECTION_LEVEL.edgeMax * tot && Math.max(...Object.values(by)) < SECTION_LEVEL.single * tot;
+  // 主體(主歌/導歌/副歌/橋段/沒標段落的部分)只有一種段落時(例如 Intro + Verse ×3 + Outro 的分節歌,沒有副歌):倍率照那一種段落換算成 1,
+  // 只留前奏/尾奏相對主體的對比,不讓整首一起變小聲(以前整首主歌 ×0.78,力度平均比沒寫段落小 20%)
+  const body = new Set(segs.filter(g => !["intro", "interlude", "solo", "outro"].includes(g.kind)).map(g => g.kind || "-"));
+  const only = body.size === 1 ? [...body][0] : null, m0 = only && only !== "-" ? PIANO_SECTION_MUL[only] : null;
+  const mv = Array.isArray(m0) ? (m0[0] + m0[1]) / 2 : m0;
+  segs.mulNorm = mv > 0 ? 1 / mv : 1;
 }
 function pianoSectionOffset(t, beatLen, table, barLen){
   const G = perfSections(), T = table || PIANO_SECTION_MUL, none = 1;
   if (!G.length || t == null) return none;
+  if (T === PIANO_SECTION_MUL && G.mulNorm && G.mulNorm !== 1) return pianoSectionOffsetRaw(G, t, beatLen, T, barLen) * G.mulNorm;   // 見 sectionLevelOk
+  return pianoSectionOffsetRaw(G, t, beatLen, T, barLen);
+}
+function pianoSectionOffsetRaw(G, t, beatLen, T, barLen){
+  const none = 1;
   let i = 0; for (let j = 0; j < G.length; j++) if (G[j].t <= t + 1e-6) i = j;
   if (G[i].t > t + 1e-6) return none;
   const val = (k, x) => {
