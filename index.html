@@ -6341,7 +6341,40 @@ function buildTimeline(){
   const autoAll = baroqueDry || (pedalRanges.length && !pedalZones) ? [] : chordSegs.length
     ? buildAutoPedalRanges(preChordRepeat, RING_CAP_WHOLE).concat(buildAutoPedalRanges(chordSegs, RING_CAP_WHOLE))
     : buildAutoPedalRanges(repeatChordRanges, RING_CAP_WHOLE);
-  autoPedalRanges = pedalZones ? subtractRanges(autoAll, pedalZones) : autoAll;
+  // 沒有和弦記號的非古典(2026-10 獨立複查):重複音型偵測(detectRepeatingChordRanges)把同一個調的音都併成一個「十三和弦」,
+  // 常常一段就好幾小節(測試譜 C-G-Am-F 每小節換和弦,被併成 0~15.4 全音符),自動踏板再從段落起點每 RING_CAP_WHOLE 切一次,
+  // 換踩的地方落在小節中間(第 15.375、16.375…),音符的和聲延長則從每個音起算一個全音符、跨過換和弦。
+  // 流行鋼琴照小節換踏板:自動踏板的區段在每個小節線切開,4/4 第 3 拍左手換了低音(那一拍裡最低、音名跟小節開頭的低音不同)也切;
+  // 音符的和聲延長不超過這個區段(跟踏板聲、琴弦共鳴一致)。有和弦記號的譜照和弦記號(chordSegs),古典不變
+  const popNoChordCap = !isDrumScore && !chordSegs.length && classicalProbInfo().p < 0.5;
+  let autoCut = autoAll;
+  if (popNoChordCap && autoAll.length) {
+    const cuts = new Set(measureRanges.map(m => +m.start.toFixed(6)));
+    const multi = events.some(e => e.notes.some(n => !n.drum && n.freq && (n.staff || 1) > 1));
+    const lhLow = e => { const r = e.notes.filter(n => !n.drum && n.freq && (!multi || (n.staff || 1) > 1)); return r.length ? Math.min(...r.map(n => freqToMidi(n.freq))) : null; };
+    let barBass = null, barStart = null;
+    for (let i = 0; i < events.length; i++) {
+      const e = events[i], sT = e.srcT != null ? e.srcT : e.tWhole, lo = lhLow(e);
+      if (e.barPos == null || !(e.barLen > 0) || !(e.beatLen > 0)) continue;
+      const bs = sT - e.barPos;
+      if (barStart == null || Math.abs(bs - barStart) > 1e-6) { barStart = bs; barBass = null; }
+      if (lo == null) continue;
+      if (e.barPos < e.beatLen - 1e-6) { barBass = barBass == null ? lo : Math.min(barBass, lo); continue; }
+      if (Math.round(e.barLen / e.beatLen) !== 4 || Math.abs(e.barPos - e.barLen / 2) > 1e-4 || barBass == null) continue;
+      let fwd = lo;
+      for (let j = i + 1; j < events.length && events[j].tWhole < e.tWhole + e.beatLen - 1e-6; j++) { const l2 = lhLow(events[j]); if (l2 != null) fwd = Math.min(fwd, l2); }
+      if (lo <= fwd + 0.5 && ((Math.round(lo) - Math.round(barBass)) % 12 + 12) % 12 !== 0) cuts.add(+sT.toFixed(6));
+    }
+    // 重複音型範圍先合併(範圍中途開始的「新和聲」也常落在小節中間,不用它換踏板),在小節線/換低音切開,再照 RING_CAP_WHOLE 切長的
+    const cs = [...cuts].sort((a, b) => a - b), out = [];
+    for (const r of mergeRanges(repeatChordRanges)) {
+      let a = r.start;
+      for (const c of cs) if (c > a + 1e-6 && c < r.end - 1e-6) { out.push({ start: a, end: c }); a = c; }
+      out.push({ start: a, end: r.end });
+    }
+    autoCut = buildAutoPedalRanges(out, RING_CAP_WHOLE);
+  }
+  autoPedalRanges = pedalZones ? subtractRanges(autoCut, pedalZones) : autoCut;
   pianoRangesAll = pedalRanges.concat(autoPedalRanges).sort((a, b) => a.start - b.start);
   for (const ev of events) {
     const sT = ev.srcT != null ? ev.srcT : ev.tWhole, toPerf = w => ev.tWhole + (w - sT);   // 記譜位置的範圍 → 這一遍的演奏位置
@@ -6378,6 +6411,13 @@ function buildTimeline(){
           break;
         }
       }
+    }
+    // 沒有和弦記號的非古典(2026-10 獨立複查):重複音型偵測常把整首當成同一個和聲(右手旋律用到的七個音 = 十三和弦),
+    // 每個音都延長一個全音符、跨過換和弦;自動踏板卻每小節換一次(buildAutoPedalRanges)。延長改成不超過自動踏板換踩的地方,
+    // 跟踏板聲/琴弦共鳴一致(真人換踏板時舊和弦的音一起收掉)
+    if (rangeEnd != null && popNoChordCap && !ev.pedalOn && !chordSeg) {
+      const ap = autoPedalRanges.find(r => inRange(sT, r));
+      if (ap) rangeEnd = Math.min(rangeEnd, Math.max(toPerf(ap.end), ev.tWhole));
     }
     // 沒踩踏板記號的音:圓滑線/和聲的延長不跨過下一個和弦記號(換和弦 = 換踏板)
     if (rangeEnd != null && chordSegs.length && !ev.pedalOn) {
@@ -9587,7 +9627,12 @@ const POP_EXPOSE = Object.assign({ frac: 0.4, cap: 6, melGap: 5.0, melMaxCut: 6,
 /* 拍位置的力度照真人(POP_BEAT_PROFILE,偶數拍子〔4/4、2/4〕的非古典):Pop1K7 慢歌真人各拍平均力度相對整首:第 1 拍 −2.6、第 2 拍 +0.4、
    第 3 拍 +0.1、第 4 拍 +0.9、反拍 +0.1(第 1 拍反而輕、後拍略重)。整首算完後各拍位置的平均往真人拉近 strength、每個位置最多 ±max;
    每一輪後把整首平均拉回原本的值(2026-10 力度規則整理:以前反覆 12 輪讓整首一直往下沉,〈甲乙丙丁〉−0.75dB)。4/4、2/4 的拍子輕重只由這裡決定(主迴圈的 POP_BEAT 不再加) */
-const POP_BEAT_PROFILE = Object.assign({ target: [-2.6, 0.4, 0.1, 0.9], off: 0.1, strength: 0.7, max: 5, melMax: 2, accMax: 6 }, window.POP_BEAT_PROFILE_OVERRIDE || {});
+/* 分角色(perRole,2026-10 獨立複查):整組的目標是全部音混在一起量的,而各拍位置的旋律/伴奏比例每首不同。旋律是四分音符、左手是八分音符分解和弦的譜,
+   反拍幾乎全是伴奏(本來就比旋律輕),整組被往「全部音的平均」拉 +7、正拍的伴奏 −3.5,左手變成一下重一下輕(反拍比正拍重 10,Pop1K7 真人左手反拍比正拍略輕)。
+   改成旋律與伴奏各自照真人(Pop1K7 慢歌 435 首,skyline ≥ C4 = 旋律,各自相對自己角色的平均):旋律 第 1~4 拍 −1.24 / +0.36 / +0.25 / +0.90、反拍 −0.09;
+   伴奏 −1.78 / +0.55 / +0.54 / +1.02、反拍 −0.52。每個角色各自把平均拉回原本的值(旋律/伴奏的差距照 popExposeAccomp)。perRole: false = 以前的整組做法 */
+const POP_BEAT_PROFILE = Object.assign({ target: [-2.6, 0.4, 0.1, 0.9], off: 0.1, strength: 0.7, max: 5, melMax: 2, accMax: 6,
+  perRole: true, localBars: 1, melTarget: [-0.07, 0.18, 0.23, 0.73], melOff: -0.20, accTarget: [0.05, 0.20, 0.59, 0.74], accOff: -0.84 }, window.POP_BEAT_PROFILE_OVERRIDE || {});
 function popBeatProfile(){
   if (classicalProbInfo().p >= 0.5) return;
   const P = POP_BEAT_PROFILE, groups = {}, all = [];
@@ -9604,6 +9649,44 @@ function popBeatProfile(){
   // 基準 = 全部音的平均(跟 pop_stats 的量法一樣;以前只算有分到拍位置的音,十六分音符位置的音被排除、反拍量出來 +0.76 而不是 +0.1)
   const allN = []; for (const ev of events) for (const n of ev.notes) if (!n.drum && n.freq && n.pvel != null) allN.push(n);
   const mean = a => a.reduce((s, n) => s + n.pvel, 0) / a.length;
+  if (P.perRole) {
+    // 跟「附近同角色的音」比(前後 localBars 小節的平均),不跟整首比:反拍多半只出現在某些段落(主歌的八分音符分解和弦),
+    // 跟整首平均比會把段落大小聲也算成拍子輕重(安靜的主歌反拍被拉高 +6,一下重一下輕)
+    const clampR = (x, m) => Math.max(-m, Math.min(m, x));
+    const tOf = new Map(), wOf = new Map();
+    for (const ev of events) for (const n of ev.notes) if (!n.drum && n.freq && n.pvel != null) { tOf.set(n, ev.tWhole); wOf.set(n, (ev.barLen > 0 ? ev.barLen : 1) * P.localBars); }
+    for (const mel of [true, false]) {
+      const T = mel ? P.melTarget : P.accTarget, off = mel ? P.melOff : P.accOff, mx = mel ? P.melMax : P.accMax;
+      const allR = allN.filter(n => !!n.pmel === mel).sort((a, b) => tOf.get(a) - tOf.get(b));
+      if (allR.length < 30) continue;
+      const ts = allR.map(n => tOf.get(n)), lo = [], hi = [], pos = new Map(allR.map((n, i) => [n, i]));
+      for (let i = 0, a = 0, b = 0; i < allR.length; i++) {
+        const w = wOf.get(allR[i]);
+        while (ts[a] < ts[i] - w - 1e-6) a++;
+        while (b < allR.length && ts[b] <= ts[i] + w + 1e-6) b++;
+        lo.push(a); hi.push(b);
+      }
+      const rg = {};
+      for (const key of Object.keys(groups)) { const g = groups[key].filter(n => !!n.pmel === mel); if (g.length >= 10) rg[key] = g.map(n => pos.get(n)); }
+      const M0 = mean(allR), moved = {};
+      let cum = 0;
+      for (let it = 0; it < 12; it++) {
+        const ps = [0]; for (const n of allR) ps.push(ps[ps.length - 1] + n.pvel);
+        const res = i => allR[i].pvel - (ps[hi[i]] - ps[lo[i]]) / (hi[i] - lo[i]);
+        const dev = {};
+        for (const key of Object.keys(rg)) dev[key] = rg[key].reduce((s2, i) => s2 + res(i), 0) / rg[key].length;
+        for (const key of Object.keys(rg)) {
+          const tgt = key === "off" ? off : T[+key], a = moved[key] || 0;
+          const want = clampR(a - cum + (tgt - dev[key]) * P.strength, mx), d = want + cum - a;
+          moved[key] = a + d;
+          for (const i of rg[key]) allR[i].pvel = Math.max(8, Math.min(124, allR[i].pvel + d));
+        }
+        const drift = mean(allR) - M0;
+        if (Math.abs(drift) > 1e-4) { cum += drift; for (const n of allR) n.pvel = Math.max(8, Math.min(124, n.pvel - drift)); }
+      }
+    }
+    return;
+  }
   // 各拍位置互相影響(整體平均 M 會跟著動;以前一輪只用舊的 M,反拍停在 +0.4~0.5):逐組用當下的 M 重算、反覆做到收斂。
   // 注意各組目標不可能同時達成(音符幾乎都分在這幾組裡,加權平均必須 ≈ 0;真人資料裡第 1 拍的音比例比較少),所以是折衷:反覆後約 第 1 拍 −2.2、反拍 +0.35
   // 每組總共最多動 ±max,往真人拉近的比例 strength(單位:離目標差距)
@@ -9740,7 +9823,7 @@ function popExposeAccomp(){
   for (const ev of events) {
     let top = null;
     for (const n of ev.notes) if (!n.drum && n.freq && n.pvel != null && (!top || n.freq > top.freq)) top = n;
-    if (top && freqToMidi(top.freq) >= 60) tops.push({ n: top, t: ev.tWhole, w: ev.barLen > 0 ? ev.barLen : 1, single: ev.notes.filter(n => !n.drum && n.freq && n.pvel != null).length === 1 });
+    if (top && freqToMidi(top.freq) - transposeSemitones >= 60) tops.push({ n: top, t: ev.tWhole, w: ev.barLen > 0 ? ev.barLen : 1, single: ev.notes.filter(n => !n.drum && n.freq && n.pvel != null).length === 1 });
   }
   const mels = tops.filter(x => x.n.pmel);
   if (mels.length < 8) return;
@@ -9808,7 +9891,7 @@ function popChordShape(){
     const ns = ev.notes.filter(n => !n.drum && n.freq && n.pvel != null && n.rollIndex == null);
     if (ns.length < 2) continue;
     ns.sort((a, b) => a.freq - b.freq);
-    const lo = ns[0], hi = ns[ns.length - 1], mlo = freqToMidi(lo.freq), mhi = freqToMidi(hi.freq), span = Math.round(mhi - mlo);
+    const lo = ns[0], hi = ns[ns.length - 1], mlo = freqToMidi(lo.freq) - transposeSemitones, mhi = freqToMidi(hi.freq) - transposeSemitones, span = Math.round(mhi - mlo);   // 原調的音高
     if (span < 1) continue;
     const ts = C.topShare;
     if (ns.length === 2) {
@@ -9842,11 +9925,13 @@ const POP_SINGLE = Object.assign({ gapMax: -6.5, strength: 0.85, lowShare: 0.6, 
 function popSingleBalance(){
   if (classicalProbInfo().p >= 0.5) return;
   const S = POP_SINGLE, lo = [], hi = [];
+  // 高低音區照原調的音高分(− transposeSemitones,2026-10 獨立複查):以前移調 −5 半音後右手旋律有一大半掉到 C4 以下、被當成「單音低音」
+  // 一起往上補 +7.7、C4 以上的旋律 −5.1,同一條旋律跨過 C4 就差 13。使用者移調(配合歌手的調)時演奏的大小聲不該跟著變
   for (const ev of events) {
     if (ev.arpCount) continue;
     const ns = ev.notes.filter(n => !n.drum && n.freq && n.pvel != null);
     if (ns.length !== 1 || ns[0].rollIndex != null) continue;
-    (freqToMidi(ns[0].freq) < 60 ? lo : hi).push(ns[0]);
+    (freqToMidi(ns[0].freq) - transposeSemitones < 60 ? lo : hi).push(ns[0]);
   }
   if (lo.length < 20 || hi.length < 20) return;
   const mean = a => a.reduce((s, n) => s + n.pvel, 0) / a.length;
@@ -9866,7 +9951,7 @@ function popSingleBalance(){
 const PIANO_BALANCE = Object.assign({ split: 60, dv: -6.6, edbMax: -1.5, maxGain: 1.15 }, window.PIANO_BALANCE_OVERRIDE || {});
 function pianoHandBalance(){
   const B = PIANO_BALANCE, lo = [], hi = [];
-  for (const ev of events) for (const n of ev.notes) if (!n.drum && n.freq && n.pvel != null) (freqToMidi(n.freq) < B.split ? lo : hi).push(n);
+  for (const ev of events) for (const n of ev.notes) if (!n.drum && n.freq && n.pvel != null) (freqToMidi(n.freq) - transposeSemitones < B.split ? lo : hi).push(n);   // 原調的音高(移調不改大小聲)
   if (lo.length < 30 || hi.length < 30) return;
   const mean = a => a.reduce((s, n) => s + n.pvel, 0) / a.length, e = a => a.reduce((s, n) => s + (n.pvel / 127) ** 2, 0);
   const mLo = mean(lo), mHi = mean(hi), edb = 10 * Math.log10(e(lo) / e(hi));
@@ -10083,14 +10168,23 @@ function computePianoDynamics(){
     for (let j = i + 1; j < events.length && events[j].tWhole <= t + w + 1e-6; j++) if (rhTops[j] != null) b = Math.max(b, rhTops[j]);
     return a - m >= PIANO_POP.lineGap && b - m >= PIANO_POP.lineGap;
   };
+  // 呼叫端另外要求這個音比一拍短(2026-10 獨立複查):四分音符旋律 G5-E5-G5 的 E5(小三度下凹)以前也被當成分解音型的內聲部扣 8,
+  // 小節第一拍的旋律音一下輕 15;分解音型的內聲部都是八分/十六分音符(〈甲乙丙丁〉106 個全都比一拍短,結果不變)
   // 左手同理(使用者反映 2026-10:「第 25、26 小節重複的低音太大聲,處理方式應該跟前奏一樣」):低音 Bb2 在拍點上、中間夾著
   // F3-Bb3-F3-Bb3 十六分音符,以前都是 62~76 跟低音一樣重。左手單音比前後一拍內左手最低音高 ≥ lineGap 半音 = 夾在中間的伴奏音,
   // 跟右手的內聲部一樣彈輕;拍點上的低音照常
   const lhLows = events.map(ev => { const r = ev.notes.filter(n => !n.drum && n.freq && multiStaff && (n.staff || 1) > 1); return r.length ? Math.min(...r.map(n => freqToMidi(n.freq))) : null; });
+  // 往回看到小節開頭(2026-10 複查):左手八分音符分解和弦(C2 G2 C3 E3 C3 G2 C3 G2)只有第 1 拍有低音,以前只看前後一拍,
+  // 後半小節看不到低音,G2 被當成「最低音」不扣、C3 照扣,後半小節變成反拍比正拍重 8(再加拍位置校正 +7,一下一下差 10 以上)。
+  // 小節裡換和弦的新低音(強拍上、而且是之後一拍內最低的)照樣是低音
   const isLHFiller = (ev, m) => {
     const i = evIdx.get(ev), t = ev.tWhole, w = (ev.beatLen || 0.25) * PIANO_POP.lineWin;
-    let mn = Infinity;
-    for (let j = i - 1; j >= 0 && events[j].tWhole >= t - w - 1e-6; j--) if (lhLows[j] != null) mn = Math.min(mn, lhLows[j]);
+    const strongPos = ev.barPos != null && (ev.barPos < 1e-4 || (ev.barLen > 0 && Math.round(ev.barLen / (ev.beatLen || ev.barLen)) === 4 && Math.abs(ev.barPos - ev.barLen / 2) < 1e-4));
+    let mn = Infinity, fwd = Infinity;
+    for (let j = i + 1; j < events.length && events[j].tWhole <= t + w + 1e-6; j++) if (lhLows[j] != null) fwd = Math.min(fwd, lhLows[j]);
+    if (strongPos && m <= fwd + 0.5) return false;
+    const back = ev.barPos != null ? Math.max(w, ev.barPos) : w;
+    for (let j = i - 1; j >= 0 && events[j].tWhole >= t - back - 1e-6; j--) if (lhLows[j] != null) mn = Math.min(mn, lhLows[j]);
     for (let j = i + 1; j < events.length && events[j].tWhole <= t + w + 1e-6; j++) if (lhLows[j] != null) mn = Math.min(mn, lhLows[j]);
     return m - mn >= PIANO_POP.lineGap;
   };
@@ -10168,7 +10262,7 @@ function computePianoDynamics(){
         if (rh) {
           // 雙音/和弦也一樣(使用者反映 2026-10:第 51 小節 B♭4+D5 的 D「還是太強、很不舒服」——旋律在 G5/A5,這個雙音是夾在中間的伴奏,
           // 以前只有單音才判斷,和弦最上面一律當旋律加重)
-          if (n === top && pop && ((ns.length === 1 && isInnerSingle(ev, m)) || heldAbove(ev, m, st))) {
+          if (n === top && pop && ((ns.length === 1 && n.durWhole < (ev.beatLen || 0.25) - 1e-6 && isInnerSingle(ev, m)) || heldAbove(ev, m, st))) {
             v -= 5 + PIANO_POP.inner; n._inner = true;   // 單音音型裡的伴奏音(見 isInnerSingle)
           } else if (n === top) {
             // 有和弦記號的非古典:和弦最上面的旋律音跟單音旋律一樣加 4(下面已經多一個音、本來就比較響,不用再多打;
@@ -10188,7 +10282,7 @@ function computePianoDynamics(){
           if (ns.length > 1) v += n === bottom ? 3 : -3;
         }
         if (n.durWhole >= 0.5) v += 2; else if (n.durWhole <= 1 / 16 + 1e-6) v -= 2;
-        v += (seededRand01(k * 7.31 + m * 0.137) - 0.5) * 5;
+        v += (seededRand01(k * 7.31 + (pop ? m - transposeSemitones : m) * 0.137) - 0.5) * 5;   // 非古典:亂數用原調的音高(移調不改大小聲)
         // 非古典:段落倍率、高潮、小節大小聲校正與重音都在 popDynamicsCalibrate / applyAccentRatios 一起算(只算一次,不互相拉扯),
         // 這裡只記下來:_secF = 段落倍率,_lvl = 譜上力度記號造成的那一份(校正不壓它)。結尾倍率(popEndFade)照舊乘在這裡(跟整理前一樣的幅度)
         let secF = 1, endF = 1;
