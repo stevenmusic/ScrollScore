@@ -9126,8 +9126,9 @@ function sectionKind(text){
   if (/^(bridge|middle 8|cメロ)\b|橋段|桥段|cメロ|大サビ前/.test(s)) return "bridge";
   if (/^(interlude|instrumental|break|inst)\b|間奏|间奏/.test(s)) return "interlude";
   if (/^(solo)\b|獨奏|独奏|ソロ/.test(s)) return "solo";
-  // 「Fine」不算(2026-10 檢查):D.C. al Fine 的 Fine 是「回頭之後在這裡結束」的記號,寫在 A 段結尾,以前被當成尾奏的開頭,
-  // 演奏順序裡 Fine 後面的 B 段整段 ×0.76、結尾判斷也以為最後是尾奏
+  // 「Fine」另外標成 "fine"(2026-10 檢查):D.C. al Fine 的 Fine 是「回頭之後在這裡結束」的記號,寫在 A 段結尾,以前被當成尾奏的開頭,
+  // 演奏順序裡 Fine 後面的 B 段整段 ×0.76、結尾判斷也以為最後是尾奏。非古典在 perfSections 拿掉它;古典照舊當一個段落(只用在段落內起伏)
+  if (/^fine\b/.test(s)) return "fine";
   if (/^(outro|ending|coda|tag)\b|尾奏|結尾|结尾|アウトロ/.test(s)) return "outro";
   return null;
 }
@@ -9145,8 +9146,8 @@ const PIANO_SECTION_MUL = { intro: 0.71, verse: 0.78, prechorus: [0.86, 0.98], c
    段落換了才開新的一段(同一段反覆回自己的開頭仍算同一段,導歌的漸強照樣一路推上去) */
 let perfSectionsCache = null;
 function perfSections(){
-  if (perfSectionsCache && perfSectionsCache.events === events && perfSectionsCache.S === scoreSections) return perfSectionsCache.segs;
-  const S = scoreSections, segs = [];
+  if (perfSectionsCache && perfSectionsCache.events === events && perfSectionsCache.src === scoreSections) return perfSectionsCache.segs;
+  const S = classicalProbInfo().p < 0.5 ? scoreSections.filter(x => x.kind !== "fine") : scoreSections, segs = [];
   const idxAt = t => { let k = -1; for (let j = 0; j < S.length; j++) if (S[j].t <= t + 1e-6) k = j; return k; };
   let last = null;
   for (const ev of events) {
@@ -9156,7 +9157,7 @@ function perfSections(){
   segs.forEach((g, n) => { g.end = n + 1 < segs.length ? segs[n + 1].t : Math.max(totalWhole, g.t + 1e-6); });
   sectionTexture(segs);
   sectionLevelOk(segs);
-  perfSectionsCache = { events, S, segs };
+  perfSectionsCache = { events, S, src: scoreSections, segs };
   return segs;
 }
 /* 段落的織度(使用者反映 2026-10:〈甲乙丙丁〉「間奏太小聲了(音符比較密)應該強一點吧」):段落名稱只是先驗,織度才是實際的能量。
