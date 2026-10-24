@@ -1963,7 +1963,7 @@ function metronomeUnitLabel(beatUnit, dotCount){
 let scoreDynMarks = [], scoreWedges = []; // 力度記號與髮夾(記譜位置),鼓的整首力度用
 let scoreDynOffsets = [];
 let scoreChokeTimes = [];   // 鼓譜的止音文字(Mute / Choke…)位置(記譜位置),見 markDrumChokes   // una corda 等整段力度偏移 {start, end, delta}(記譜位置)
-let scoreSections = [];     // 段落 {t: 記譜位置, kind}(sectionKind;非古典的段落力度用,見 PIANO_SECTION)
+let scoreSections = [];     // 段落 {t: 記譜位置, kind}(sectionKind;非古典的段落力度用,見 PIANO_SECTION_MUL)
 let scoreFermataWords = [];   // 延長的文字 {t: 記譜位置, len}(見 FERMATA)
 let scoreTempoSpans = [];   // rit./rall./accel. 的範圍 {start, end, hold, kind, target}(resolveTempoWordSpans,一定照做的速度曲線)
 let scoreSwingMarks = [];   // 搖擺指示(見 buildSwingSegs)
@@ -9088,13 +9088,12 @@ function pianoEndContour(nb, multiStaff){
       右手和弦內音 −5,實測〈甲乙丙丁〉右手平均只比左手大 5 ② 段落(相對整首平均力度):前奏 −7、主歌 −1、副歌 +2、
       副旋律/橋段 +1.5~2、間奏 −1.5、尾奏 −4;最後一次副歌跟第一次一樣大(中位數 0),不用越來越大 ③ 時間對齊格子(離 16 分格 < 1ms),
       沒有速度起伏的資訊,所以速度不另外加(維持穩定拍子 + 譜上 rit.)。
-   做法:非古典(classicalProbInfo().p < 0.5)時,旋律(右手最高音)再 +PIANO_POP.melody、右手內聲部與左手再 −PIANO_POP.accomp;
-   有段落記號就照 PIANO_SECTION 加段落力度(導歌從 from 漸強到 to),段落開頭一拍內接上;依織度估的段落大小聲(pianoAutoMacro)
-   改成 ×PIANO_POP.macroWithSections,以段落記號為主。譜上有力度記號時段落力度只用一半(以譜為主) */
-/* 2026-10 第二版(使用者:「感情不夠!」):POP909 是電腦編曲檔,大小聲保守;真人彈抒情流行段落差距大得多 →
-   段落力度 ×sectionGain 2、旋律起伏(往上漸強、往下漸弱)每半音 contour 0.6 力度、上限 ±contourMax 7(古典 0.35、±4) */
-const PIANO_POP = { melody: 4, accomp: 3, macroWithSections: 0.5, sectionGain: 2, contour: 0.6, contourMax: 6, contourNear: 1, contourFar: 2, lineWin: 1, lineGap: 3, lhFiller: 8, dip: 2, dipMax: 10, dipWin: 1 };
-const PIANO_SECTION = { intro: -7, verse: -1.5, prechorus: [0.5, 2], chorus: 2.5, bridge: 1.5, interlude: -2, solo: 0, outro: -5 };
+   做法(2026-10 力度規則整理後):非古典(classicalProbInfo().p < 0.5)時,主迴圈只決定角色(旋律/右手內聲部/左手,PIANO_POP.inner 是右手單音音型的內聲部再輕多少),
+   旋律與伴奏的整體差距由最後一道校正 popExposeAccomp(POP_EXPOSE.melGap)決定;有段落記號就照 PIANO_SECTION_MUL 乘段落倍率(唯一的段落大小聲來源),
+   依織度估的段落大小聲(pianoAutoMacro)改成 ×PIANO_POP.macroWithSections,以段落記號為主。
+   旋律起伏(往上漸強、往下漸弱)每半音 contour 0.6 力度、上限 ±contourMax 6(古典 0.35、±4)。
+   以前另有加法的段落表 PIANO_SECTION(×sectionGain 2)與 PIANO_POP.melody +4 / accomp −3、校正的 mel ×0.65,跟倍率/校正重複計算,已拿掉 */
+const PIANO_POP = { inner: 3, macroWithSections: 0.5, contour: 0.6, contourMax: 6, contourNear: 1, contourFar: 2, lineWin: 1, lineGap: 3, lhFiller: 8, dip: 2, dipMax: 10, dipWin: 1 };
 function sectionKind(text){
   const s = String(text || "").toLowerCase().replace(/[\s._\-–—]+/g, " ").trim();
   if (!s || s.length > 24) return null;
@@ -9108,14 +9107,15 @@ function sectionKind(text){
   if (/^(outro|ending|coda|tag|fine)\b|尾奏|結尾|结尾|アウトロ/.test(s)) return "outro";
   return null;
 }
-/* 記譜位置 → 段落力度(力度單位);段落開頭一拍內從前一段接過來,導歌整段線性漸強 */
-/* 段落的力度倍率(第三版,使用者:「前奏的旋律聽起來也很用力!不是音量,是音色」):Salamander 每種力度是分開錄的,
-   前奏/主歌旋律 60~71 用的是中強那幾層錄音(亮、有敲擊感),之後被壓縮器/限幅器拉成小音量,聽起來就是「小聲但每個音都很用力」。
-   輕的段落要真的用小力度彈才會換到柔和的錄音:最後的力度依段落乘倍率(伴奏同比例,旋律與伴奏的比例不變)。
-   〈甲乙丙丁〉旋律 前奏 60 → 45、主歌 71 → 57、導歌 74 → 60 漸強到 74、副歌 71 → 76。
-   導歌一開始就比主歌明顯(使用者 2026-10:「導歌也聽起來那麼弱」;以前從 0.81 = 主歌的大小開始,第 13~14 小節旋律 48/56 比主歌還輕):
-   導歌 0.9 → 1.02、段落力度 +0.5 → +2 */
-const PIANO_SECTION_MUL = { intro: 0.75, verse: 0.8, prechorus: [0.9, 1.02], chorus: 1.07, bridge: 1.0, interlude: 0.8, solo: 0.9, outro: 0.75 };
+/* 演奏位置 → 段落力度倍率(PIANO_SECTION_MUL);段落交界照 SECTION_JOIN 銜接,導歌整段漸強 */
+/* 段落的力度倍率(唯一的段落大小聲來源,2026-10 力度規則整理;使用者:「前奏的旋律聽起來也很用力!不是音量,是音色」):Salamander 每種力度是分開錄的,
+   輕的段落要真的用小力度彈才會換到柔和的錄音,所以段落大小聲用倍率(伴奏同比例,旋律與伴奏的比例不變),不用加減。
+   以前另有一張加法的段落表 PIANO_SECTION(×2:前奏 −14、主歌 −3、導歌 +1 → +4、副歌 +5、橋段 +3、間奏 −4、尾奏 −10),
+   兩個都在小節校正(bar 0.45)之前加,被壓掉一半再被高潮倍率放大回來,三者互相抵消;現在只留倍率,在 popDynamicsCalibrate 最後才乘(不被小節校正壓)。
+   數值照整理前〈甲乙丙丁〉各段落的最後力度對回來:旋律 前奏 52.4(整理前 50.9)、主歌 60.2/58.6(58.4/60.3)、導歌 74.3/77.6(71.7/73.2)、
+   副歌 87.2/88.1(87.6/85.9)、間奏 83.3(77.8)、尾奏 50.8(48.7)。導歌從 0.86 漸強到 0.98(使用者 2026-10:「導歌也聽起來那麼弱」)。
+   有力度記號時退讓:倍率開根號(以譜為主) */
+const PIANO_SECTION_MUL = { intro: 0.71, verse: 0.78, prechorus: [0.86, 0.98], chorus: 1.12, bridge: 1.0, interlude: 0.8, solo: 0.9, outro: 0.76 };
 /* 演奏順序的段落(使用者同意 2026-10,漏洞檢查第 3 項):段落記號是記譜位置,有反覆記號/D.S./Coda 時演奏順序不一樣——
    副歌反覆回主歌,以前結尾照樂譜順序往下一段(例如橋段)銜接。這裡照 events 的演奏順序切段:記譜位置落在哪個段落記號後面就算哪段,
    段落換了才開新的一段(同一段反覆回自己的開頭仍算同一段,導歌的漸強照樣一路推上去) */
@@ -9139,9 +9139,10 @@ function perfSections(){
    每全音符 23.5 個音,主歌 11~16、副歌 20~22)。做法(看樂譜結構,所有有段落記號的譜):每小節三個織度特徵(音符密度、每個起音幾個音、
    最高音高度,跟 pianoAutoMacro 同一組與權重)整首標準化後,段落平均 = 段落織度;再換成「主歌 = 0、副歌 = 1」的位置 g.tex
    (主歌、副歌都要有,而且副歌比主歌密 SECTION_TEX.minGap 以上,不然不調整)。SECTION_TEX.kinds 裡的段落(前奏/間奏/獨奏/尾奏)
-   的段落力度與倍率依 smoothstep(g.tex) 從表上的值往副歌的值內插(最多 reach):織度不比主歌密 → 照表上的柔和(前奏稀疏照舊輕);
-   跟副歌一樣密 → 接近副歌。只往上不往下 */
-const SECTION_TEX = { kinds: { intro: 1, interlude: 1, solo: 1, outro: 1 }, reach: 0.9, minGap: 0.3, w: [0.45, 0.25, 0.45] };
+   的段落倍率依 smoothstep(g.tex) 從表上的值往副歌的值內插(最多 reach):織度不比主歌密 → 照表上的柔和(前奏稀疏照舊輕);
+   跟副歌一樣密 → 接近副歌。只往上不往下。reach 0.9 → 0.7(2026-10 力度規則整理:段落倍率不再被小節校正壓一半,
+   而且織度也算進高潮倍率的能量,0.9 時〈甲乙丙丁〉間奏旋律 86.6 跟副歌 86.5 一樣大;0.7 → 間奏 83.3,介於主歌 60.2 與副歌 87.2 之間、接近副歌) */
+const SECTION_TEX = { kinds: { intro: 1, interlude: 1, solo: 1, outro: 1 }, reach: 0.7, minGap: 0.3, w: [0.45, 0.25, 0.45] };
 function sectionTexture(segs){
   for (const g of segs) g.tex = null;
   const bars = []; let cur = null, lastM = null, segI = 0;
@@ -9168,7 +9169,7 @@ function sectionTexture(segs){
   segs.forEach((g, i) => { const e = avg(segI2[i]); if (e != null) g.tex = (e - lo) / (hi - lo); });
 }
 function pianoSectionOffset(t, beatLen, table, barLen){
-  const G = perfSections(), T = table || PIANO_SECTION, none = table ? 1 : 0;
+  const G = perfSections(), T = table || PIANO_SECTION_MUL, none = 1;
   if (!G.length || t == null) return none;
   let i = 0; for (let j = 0; j < G.length; j++) if (G[j].t <= t + 1e-6) i = j;
   if (G[i].t > t + 1e-6) return none;
@@ -9293,6 +9294,8 @@ function harmonyOffsets(plan, t, beatLen){
    ⑤ legato:旋律音的下一個旋律音緊接著彈 → n.legatoNext(playPianoNote 晚一點放鍵)
    ⑧ breath:換氣處提早放鍵 → n.breath(換氣記號在 artic.breath;這裡標:圓滑線結束、下一個音接著彈;長音後面接弱起拍)
    ④ 換踏板的延遲在 PEDAL_CHANGE(制音器與踏板聲)
+   (2026-10 力度規則整理)這整段在 popDynamicsCalibrate 之後才做(古典不經過校正,順序對古典沒影響、逐位元相同),加減不再被小節校正與 contour 0.3 縮小;
+   ① 的「漸強中不收」也看段落倍率正在往上(導歌漸強、SECTION_JOIN 往下一段漸強)
    (第二批,使用者 2026-10 選的 4、6、7)
    ⑦ sync 切分音:在反拍起音、延續過下一拍的音(拍子層級;拍子裡更短的切分不算)稍微加重,旋律 +mel、其他 +other
    ⑥ fill 旋律長音時伴奏透出:旋律長音還按著、已經響 after 秒以上,這時起音的其他音(伴奏、內聲部、低音)慢慢浮上來,
@@ -9304,7 +9307,9 @@ function harmonyOffsets(plan, t, beatLen){
 const PHRASE_NUANCE = {
   decay:  { minSec: 1.0, k: 0.2, max: 5, floor: 0.8, leap: 5, maxDb: 18, follow: 0.5 },
   pickup: { max: 1.5, below: 3 },   // 2026-10 照真人收斂(使用者同意):(n)ASAP 弱起音幾乎不漸強、最後一個比重拍輕約 3 力度;以前最多 +5、只比重拍輕 1
-  repeat: { step: 1.5, max: 5 },
+  // 非古典(popStep):2026-10 力度規則整理把細部情感移到小節校正之後(以前被 contour 0.3 縮成約三分之一),同音反覆「往下一個音漸強」放大後
+  // 〈甲乙丙丁〉旋律同音反覆每下 +1.38(Pop1K7 真人 −0.29 [−0.92~0.44]、整理前 +0.81);非古典改照真人每下 −0.8(最多 max),→ +0.3。古典照舊(K310 開頭的 E 往下一個音推)
+  repeat: { step: 1.5, max: 5, popStep: -0.8 },
   legato: { frac: 0.15, min: 0.015, max: 0.045 },
   breath: { frac: 0.2, max: 0.12, minKeep: 0.6 },
   sync:   { mel: 4, other: 2 },
@@ -9354,14 +9359,17 @@ function pianoLineNuance(){
     if (afterLong) pickupStart.add(s);
     s = e;
   }
-  // ③ 同音反覆
+  // ③ 同音反覆(非古典照真人:popStep,見 PHRASE_NUANCE.repeat)
+  const popRep = classicalProbInfo().p < 0.5 ? P.repeat.popStep : null;
   for (let s = 0; s < mel.length; s++) {
     let e = s;
     while (e + 1 < mel.length && conn(e) && Math.round(mel[e + 1].m) === Math.round(mel[s].m)) e++;
     if (e > s) {
       // 方向:之後接著彈下一個音 → 往它推(漸強;不管往上或往下,反覆的音是在「走向」下一個音,例如莫札特 K310 開頭的 E 是越來越堅持,
       // 不是收);之後是休止符/曲子結束/新樂句的弱起拍 → 句子收尾,漸弱。總變化 = step × (L−1)、最多 max,平均分在整串上(長串不會一路累加後停在最大值)
-      const L = e - s + 1, dir = mel[e + 1] && conn(e) && !pickupStart.has(e + 1) ? 1 : -1, tot = Math.min(P.repeat.max, P.repeat.step * (L - 1));
+      const L = e - s + 1;
+      let dir = mel[e + 1] && conn(e) && !pickupStart.has(e + 1) ? 1 : -1, tot = Math.min(P.repeat.max, P.repeat.step * (L - 1));
+      if (popRep != null) { dir = Math.sign(popRep) || 1; tot = Math.min(P.repeat.max, Math.abs(popRep) * (L - 1)); }
       for (let j = 1; j < L; j++) if (!fixed(mel[s + j])) add[s + j] += dir * tot * j / (L - 1);
     }
     s = e;
@@ -9406,12 +9414,15 @@ function pianoLineNuance(){
   // 新的句子本來就重新開始,漸強是要越來越大聲
   const secStarts = perfSections().map(g => g.t);
   const lvl = x => pianoLevelAt(x.ev.srcT != null ? x.ev.srcT : x.t);
+  // 段落倍率正在往上(導歌漸強、SECTION_JOIN 往下一段漸強)也算漸強中(非古典有段落記號時才有段落倍率)
+  const secOn = classicalProbInfo().p < 0.5 && scoreSections.length > 0;
+  const secAt = x => secOn ? pianoSectionOffset(x.t, x.ev.beatLen, PIANO_SECTION_MUL, x.ev.barLen) : 1;
   const cutBy = new Array(mel.length).fill(0);
   for (let j = 0; j + 1 < mel.length; j++) {
     if (!conn(j)) continue;
     const a = mel[j], b = mel[j + 1], held = sec(a.t, a.n.durWhole);
     if (held < P.decay.minSec || fixed(b) || a.n.breath) continue;
-    if (secStarts.some(t0 => Math.abs(t0 - b.t) < (b.ev.beatLen || 0.25) - eps) || lvl(b) > lvl(a) + 0.005) continue;
+    if (secStarts.some(t0 => Math.abs(t0 - b.t) < (b.ev.beatLen || 0.25) - eps) || lvl(b) > lvl(a) + 0.005 || secAt(b) > secAt(a) + 0.002) continue;
     const target = a.n.pvel * Math.pow(10, -Math.min(P.decay.maxDb, pianoDecayDbPerSec(a.m) * held) / 40);
     if (b.n.pvel <= target) continue;
     let cut = Math.min(P.decay.max, P.decay.k * (b.n.pvel - target), b.n.pvel * (1 - P.decay.floor));
@@ -9495,30 +9506,35 @@ function pianoHammerLagMs(v){
   for (let i = 1; i < C.length; i++) if (v <= C[i][0]) return C[i - 1][1] + (C[i][1] - C[i - 1][1]) * (v - C[i - 1][0]) / (C[i][0] - C[i - 1][0]);
   return C[C.length - 1][1];
 }
-/* 非古典的力度幅度校正(試驗中,window.POP_CAL = { bar, mel, contour }):
-   bar = 小節平均力度離整首平均的幅度倍數(前後小節 1:2:1 平滑),mel = 同時彈的音裡最高音跟其他音差距的倍數,
-   contour = 旋律音離前後 8 個旋律音平均的幅度倍數;沒設 = 不改 */
+/* 非古典主迴圈的拍子輕重(POP_BEAT):只用在 popBeatProfile 管不到的拍子(3/4、6/8…);4/4、2/4 的各拍輕重整首算完後由 popBeatProfile 照真人調整
+   (2026-10 力度規則整理:兩個都做時消融只剩整體音量差,主迴圈這份是多餘的) */
 const POP_BEAT = Object.assign({ down: -2, back: 1.5, beat: 0, off: 0 }, window.POP_BEAT_OVERRIDE || {});
-/* 非古典的大小聲幅度照真人(使用者 2026-10「要接近真人」,預設開啟;window.POP_CAL 可改):Pop1K7 慢歌真人每小節大小聲 p90−p10 13.6
-   (四分位 6.4~17.6)、同時彈的最高音比其他大 6.7、旋律每半音力度 0.47;App 以前 44.9、10.7、1.34(真人的 2~3 倍,
-   是之前「感情不夠」把段落/旋律起伏加大後累積的)。bar 縮每小節平均離整首平均的距離、mel 縮同時彈的最高音與其他音的差、
-   contour 縮旋律音離前後 8 個旋律音平均的距離。取真人較有情感那一端(四分位上緣附近),不是平均值 */
-const POP_CAL_DEFAULT = { bar: 0.45, mel: 0.65, contour: 0.3 };   // bar 0.33 → 0.45(2026-10 動態放寬,使用者要求:參考的專業翻彈 LRA 7~15 LU;小節 p90−p10 13.5 → 約 17,真人四分位上緣)
+/* 非古典的大小聲幅度照真人(使用者 2026-10「要接近真人」,window.POP_CAL 可改):Pop1K7 慢歌真人每小節大小聲 p90−p10 13.6
+   (四分位 6.4~17.6)、旋律每半音力度 0.47。bar = 小節平均離整首平均的距離 × bar(只壓「自動推測」的那一份:不含段落倍率、
+   結尾倍率、譜上力度記號)、contour = 旋律音離前後 8 個旋律音平均的距離 × contour。2026-10 動態放寬 bar 0.33 → 0.45;
+   力度規則整理拿掉 mel(同時彈的最高音與其他的差 × 0.65:跟主迴圈的旋律 +4/伴奏 −3、popExposeAccomp 的 melGap 三個在管同一件事,
+   只留 melGap) */
+const POP_CAL_DEFAULT = { bar: 0.45, contour: 0.3 };
 /* 高潮段落彈重一點(POP_CLIMAX,使用者要求 2026-10:「副歌/高潮力度彈重一點,讓大聲段用到較亮的錄音層」;非古典):
-   專業翻彈的大聲段 4~8kHz(對 1kHz)約 −17~−21dB,App〈甲乙丙丁〉−26:流行曲力度整體偏輕,副歌也停在中強的錄音層(柔、暗)。
-   能量 = 校正前每小節平均力度(前後小節 1:2:1 平滑;已含段落記號、織度估的段落大小聲、旋律走向,沒有段落記號的譜也有),
-   高於整首第 lo 百分位的小節依 (能量 − p_lo)/(p_hi − p_lo) 的 smoothstep 乘 1 + lift(伴奏與旋律同比例),倍率再前後小節平滑兩次(約兩小節漸進,不會一小節一個台階)。
-   前奏、主歌(能量低)完全不動 */
+   專業翻彈的大聲段 4~8kHz(對 1kHz)約 −17~−21dB,App〈甲乙丙丁〉以前 −26:流行曲力度整體偏輕,副歌也停在中強的錄音層(柔、暗)。
+   能量 = 每小節「自動推測」的平均力度(popDynamicsCalibrate 的 r:織度、和聲、旋律走向,前後小節 1:2:1 平滑;**不含段落名稱的倍率與譜上力度記號**,
+   2026-10 力度規則整理:以前含段落表 ×2 與倍率,副歌因為名字被算兩次),高於整首第 lo 百分位的小節依 smoothstep 乘到 1 + lift、
+   低於第 qlo 百分位的依 smoothstep 乘到 1 − drop,倍率前後小節平滑兩次(約兩小節漸進)。跟小節校正 bar 同一份能量、同一個基準,一次算出每小節的目標。
+   有力度記號時倍率開根號 */
 const POP_CLIMAX = Object.assign({ lo: 60, hi: 92, lift: 0.24, qlo: 40, qbot: 5, drop: 0.10 }, window.POP_CLIMAX_OVERRIDE || {});
 /* 旋律每半音力度與旋律/其他差距照真人(第二輪,使用者 2026-10「要接近真人」;POP_EXPOSE):Pop1K7 慢歌真人「每個同時起音群的最高音(≥ C4,skyline)」
-   的力度,離前後 8 個最高音平均的高低 vs 音高,每半音 0.47(四分位 0.31~0.62);App〈甲乙丙丁〉0.94。查出來:旋律音自己的起伏只有 0.26,
-   多出來的是 skyline 裡混了 132/509 個「旋律休息時露在最上面的伴奏音」(多數是右手單音音型的內聲部,力度 61、音高比旋律低 8 半音),
-   旋律(76)與它們的力度差 14 ÷ 音高差 8 ≈ 角色差異本身,不是旋律走向。真人彈琴旋律休息時最上面的伴奏音不會這麼輕,而且整體旋律只比其他大 5.8(App 7.6)。
-   做法(非古典,看樂譜結構):① 「露在最上面的伴奏」= 同時起音的音裡最高、≥ C4、不是旋律音(n.pmel),往前後一小節內旋律音的平均力度靠 frac 倍的差距(最多 cap);
-   ② 旋律與其他的差距(以最高音群計)超過 melGap 時,旋律音一起往下收超出的部分(最多 melMaxCut) */
-const POP_EXPOSE = Object.assign({ frac: 0.25, cap: 4, melGap: 6.3, melMaxCut: 4 }, window.POP_EXPOSE_OVERRIDE || {});
+   的力度,離前後 8 個最高音平均的高低 vs 音高,每半音 0.47(四分位 0.31~0.62)。skyline 裡混了「旋律休息時露在最上面的伴奏音」(多數是右手單音音型的內聲部),
+   太輕的話旋律與它們的角色力度差會被量成「旋律起伏」。做法(非古典,看樂譜結構):① 「露在最上面的伴奏」= 同時起音的音裡最高、≥ C4、不是旋律音(n.pmel),
+   往前後一小節內旋律音的平均力度靠 frac 倍的差距(最多 cap);② 旋律(最高音群)與其他所有音的平均差距校正到 melGap(兩個方向,
+   只移單音的旋律〔singleOnly:和弦裡的旋律由 popChordShape 管形狀〕,每個音最多 melMaxUp / melMaxCut)。
+   2026-10 力度規則整理:這是旋律/伴奏整體差距唯一的一道校正(主迴圈的旋律 +4/伴奏 −3、校正的 mel ×0.65 拿掉),放在 popChordShape 與低音平衡之後
+   (它們會動到這個差距;以前放在前面,最後只剩 3.2,真人 5.8)。frac 0.25 → 0.4、cap 4 → 6、melGap 6.3 → 5.0:〈甲乙丙丁〉旋律−其他 4.8
+   (真人 5.8 [4.3~7.1])、群內最高−其他 7.5(6.7 [5.7~7.7])、旋律相鄰力度差標準差 7.6(7.3 [6.7~8.2]);melGap 6.3 時差距到得了 6.0,
+   但旋律相鄰差 10.1、上行/下行音 ±6(真人 ±2)跑出範圍 */
+const POP_EXPOSE = Object.assign({ frac: 0.4, cap: 6, melGap: 5.0, melMaxCut: 6, melMaxUp: 6, singleOnly: true }, window.POP_EXPOSE_OVERRIDE || {});
 /* 拍位置的力度照真人(POP_BEAT_PROFILE,偶數拍子〔4/4、2/4〕的非古典):Pop1K7 慢歌真人各拍平均力度相對整首:第 1 拍 −2.6、第 2 拍 +0.4、
-   第 3 拍 +0.1、第 4 拍 +0.9、反拍 +0.1(第 1 拍反而輕、後拍略重)。整首算完後各拍位置的平均往真人拉近 strength、每個位置最多 ±max */
+   第 3 拍 +0.1、第 4 拍 +0.9、反拍 +0.1(第 1 拍反而輕、後拍略重)。整首算完後各拍位置的平均往真人拉近 strength、每個位置最多 ±max;
+   每一輪後把整首平均拉回原本的值(2026-10 力度規則整理:以前反覆 12 輪讓整首一直往下沉,〈甲乙丙丁〉−0.75dB)。4/4、2/4 的拍子輕重只由這裡決定(主迴圈的 POP_BEAT 不再加) */
 const POP_BEAT_PROFILE = { target: [-2.6, 0.4, 0.1, 0.9], off: 0.1, strength: 0.7, max: 5 };
 function popBeatProfile(){
   if (classicalProbInfo().p >= 0.5) return;
@@ -9539,7 +9555,7 @@ function popBeatProfile(){
   // 各拍位置互相影響(整體平均 M 會跟著動;以前一輪只用舊的 M,反拍停在 +0.4~0.5):逐組用當下的 M 重算、反覆做到收斂。
   // 注意各組目標不可能同時達成(音符幾乎都分在這幾組裡,加權平均必須 ≈ 0;真人資料裡第 1 拍的音比例比較少),所以是折衷:反覆後約 第 1 拍 −2.2、反拍 +0.35
   // 每組總共最多動 ±max,往真人拉近的比例 strength(單位:離目標差距)
-  const acc = {};
+  const acc = {}, M0 = mean(allN);
   for (let it = 0; it < 12; it++) {
     for (const key of Object.keys(groups)) {
       const g = groups[key]; if (g.length < 10) continue;
@@ -9548,57 +9564,56 @@ function popBeatProfile(){
       const d = want - (acc[key] || 0); acc[key] = want;
       for (const n of g) n.pvel = Math.max(8, Math.min(124, n.pvel + d));
     }
+    // 每一輪後把整首平均拉回原本的值(只調各拍位置的相對輕重,不改整首音量;以前反覆 12 輪讓整首平均一直往下沉,〈甲乙丙丁〉−0.75dB)
+    const drift = mean(allN) - M0;
+    if (Math.abs(drift) > 1e-4) for (const n of allN) n.pvel = Math.max(8, Math.min(124, n.pvel - drift));
   }
 }
 function popDynamicsCalibrate(){
-  const c = window.POP_CAL || POP_CAL_DEFAULT;
-  if (!c || classicalProbInfo().p >= 0.5) return;
+  if (classicalProbInfo().p >= 0.5) return;
+  const c = Object.assign({}, POP_CAL_DEFAULT, window.POP_CAL || {});
   const notes = [];
   for (const ev of events) for (const n of ev.notes) if (!n.drum && n.freq && n.pvel != null) notes.push({ n, ev });
   if (!notes.length) return;
   const clampV = v => Math.max(8, Math.min(124, v));
-  const climax = popClimaxPlan(notes);   // 校正前的小節能量 → 高潮倍率(見 POP_CLIMAX)
-  if (c.bar != null && c.bar !== 1) {
-    const sum = new Map(), cnt = new Map();
-    for (const { n, ev } of notes) { sum.set(ev.mIdx, (sum.get(ev.mIdx) || 0) + n.pvel); cnt.set(ev.mIdx, (cnt.get(ev.mIdx) || 0) + 1); }
-    const bars = [...sum.keys()].sort((a, b) => a - b), bm = new Map(bars.map(b => [b, sum.get(b) / cnt.get(b)]));
-    const G = notes.reduce((s, x) => s + x.n.pvel, 0) / notes.length;
-    const sm = new Map(bars.map((b, i) => { const a = bm.get(bars[Math.max(0, i - 1)]), m = bm.get(b), z = bm.get(bars[Math.min(bars.length - 1, i + 1)]); return [b, (a + 2 * m + z) / 4]; }));
-    for (const { n, ev } of notes) n.pvel = clampV(n.pvel + (c.bar - 1) * (sm.get(ev.mIdx) - G));
-  }
+  const hasMarks = scoreDynMarks.length > 0;
+  // r = 「自動推測」的那一份力度:扣掉譜上力度記號造成的部分(mk;有力度記號時那是作曲者寫的大小聲,校正不壓它),
+  // 段落倍率與結尾倍率(_secF)還沒乘(段落名稱不算進高潮的能量,不會重複計算)
+  let lvlMean = 0; for (const x of notes) lvlMean += x.n._lvl || 0; lvlMean /= notes.length;
+  for (const x of notes) { x.mk = hasMarks ? (x.n._lvl || 0) - lvlMean : 0; x.r = x.n.pvel - x.mk; }
+  // ① 旋律音離前後 8 個旋律音平均的幅度 × contour(旋律起伏照真人)
   if (c.contour != null && c.contour !== 1) {
-    const mel = notes.filter(x => x.n.pmel), v0 = mel.map(x => x.n.pvel);
-    mel.forEach((x, i) => { let s = 0, k = 0; for (let j = Math.max(0, i - 8); j <= Math.min(mel.length - 1, i + 8); j++) { s += v0[j]; k++; } x.n.pvel = clampV(s / k + c.contour * (v0[i] - s / k)); });
+    const mel = notes.filter(x => x.n.pmel), v0 = mel.map(x => x.r);
+    mel.forEach((x, i) => { let s2 = 0, k = 0; for (let j = Math.max(0, i - 8); j <= Math.min(mel.length - 1, i + 8); j++) { s2 += v0[j]; k++; } x.r = s2 / k + c.contour * (v0[i] - s2 / k); });
   }
-  if (c.mel != null && c.mel !== 1) {
-    for (const ev of events) {
-      const ns = ev.notes.filter(n => !n.drum && n.freq && n.pvel != null);
-      if (ns.length < 2) continue;
-      const top = ns.reduce((a, b) => (b.freq > a.freq ? b : a)), others = ns.filter(n => n !== top);
-      const d = top.pvel - others.reduce((s, n) => s + n.pvel, 0) / others.length, sh = (c.mel - 1) * d / 2;
-      top.pvel = clampV(top.pvel + sh); for (const n of others) n.pvel = clampV(n.pvel - sh);
-    }
-  }
-  if (climax) for (const { n, ev } of notes) { const f = climax.get(ev.mIdx); if (f != null && f !== 1) n.pvel = clampV(n.pvel * f); }
-  popExposeAccomp();
-}
-function popClimaxPlan(notes){
-  const X = POP_CLIMAX;
-  if (!X || !(X.lift > 0)) return null;
+  // ② 小節大小聲:同一份能量(每小節 r 的平均,前後小節 1:2:1 平滑)同一個基準(整首平均 G),一次算出每小節的目標 =
+  //    (G + bar × (能量 − G)) × 高潮倍率(能量)。以前先用校正前的能量算高潮、再把校正後的值乘上去,兩步互相拉扯
   const sum = new Map(), cnt = new Map();
-  for (const { n, ev } of notes) { if (ev.mIdx == null) continue; sum.set(ev.mIdx, (sum.get(ev.mIdx) || 0) + n.pvel); cnt.set(ev.mIdx, (cnt.get(ev.mIdx) || 0) + 1); }
-  const bars = [...sum.keys()].sort((a, b) => a - b);
-  if (bars.length < 8) return null;
-  const bm = bars.map(b => sum.get(b) / cnt.get(b));
+  for (const { ev, r } of notes) { if (ev.mIdx == null) continue; sum.set(ev.mIdx, (sum.get(ev.mIdx) || 0) + r); cnt.set(ev.mIdx, (cnt.get(ev.mIdx) || 0) + 1); }
+  const bars = [...sum.keys()].sort((a, b2) => a - b2);
+  const bm = bars.map(b2 => sum.get(b2) / cnt.get(b2));
   const sm1 = a => a.map((v, i) => (a[Math.max(0, i - 1)] + 2 * v + a[Math.min(a.length - 1, i + 1)]) / 4);
-  const e = sm1(bm), srt = e.slice().sort((a, b) => a - b);
+  const e = sm1(bm), G = notes.reduce((s2, x) => s2 + x.r, 0) / notes.length;
+  const climax = popClimaxFactors(e), shift = new Map(), fac = new Map();
+  bars.forEach((b2, i) => { shift.set(b2, (c.bar - 1) * (e[i] - G)); fac.set(b2, climax ? Math.pow(climax[i], hasMarks ? 0.5 : 1) : 1); });   // 有力度記號時退讓:高潮倍率開根號
+  for (const x of notes) {
+    const sh = shift.get(x.ev.mIdx) || 0, f = fac.get(x.ev.mIdx) || 1;
+    x.n.pvel = clampV((x.r + sh + x.mk) * f * (x.n._secF || 1));
+  }
+}
+/* 高潮倍率(POP_CLIMAX):每小節能量(popDynamicsCalibrate 的 r,不含段落名稱、譜上力度記號)→ 倍率,前後小節平滑兩次 */
+function popClimaxFactors(e){
+  const X = POP_CLIMAX;
+  if (!X || !(X.lift > 0 || X.drop > 0) || e.length < 8) return null;
+  const sm1 = a => a.map((v, i) => (a[Math.max(0, i - 1)] + 2 * v + a[Math.min(a.length - 1, i + 1)]) / 4);
+  const srt = e.slice().sort((a, b) => a - b);
   const pct = q => srt[Math.min(srt.length - 1, Math.max(0, Math.round(q / 100 * (srt.length - 1))))];
   const lo = pct(X.lo), hi = pct(X.hi), ql = pct(X.qlo), qb = pct(X.qbot);
-  if (!(hi > lo + 1)) return null;
+  // 往上(lift)與往下(drop)各自判斷:大聲的小節彼此差不到 1 力度(整首很平)時不加重,但前奏/結尾明顯比較輕時照樣收(以前兩個一起取消)
+  const up = hi > lo + 1, down = ql > qb + 1;
+  if (!up && !down) return null;
   const ss = x => { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); };
-  let f = e.map(v => 1 + X.lift * ss((v - lo) / (hi - lo)) - (ql > qb + 1 ? (X.drop || 0) * ss((ql - v) / (ql - qb)) : 0));
-  f = sm1(sm1(f));
-  return new Map(bars.map((b, i) => [b, f[i]]));
+  return sm1(sm1(e.map(v => 1 + (up ? X.lift * ss((v - lo) / (hi - lo)) : 0) - (down ? (X.drop || 0) * ss((ql - v) / (ql - qb)) : 0))));
 }
 /* 露在最上面的伴奏音拉近旋律 + 旋律與其他的差距收到真人範圍(見 POP_EXPOSE) */
 function popExposeAccomp(){
@@ -9609,7 +9624,7 @@ function popExposeAccomp(){
   for (const ev of events) {
     let top = null;
     for (const n of ev.notes) if (!n.drum && n.freq && n.pvel != null && (!top || n.freq > top.freq)) top = n;
-    if (top && freqToMidi(top.freq) >= 60) tops.push({ n: top, t: ev.tWhole, w: ev.barLen > 0 ? ev.barLen : 1 });
+    if (top && freqToMidi(top.freq) >= 60) tops.push({ n: top, t: ev.tWhole, w: ev.barLen > 0 ? ev.barLen : 1, single: ev.notes.filter(n => !n.drum && n.freq && n.pvel != null).length === 1 });
   }
   const mels = tops.filter(x => x.n.pmel);
   if (mels.length < 8) return;
@@ -9626,8 +9641,12 @@ function popExposeAccomp(){
   for (const ev of events) for (const n of ev.notes) if (!n.drum && n.freq && n.pvel != null && !topSet.has(n)) rest.push(n.pvel);
   if (!rest.length) return;
   const mean = a => a.reduce((s, v) => s + v, 0) / a.length;
-  const gap = mean(tops.map(x => x.n.pvel)) - mean(rest), cut = Math.min(X.melMaxCut, gap - X.melGap);
-  if (cut > 0.05) for (const x of mels) x.n.pvel = clampV(x.n.pvel - cut * tops.length / mels.length);
+  // 兩個方向都校正(2026-10 力度規則整理:主迴圈的旋律 +4/伴奏 −3 與校正的 mel ×0.65 拿掉後,這是旋律/伴奏整體差距唯一的一道校正)
+  const gap = mean(tops.map(x => x.n.pvel)) - mean(rest), cut = Math.max(-X.melMaxUp, Math.min(X.melMaxCut, gap - X.melGap));
+  const movable = X.singleOnly ? mels.filter(x => x.single) : mels;
+  // 只移單音的旋律(和弦裡的旋律由 popChordShape 管形狀);每個音最多 melMaxUp / melMaxCut(單音旋律很少的譜不會一下子推很多)
+  const sh = movable.length ? Math.max(-X.melMaxUp, Math.min(X.melMaxCut, cut * tops.length / movable.length)) : 0;
+  if (Math.abs(sh) > 0.05) for (const x of movable) x.n.pvel = clampV(x.n.pvel - sh);
 }
 /* 像真人彈流行歌的三個細節(使用者 2026-10 選的:「有其他地方可以調整,更能夠像真人彈的感覺嗎?主要針對流行歌」)
    ① 和弦最低音不加重(pianoBassNotHeavy,非古典):Pop1K7(1747 首流行歌鋼琴翻彈)量到真人同時彈的音裡最低音比中間的音輕約 3 力度,
@@ -9737,7 +9756,7 @@ function pianoHandBalance(){
   const mLo = mean(lo), mHi = mean(hi), edb = 10 * Math.log10(e(lo) / e(hi));
   const k = Math.min(B.maxGain, (mHi + B.dv) / mLo, Math.pow(10, (B.edbMax - edb) / 20));
   if (!(k > 1.005)) return;
-  for (const n of lo) n.pvel = Math.max(1, Math.min(127, n.pvel * k));
+  for (const n of lo) n.pvel = Math.max(8, Math.min(124, n.pvel * k));
   console.log(`高低音區平衡:力度差 ${(mLo - mHi).toFixed(1)}、能量 ${edb.toFixed(1)}dB → 低音區力度 ×${k.toFixed(3)}`);
 }
 /* 旋律不要比同時彈的伴奏小聲(非古典,第四輪檢查 2026-10):同一個和弦裡旋律(n.pmel)比其他音小聲的少數例外——
@@ -9873,7 +9892,7 @@ function computePianoDynamics(){
   // 副歌兩次一樣的樂句力度完全一樣,整段沒有往哪裡推):每個段落(演奏順序)
   // ① 往段落的高潮推:高潮 = 段落後三分之二裡、前後一小節平滑後旋律最高的地方(一樣高取後面的);段落開頭 −arcLow×amp
   //    → 高潮 +amp → 段落結尾回到 0(S 形)② 段落裡重複的樂句(兩小節旋律跟前面一模一樣)第二次 +repeat、第三次以後 +2×repeat,
-  //    同樣的句子再唱一次會更投入,不會像複製貼上
+  //    同樣的句子再唱一次會更投入,不會像複製貼上。每段平均扣成 0(2026-10 力度規則整理):只留形狀,不偷加整段的音量
   const sectionShapes = () => {
     const out = events.map(() => 0), sm = x => { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); };
     for (const g of perfSections()) {
@@ -9904,6 +9923,10 @@ function computePianoDynamics(){
         const arc = t < tc ? -SECTION_ARC.arcLow * A + (1 + SECTION_ARC.arcLow) * A * sm((t - g.t) / Math.max(1e-6, tc - g.t)) : A - A * sm((t - tc) / Math.max(1e-6, g.end - tc));
         out[i] = arc + repB[Math.min(repB.length - 1, Math.floor((t - g.t) / bl + 1e-6))];
       }
+      // 平均為 0(每個音一樣權重):只留段落內的形狀,不偷加整段的音量(段落之間的大小聲只由段落倍率決定)
+      let sw = 0, sv = 0;
+      for (const i of idx) { const c2 = events[i].notes.filter(n => !n.drum && n.freq).length; sw += c2; sv += c2 * out[i]; }
+      if (sw > 0) { const mu = sv / sw; for (const i of idx) out[i] -= mu; }
     }
     return out;
   };
@@ -9977,7 +10000,7 @@ function computePianoDynamics(){
       // 非古典(POP_BEAT,使用者 2026-10「要接近真人」):Pop1K7 慢歌真人第 1 拍反而略輕、第 2、4 拍(後拍)略重、反拍不比正拍輕;
       // 古典的「第 1 拍最重、反拍輕」用在流行歌像在打拍子
       const PB = POP_BEAT, beatIdx = Math.round(bf), nBeats = ev.barLen > 0 ? Math.round(ev.barLen / ev.beatLen) : 4;
-      const beatTerm = (pop ? (ev.barPos < 1e-4 ? PB.down : frac < 0.02 ? (nBeats % 2 === 0 && beatIdx % 2 === 1 ? PB.back : PB.beat) : PB.off)
+      const beatTerm = (pop ? (nBeats === 4 || nBeats === 2 ? 0 : ev.barPos < 1e-4 ? PB.down : frac < 0.02 ? (nBeats % 2 === 0 && beatIdx % 2 === 1 ? PB.back : PB.beat) : PB.off)
         : ev.barPos < 1e-4 ? 3 : frac < 0.02 ? (beatIdx % 2 === 0 ? 1.5 : 0.5) : Math.abs(frac - 0.5) < 0.02 ? -1.5 : -3) * beatW;
       base += beatTerm; ev._beatTerm = beatTerm;
       const arch = (n, amp) => amp * (Math.sin(Math.PI * (((bar % n) + pos) / n)) - 2 / Math.PI);   // 平均為 0 的弧線
@@ -9990,7 +10013,6 @@ function computePianoDynamics(){
       let m = (auto.macro[macroBar] || 0) * (popSections ? PIANO_POP.macroWithSections : 1) + (ho ? archW * ho.v : archW * (arch(4, 4) + arch(8, 5)));
       if (secShape) m += archW * secShape[evIdx.get(ev)];   // 段落內的起伏:往段落高潮推、重複的樂句第二次更投入(SECTION_ARC)
       ev._chord = ho ? ho.chord : null;
-      if (popSections) base += pianoSectionOffset(ev.tWhole, ev.beatLen, null, ev.barLen) * PIANO_POP.sectionGain * (hasMarks ? 0.5 : 1);
       if (fromEnd < PIANO_END.bars && !popEnd) m += endContour(bar + pos);
       base += m * auto.scale;
     }
@@ -10012,33 +10034,36 @@ function computePianoDynamics(){
           // 雙音/和弦也一樣(使用者反映 2026-10:第 51 小節 B♭4+D5 的 D「還是太強、很不舒服」——旋律在 G5/A5,這個雙音是夾在中間的伴奏,
           // 以前只有單音才判斷,和弦最上面一律當旋律加重)
           if (n === top && pop && ((ns.length === 1 && isInnerSingle(ev, m)) || heldAbove(ev, m, st))) {
-            v -= 5 + PIANO_POP.accomp; n._inner = true;   // 單音音型裡的伴奏音(見 isInnerSingle)
+            v -= 5 + PIANO_POP.inner; n._inner = true;   // 單音音型裡的伴奏音(見 isInnerSingle)
           } else if (n === top) {
             // 有和弦記號的非古典:和弦最上面的旋律音跟單音旋律一樣加 4(下面已經多一個音、本來就比較響,不用再多打;
             // 以前 +6,雙音的旋律音比前後單音重 2,第 51 小節 B♭4+D5 的 D 特別突出)
             const topB = ns.length > 1 && !hplan ? 6 : 4;
-            v += topB + (pop ? PIANO_POP.melody : PIANO_CLASSIC_VOICE.melody);
+            v += topB + (pop ? 0 : PIANO_CLASSIC_VOICE.melody);   // 非古典的旋律/伴奏整體差距由 popExposeAccomp 最後校正(POP_EXPOSE.melGap)
             if (hplan) n._micro = (ev._beatTerm || 0) + topB + (n.durWhole >= 0.5 ? 2 : n.durWhole <= 1 / 16 + 1e-6 ? -2 : 0);
             v += melodyDip(ev, m);   // 旋律凹處放輕(通用)
             if (pop) v += popMelodyContour(ev);   // 非古典:旋律整體的走向(平滑),見 popMelodyContour
             else if (melodyHist.length) v += Math.max(-4, Math.min(4, (m - melodyHist.reduce((s, x) => s + x, 0) / melodyHist.length) * 0.35));   // 古典:跟前 8 個旋律音比
             if (hplan && ev._chord) v += melodyChordLean(ev, m);   // 旋律跟和弦:非和弦音加重、解決音放輕(有和弦記號時)
             melodyHist.push(m); if (melodyHist.length > 8) melodyHist.shift();
-          } else v -= 5 + (pop ? PIANO_POP.accomp : PIANO_CLASSIC_VOICE.accomp);
+          } else v -= 5 + (pop ? 0 : PIANO_CLASSIC_VOICE.accomp);
         } else {
-          v -= 4 + (pop ? PIANO_POP.accomp : PIANO_CLASSIC_VOICE.accomp);
+          v -= 4 + (pop ? 0 : PIANO_CLASSIC_VOICE.accomp);
           if (pop && ns.length === 1 && isLHFiller(ev, m)) v -= PIANO_POP.lhFiller;   // 左手夾在中間的伴奏音(isLHFiller)
           if (ns.length > 1) v += n === bottom ? 3 : -3;
         }
         if (n.durWhole >= 0.5) v += 2; else if (n.durWhole <= 1 / 16 + 1e-6) v -= 2;
         v += (seededRand01(k * 7.31 + m * 0.137) - 0.5) * 5;
-        let secMul = 1;
-        if (popSections) { secMul = Math.pow(pianoSectionOffset(ev.tWhole, ev.beatLen, PIANO_SECTION_MUL, ev.barLen), hasMarks ? 0.5 : 1); v *= secMul; }   // 段落力度倍率(PIANO_SECTION_MUL)
-        if (popEnd) { const f = popEnd(ev.tWhole); v *= f; secMul *= f; }
-        if (n._micro != null) { n._mul = secMul; n._t = ev.tWhole; n._bl = ev.barLen > 0 ? ev.barLen : 1; }
+        // 非古典:段落倍率、高潮、小節大小聲校正與重音都在 popDynamicsCalibrate / applyAccentRatios 一起算(只算一次,不互相拉扯),
+        // 這裡只記下來:_secF = 段落倍率,_lvl = 譜上力度記號造成的那一份(校正不壓它)。結尾倍率(popEndFade)照舊乘在這裡(跟整理前一樣的幅度)
+        let secF = 1, endF = 1;
+        if (popSections) secF = Math.pow(pianoSectionOffset(ev.tWhole, ev.beatLen, PIANO_SECTION_MUL, ev.barLen), hasMarks ? 0.5 : 1);   // 有力度記號時退讓:倍率開根號
+        if (popEnd) { endF = popEnd(ev.tWhole); v *= endF; }
+        if (n._micro != null) { n._mul = endF; n._t = ev.tWhole; n._bl = ev.barLen > 0 ? ev.barLen : 1; }
         n._v0 = v; n._accDb = accDb - momDb; n._momDb = momDb; n._role = rh ? (n === top && !n._inner ? 1 : 2) : 3; delete n._inner;
+        if (pop) { n._secF = secF; n._lvl = 150 * pianoLevelAt(ev.srcT); }
         n.pmel = n._role === 1;   // 旋律音(pianoLineNuance 用)
-        n.pvel = Math.max(8, Math.min(124, v * Math.pow(10, accDb / 40)));
+        n.pvel = Math.max(8, Math.min(124, v * (pop ? 1 : Math.pow(10, accDb / 40))));   // 非古典的重音最後才加(applyAccentRatios)
         n.pdt = 0;   // 同時的音誰先誰後:最後照力度算(pianoVelocityAsync)
       }
     }
@@ -10056,45 +10081,56 @@ function computePianoDynamics(){
         while (hi < mel.length && mel[hi]._t <= n._t + w + 1e-6) hi++;
         let sm = 0; for (let j = lo; j < hi; j++) sm += mel[j]._micro;
         const d = (gMean - sm / (hi - lo)) * n._mul;
-        n._v0 += d; n.pvel = Math.max(8, Math.min(124, n._v0 * Math.pow(10, (n._accDb + n._momDb) / 40)));
+        n._v0 += d; n.pvel = Math.max(8, Math.min(124, n._v0 * (pop ? 1 : Math.pow(10, (n._accDb + n._momDb) / 40))));
       }
     }
     for (const n of mel) delete n._micro, delete n._mul, delete n._t, delete n._bl;
   }
   // 重音照比例(使用者要求,2026-10):重音 = 附近一般音(同一手、同角色〔旋律/內聲部/左手〕、前後半小節內〔沒有就一小節、兩小節〕、沒有重音或 sf)
   // 平均力度 × 10^(dB/40)。以前是乘在這個音自己的力度上,而這個音本身就有拍子輕重、旋律起伏、亂數(±3~5 力度),
-  // 跟重音(+1dB ≈ 力度 +6%)一樣大:同樣的小節第一次出現重音聽不出來、第二次碰到比較大的亂數就突出
+  // 跟重音(+1dB ≈ 力度 +6%)一樣大:同樣的小節第一次出現重音聽不出來、第二次碰到比較大的亂數就突出。
+  // 古典在主迴圈之後馬上算(以 _v0 為準);非古典放在所有校正之後最後才算(以當下的力度為準):以前算完重音後小節校正、旋律起伏縮放
+  // (contour 0.3)、旋律/伴奏校正…又把重音壓掉(B_acc 測試譜最後只剩 +0.05dB)
   const pn = [];
   for (const ev of events) for (const n of ev.notes) if (n._v0 != null) pn.push({ t: ev.tWhole, w: ev.barLen > 0 ? ev.barLen : 1, n });
-  const byRole = {};
-  for (const x of pn) (byRole[(x.n.staff || 1) * 10 + x.n._role] = byRole[(x.n.staff || 1) * 10 + x.n._role] || []).push(x);
-  for (const seq of Object.values(byRole)) seq.forEach((x, i) => {
-    const n = x.n;
-    if (n._accDb) {
+  const applyAccentRatios = cur => {
+    const val = n => cur ? n.pvel : n._v0;
+    const byRole = {};
+    for (const x of pn) (byRole[(x.n.staff || 1) * 10 + x.n._role] = byRole[(x.n.staff || 1) * 10 + x.n._role] || []).push(x);
+    const upd = [];
+    for (const seq of Object.values(byRole)) seq.forEach((x, i) => {
+      const n = x.n;
+      if (!(cur ? n._accDb || n._momDb : n._accDb)) return;
       let ref = null;
       for (const span of [x.w / 2, x.w, 2 * x.w]) {
         let sum = 0, cnt = 0;
         for (const dir of [-1, 1]) for (let j = i + dir; j >= 0 && j < seq.length && Math.abs(seq[j].t - x.t) <= span + 1e-6; j += dir) {
-          const o = seq[j].n; if (!o._accDb && !o._momDb) { sum += o._v0; cnt++; }
+          const o = seq[j].n; if (!o._accDb && !o._momDb) { sum += val(o); cnt++; }
         }
         if (cnt) { ref = sum / cnt; break; }
       }
       // 這個音本來就比附近大聲(例如小節第一拍)時以它自己為準,加了重音不會反而變小聲
-      if (ref != null) n.pvel = Math.max(8, Math.min(124, Math.max(ref, n._v0) * Math.pow(10, (n._accDb + n._momDb) / 40)));
-    }
-  });
-  pianoLineNuance();
-  popDynamicsCalibrate();
-  popChordShape();   // 同時彈的音上下力度差照真人(非古典)
-  popSingleBalance();   // 單音的低音與旋律力度差照真人(非古典)
-  // 低音區整體拉高與和弦最低音收輕會互相影響(先後哪個都會讓另一個偏掉),交替做兩次讓兩項都落在真人範圍
-  if (pop) for (let k = 0; k < 2; k++) { pianoHandBalance(); pianoBassNotHeavy(); }
-  popBeatProfile();   // 拍位置放在低音區平衡之後(平衡會動低音區的力度、連帶改變各拍位置的平均)
-  popMelodyOnTop();   // 最後一道:旋律不要比同時彈的伴奏小聲(各條規則的亂數與加減疊起來的少數例外)
+      const own = val(n);
+      if (ref != null) upd.push([n, Math.max(8, Math.min(124, Math.max(ref, own) * Math.pow(10, (n._accDb + n._momDb) / 40)))]);
+      else if (cur) upd.push([n, Math.max(8, Math.min(124, own * Math.pow(10, (n._accDb + n._momDb) / 40)))]);
+    });
+    for (const [n, v] of upd) n.pvel = v;
+  };
+  if (!pop) applyAccentRatios(false);
+  popDynamicsCalibrate();   // 非古典:段落倍率 + 小節大小聲校正 + 高潮 + 旋律起伏縮放(一次算完,見 popDynamicsCalibrate)
+  pianoLineNuance();        // 細部情感放在校正之後(以前在前面,被 contour 0.3 縮成約三分之一)
+  popChordShape();          // 同時彈的音上下力度差照真人(非古典)
+  // 單音低音/旋律 → 低音區整體 → 和弦最低音不加重,各做一次(以前低音區整體與最低音交替做兩次;popSingleBalance 已經把低音區拉回真人範圍,
+  // 低音區整體多半不用動,只當保護線;最低音放最後,它的規則一定成立)
+  if (pop) { popSingleBalance(); pianoHandBalance(); pianoBassNotHeavy(); }
+  popExposeAccomp();        // 旋律與伴奏的整體差距(唯一的一道校正,POP_EXPOSE.melGap;放在和弦形狀、低音平衡之後,它們會動到這個差距)
+  popBeatProfile();         // 拍位置放在低音區平衡之後(平衡會動低音區的力度、連帶改變各拍位置的平均)
+  popMelodyOnTop();         // 安全網:旋律不要比同時彈的伴奏小聲
+  if (pop) applyAccentRatios(true);   // 非古典的重音最後才加(見上面)
   pianoVelocityAsync();
   pianoWideChordRoll(multiStaff);
   if (pop) pianoHandDrift(multiStaff);
-  for (const x of pn) delete x.n._v0, delete x.n._accDb, delete x.n._momDb, delete x.n._role;
+  for (const x of pn) delete x.n._v0, delete x.n._accDb, delete x.n._momDb, delete x.n._role, delete x.n._secF, delete x.n._lvl;
 }
 
 /* 這首曲子需要哪些(音 × 力度層),以及每個最長要響多久(截短時用) */
