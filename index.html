@@ -9036,8 +9036,8 @@ function popEndFade(hasMarks){
   let len = END_SHAPE.bars * bl, ritEnd = false;
   for (const r of scoreTempoSpans || []) if (r.kind === "rit" && r.end >= srcEnd - bl / 4) { ritEnd = true; if (srcEnd - r.start <= END_SHAPE.maxBars * bl + 1e-6) len = Math.max(len, srcEnd - r.start); }
   const t1 = last.tWhole, t0 = t1 - len;   // 到最後一個起音(最後的和弦)剛好到目標
-  if (hasMarks && scoreDynMarks.some(d => d.t >= srcEnd - len - 1e-6)) return null;
-  if ((scoreWedges || []).some(w => w.end > srcEnd - len + 1e-6)) return null;
+  if (hasMarks && scoreDynMarks.some(d => d.t >= srcEnd - len - 1e-6 && d.t <= srcEnd + 1e-6)) return null;
+  if ((scoreWedges || []).some(w => w.end > srcEnd - len + 1e-6 && w.start < srcEnd - 1e-6)) return null;
   const pit = ev => ev.notes.filter(n => !n.drum && n.freq);
   const multi = events.some(ev => pit(ev).some(n => (n.staff || 1) > 1));
   const rhTop = ev => { const r = pit(ev).filter(n => !multi || (n.staff || 1) === 1); return r.length ? Math.max(...r.map(n => freqToMidi(n.freq))) : null; };
@@ -9590,18 +9590,21 @@ function popBeatProfile(){
   // 各拍位置互相影響(整體平均 M 會跟著動;以前一輪只用舊的 M,反拍停在 +0.4~0.5):逐組用當下的 M 重算、反覆做到收斂。
   // 注意各組目標不可能同時達成(音符幾乎都分在這幾組裡,加權平均必須 ≈ 0;真人資料裡第 1 拍的音比例比較少),所以是折衷:反覆後約 第 1 拍 −2.2、反拍 +0.35
   // 每組總共最多動 ±max,往真人拉近的比例 strength(單位:離目標差距)
+  // ±max 是「每組實際動了多少」(含每輪把整首平均拉回的共同位移 cum;2026-10 檢查:以前只限制自己那一份,拉回的部分另外累加,
+  // 實際動到 −6.2〔抒情測試譜第 1 拍〕、−8.0〔全是和弦的測試譜反拍:旋律一下一下差 20〕)
   const acc = {}, M0 = mean(allN);
+  let cum = 0;
   for (let it = 0; it < 12; it++) {
     for (const key of Object.keys(groups)) {
       const g = groups[key]; if (g.length < 10) continue;
-      const tgt = key === "off" ? P.off : P.target[+key];
-      const want = Math.max(-P.max, Math.min(P.max, (acc[key] || 0) + (tgt - (mean(g) - mean(allN))) * P.strength));
-      const d = want - (acc[key] || 0); acc[key] = want;
+      const tgt = key === "off" ? P.off : P.target[+key], eff = (acc[key] || 0) - cum;
+      const want = Math.max(-P.max, Math.min(P.max, eff + (tgt - (mean(g) - mean(allN))) * P.strength));
+      const d = want - eff; acc[key] = (acc[key] || 0) + d;
       for (const n of g) n.pvel = Math.max(8, Math.min(124, n.pvel + d));
     }
     // 每一輪後把整首平均拉回原本的值(只調各拍位置的相對輕重,不改整首音量;以前反覆 12 輪讓整首平均一直往下沉,〈甲乙丙丁〉−0.75dB)
     const drift = mean(allN) - M0;
-    if (Math.abs(drift) > 1e-4) for (const n of allN) n.pvel = Math.max(8, Math.min(124, n.pvel - drift));
+    if (Math.abs(drift) > 1e-4) { cum += drift; for (const n of allN) n.pvel = Math.max(8, Math.min(124, n.pvel - drift)); }
   }
 }
 function popDynamicsCalibrate(){
