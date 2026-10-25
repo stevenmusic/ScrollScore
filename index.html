@@ -7326,6 +7326,51 @@ function popPushApply(base, wf){
     prevEnd = g.tB;
   }
 }
+/* 快速音型的拍內鬆緊(POP_MICRO,使用者 2026-10:「鬆緊的部分幫我調整,避免像機器人」;只用在非古典,彈性速度開著才有)。
+   使用者的真人錄音(6/8 十六分音符)間隔變異係數 13.5%、App 2.4%(彈性速度是平滑的速度曲線,一拍裡每個十六分音符一樣長)。
+   規則:一拍裡從拍頭開始、等距離的起音 ≥ minNotes 個(間隔 ≤ 半拍),而且下一個起音剛好在下一拍頭 → 這一拍裡每個間隔乘一個長度倍率,
+   再整拍等比例縮放讓這一拍總長不變(每個拍頭、重拍、段落交界、POP_PUSH 算好的時間都不動,不會累積,也不是「突然加快」——
+   平均速度不變,只是拍內長短不一)。倍率(log):拍頭 head(小節第一拍 barHead)、拍內最後一個音 last(接下一小節的重拍時 barLast,
+   「進重拍前那個音拉長、之後往前推」)+ 常態亂數 sd(種子 = 演奏位置,同樣的播放結果一樣,反覆的第二遍跟第一遍不同)。
+   數字照 (n)ASAP 834 份逐音對照(十六分音符單音音型,間隔 ÷ 前後 7 個間隔的中位數,中位數):拍頭 +0~1%(小節第一拍 +1.2~2.4%)、
+   拍內最後一個 +1~3%(進下一小節 +5~6.5%),整體 log 標準差 14.7%(含 MIDI 鋼琴與人手的雜訊);使用者錄音 13.5% 含起步不穩,
+   目標取 5~8%。幅度照 popTempoScale 縮(快歌較穩);範圍裡有延長記號/rit.(wf ≠ 1)或搖擺的拍不動 */
+const POP_MICRO = Object.assign({ head: 0.01, barHead: 0.02, last: 0.025, barLast: 0.06, sd: 0.045, minNotes: 3 }, window.POP_MICRO_OVERRIDE || {});
+function popMicroTiming(mult, wf){
+  const X = POP_MICRO;
+  if (!X || !(X.sd > 0 || X.head || X.last || X.barHead || X.barLast)) return;
+  const n = events.length, T = events.map(ev => ev.tWhole), eps = 1e-6;
+  const sc = popTempoScale().scale;
+  const C = w => wholeToSec(w) * bpm() / 240;
+  const gauss = seed => { let a = 0; for (let k = 0; k < 3; k++) a += seededRand01(seed + k * 17.31); return Math.max(-2.5, Math.min(2.5, (a - 1.5) * 2)); };
+  for (let i = 0; i < n;) {
+    const ev = events[i], L = ev.beatLen;
+    if (ev.barPos == null || !(L > 0) || Math.abs(ev.barPos / L - Math.round(ev.barPos / L)) > 1e-3) { i++; continue; }
+    let j = i + 1; while (j < n && T[j] > T[i] - eps && T[j] < T[i] + L - eps) j++;
+    const cnt = j - i, d = L / cnt, i0 = i;
+    i = j;
+    if (cnt < X.minNotes || d > L / 2 + eps || j >= n || Math.abs(T[j] - (T[i0] + L)) > 1e-6) continue;
+    let ok = true;
+    for (let k = i0; k < j && ok; k++) {
+      if (Math.abs(T[k] - (T[i0] + (k - i0) * d)) > 1e-6 || Math.abs(wf[k] - 1) > 1e-6 || Math.abs(swingWarp(T[k]) - T[k]) > 1e-9) ok = false;
+      if (!events[k].notes.some(x => !x.drum && x.freq)) ok = false;
+    }
+    if (!ok || Math.abs(swingWarp(T[j]) - T[j]) > 1e-9) continue;
+    const barHead = ev.barPos < 1e-4, nextBar = events[j].barPos != null && events[j].barPos < 1e-4;
+    const w = [], e = [];
+    for (let k = i0; k < j; k++) {
+      w.push((C(T[k + 1]) - C(T[k])) / mult[k]);
+      let x = X.sd * gauss(T[k] * 131.71 + 7.7);
+      if (k === i0) x += barHead ? X.barHead : X.head;
+      if (k === j - 1) x += nextBar ? X.barLast : X.last;
+      e.push(Math.exp(x * sc));
+    }
+    const sw = w.reduce((a, b) => a + b, 0), swe = w.reduce((a, b, k) => a + b * e[k], 0);
+    if (!(sw > 0) || !(swe > 0)) continue;
+    const s = sw / swe;
+    for (let k = i0; k < j; k++) mult[k] /= e[k - i0] * s;
+  }
+}
 /* 每個事件的速度倍率 → 等效全音符座標表(rubatoMap / tempoWordMap 共用) */
 function warpMapFrom(mult){
   const n = events.length, T = events.map(ev => ev.tWhole), map = [];
@@ -7384,6 +7429,7 @@ function buildRubatoMap(){
     if (wf[i] < 1) mult[i] = Math.min(mult[i], wf[i]); else if (wf[i] > 1) mult[i] = Math.max(mult[i], wf[i]);
   }
   if (popBreath) popPushApply(mult, wf);   // 非古典:漸強處往前推(時間剛好抵消,見 POP_PUSH)
+  if (popBreath) popMicroTiming(mult, wf);   // 非古典:快速音型的拍內鬆緊(每拍總長不變,見 POP_MICRO)
   rubatoMap = warpMapFrom(mult);
 }
 
@@ -9255,6 +9301,7 @@ function pianoEndContour(nb, multiStaff){
    依織度估的段落大小聲(pianoAutoMacro)改成 ×PIANO_POP.macroWithSections,以段落記號為主。
    旋律起伏(往上漸強、往下漸弱)每半音 contour 0.6 力度、上限 ±contourMax 6(古典 0.35、±4)。
    以前另有加法的段落表 PIANO_SECTION(×sectionGain 2)與 PIANO_POP.melody +4 / accomp −3、校正的 mel ×0.65,跟倍率/校正重複計算,已拿掉 */
+const POP_FIGURE = Object.assign({ minNotes: 3 }, window.POP_FIGURE_OVERRIDE || {});   // 重複音型延續內聲部的判斷(computePianoDynamics)
 const PIANO_POP = { inner: 3, macroWithSections: 0.5, contour: 0.6, contourMax: 6, contourNear: 1, contourFar: 2, lineWin: 1, lineGap: 3, lhFiller: 8, dip: 2, dipMax: 10, dipWin: 1 };
 function sectionKind(text){
   const s = String(text || "").toLowerCase().replace(/[\s._\-–—]+/g, " ").trim();
@@ -10188,6 +10235,50 @@ function pianoHandBalance(){
    例如旋律 A5 64、同一和弦的 A4 66。伴奏比旋律大聲聽起來是「旋律被蓋住」,真人不會這樣(同時彈的最高音比其他大 6.7)。
    其他音超過「旋律 − margin」時,旋律往上補超出的 melShare 倍(最多 melMax;預設補到剛好比最大聲的伴奏大 margin),補不夠的部分其他音收到旋律 − margin;
    沒有超過的完全不動。旋律往上補而不是伴奏往下收:少數幾個和弦的伴奏內聲部起伏(innerSd)與真人的分布不變 */
+/* 快速單音音型的拍點比較重(POP_RUN_HEAD,使用者 2026-10:「每組開頭 C♯6 本來就應該比較大聲,因為在拍點上,在拍點上的音本來就會比較重」;
+   只用在非古典)。以前拍子輕重只有 popBeatProfile:它照「各角色跟附近同角色比」把每個拍位置拉到 Pop1K7 真人的平均(旋律第 1~4 拍 ≈ 0),
+   一串十六分音符裡拍頭的旋律音跟拍內的旋律音一樣重(6/8 那首 C♯6 71~77、B5 73~75),旋律起伏(contour 0.3)與亂數再把它抹平。
+   規則(看樂譜結構):同一手在一拍裡從拍頭開始、等距離的單音起音 ≥ minNotes 個(間隔 ≤ 半拍:十六分音符、三連音、6/8 的六個十六分音符…),
+   拍頭那個音至少比這一拍裡「同角色」的其他音平均重 gap;拍頭是旋律時也至少比這一拍所有其他音平均重 gap;只往上加、最多 cap
+   (照 (n)ASAP 834 份逐音對照:十六分音符單音音型的拍頭比拍內其他音平均重 3.0 力度〔中位數 2.7〕;Pop1K7 自動轉譜 +0.7,轉譜雜訊大)。
+   一拍四個音(4/4 的十六分音符)時拍內的第三個音(八分音符位置)也比兩旁同角色的音重 half(Pop1K7 +1.2),最多 halfCap。
+   伴奏內聲部照舊輕(只跟同角色比,拍頭是內聲部時不會被拉到旋律那麼重) */
+const POP_RUN_HEAD = Object.assign({ gap: 3, cap: 6, minNotes: 3, half: 1.5, halfCap: 3 }, window.POP_RUN_HEAD_OVERRIDE || {});
+function popRunBeatHeads(multiStaff){
+  if (classicalProbInfo().p >= 0.5 || !POP_RUN_HEAD) return;
+  const P = POP_RUN_HEAD, eps = 1e-6, clampV = v => Math.max(8, Math.min(124, v));
+  const hands = {};
+  for (const ev of events) {
+    const by = {};
+    for (const n of ev.notes) if (!n.drum && n.freq && n.pvel != null && n._role != null) { const h = multiStaff ? (n.staff || 1) : 1; (by[h] = by[h] || []).push(n); }
+    for (const h in by) (hands[h] = hands[h] || []).push({ t: ev.tWhole, ev, ns: by[h] });
+  }
+  const mean = a => a.reduce((x, y) => x + y, 0) / a.length;
+  for (const seq of Object.values(hands)) {
+    for (let i = 0; i < seq.length;) {
+      const ev = seq[i].ev, L = ev.beatLen;
+      if (ev.barPos == null || !(L > 0) || Math.abs(ev.barPos / L - Math.round(ev.barPos / L)) > 1e-3) { i++; continue; }
+      let j = i; const grp = [];
+      while (j < seq.length && seq[j].t >= seq[i].t - eps && seq[j].t < seq[i].t + L - eps) grp.push(seq[j++]);
+      i = Math.max(i + 1, j);
+      if (grp.length < P.minNotes || grp.some(x => x.ns.length !== 1 || x.ev.arpCount)) continue;
+      const d = grp[1].t - grp[0].t;
+      if (!(d > eps) || d > L / 2 + eps || Math.abs(d * grp.length - L) > 1e-4) continue;
+      if (grp.some((x, k) => Math.abs(x.t - (grp[0].t + k * d)) > 1e-4 || x.ns[0].durWhole > L / 2 + eps)) continue;
+      const head = grp[0].ns[0], rest = grp.slice(1).map(x => x.ns[0]);
+      const same = rest.filter(n => n._role === head._role);
+      let target = -Infinity;
+      if (same.length) target = mean(same.map(n => n.pvel)) + P.gap;
+      if (head._role === 1) target = Math.max(target, mean(rest.map(n => n.pvel)) + P.gap);
+      const lift = Math.min(P.cap, target - head.pvel);
+      if (lift > 0) head.pvel = clampV(head.pvel + lift);
+      if (grp.length === 4) {
+        const q = grp[2].ns[0], nb = [grp[1].ns[0], grp[3].ns[0]].filter(n => n._role === q._role);
+        if (nb.length) { const up = Math.min(P.halfCap, mean(nb.map(n => n.pvel)) + P.half - q.pvel); if (up > 0) q.pvel = clampV(q.pvel + up); }
+      }
+    }
+  }
+}
 const POP_ONTOP = Object.assign({ margin: 1, melShare: 1, melMax: 4 }, window.POP_ONTOP_OVERRIDE || {});
 function popMelodyOnTop(){
   if (classicalProbInfo().p >= 0.5 || !POP_ONTOP) return;
@@ -10431,6 +10522,34 @@ function computePianoDynamics(){
     for (let j = i + 1; j < events.length && events[j].tWhole <= t + w + 1e-6; j++) if (lhLows[j] != null) mn = Math.min(mn, lhLows[j]);
     return m - mn >= PIANO_POP.lineGap;
   };
+  // 右手單音音型的內聲部,重複的音型延續角色(POP_FIGURE,使用者 2026-10 回報:6/8 的 C♯6 A5 B5 G♯5 A5 E5 每拍重複,
+  // 前三組的 A5/G♯5/E5 照 isInnerSingle 判成內聲部 57~65,第 2 小節最後一組後面接新音型,往後一拍內最高只高 2 半音,
+  // 「前後兩邊都要有更高的音」不成立,A5、G♯5 被當成旋律跳到 77~79)。一拍裡的右手起音(位置 + 最高音 + 單音/和弦)
+  // 跟前一拍或後一拍完全一樣(至少 POP_FIGURE.minNotes 個起音)時,同一位置的音照那一拍的判斷(先往後傳、再往前傳,整串重複都一樣)。
+  // 只會把「跟已經判成內聲部的音完全一樣的音型」裡同一個音也判成內聲部,不會新判出別的:四分音符旋律的下凹(不比一拍短,本來就不算)、
+  // 往上走的旋律(兩拍要一模一樣才算)、右手長音底下(heldAbove 另外判斷)都不受影響
+  const rhSingleM = events.map(ev => { const r = ev.notes.filter(n => !n.drum && n.freq && (!multiStaff || (n.staff || 1) === 1)); return r.length === 1 && r[0].durWhole < (ev.beatLen || 0.25) - 1e-6 ? freqToMidi(r[0].freq) : null; });
+  const innerRH = pop ? events.map((ev, i) => rhSingleM[i] != null && isInnerSingle(ev, rhSingleM[i])) : null;
+  if (pop && POP_FIGURE) {
+    const Q = 960, beats = new Map();
+    events.forEach((ev, i) => {
+      if (rhTops[i] == null || ev.barPos == null || !(ev.beatLen > 0)) return;
+      const off = ev.barPos - Math.floor(ev.barPos / ev.beatLen + 1e-6) * ev.beatLen, k = Math.round((ev.tWhole - off) * Q);
+      let g = beats.get(k); if (!g) { g = { k, L: ev.beatLen, items: [] }; beats.set(k, g); }
+      g.items.push(i);
+    });
+    for (const g of beats.values()) {
+      g.pos = new Map(g.items.map(i => [Math.round(events[i].tWhole * Q) - g.k, i]));
+      g.sig = g.items.length >= POP_FIGURE.minNotes ? g.items.map(i => (Math.round(events[i].tWhole * Q) - g.k) + ":" + Math.round(rhTops[i]) + ":" + (rhSingleM[i] != null ? 1 : 0)).join(",") : null;
+    }
+    const order = [...beats.values()].sort((a, b) => a.k - b.k);
+    const copy = (g, h) => {
+      if (!h || !g.sig || g.sig !== h.sig || Math.abs(g.L - h.L) > 1e-6) return;
+      for (const [p, i] of g.pos) { const j = h.pos.get(p); if (j != null && rhSingleM[i] != null && !innerRH[i] && innerRH[j]) innerRH[i] = true; }
+    };
+    for (const g of order) copy(g, beats.get(g.k - Math.round(g.L * Q)));
+    for (let x = order.length - 1; x >= 0; x--) copy(order[x], beats.get(order[x].k + Math.round(order[x].L * Q)));
+  }
   const auto = pianoAutoMacro(pop ? popMarks : hasMarks);
   const endContour = pianoEndContour(auto.nb, multiStaff);
   const popEnd = pop ? popEndFade(popMarks) : null;   // 非古典的結尾:依樂譜判斷漸弱或漸強(取代照旋律線條的曲尾)
@@ -10505,7 +10624,7 @@ function computePianoDynamics(){
         if (rh) {
           // 雙音/和弦也一樣(使用者反映 2026-10:第 51 小節 B♭4+D5 的 D「還是太強、很不舒服」——旋律在 G5/A5,這個雙音是夾在中間的伴奏,
           // 以前只有單音才判斷,和弦最上面一律當旋律加重)
-          if (n === top && pop && ((ns.length === 1 && n.durWhole < (ev.beatLen || 0.25) - 1e-6 && isInnerSingle(ev, m)) || heldAbove(ev, m, st))) {
+          if (n === top && pop && ((ns.length === 1 && innerRH && innerRH[evIdx.get(ev)]) || heldAbove(ev, m, st))) {
             v -= 5 + PIANO_POP.inner; n._inner = true;   // 單音音型裡的伴奏音(見 isInnerSingle)
           } else if (n === top) {
             // 有和弦記號的非古典:和弦最上面的旋律音跟單音旋律一樣加 4(下面已經多一個音、本來就比較響,不用再多打;
@@ -10597,6 +10716,7 @@ function computePianoDynamics(){
   if (pop) { popSingleBalance(); pianoHandBalance(); pianoBassNotHeavy(); }
   popExposeAccomp();        // 旋律與伴奏的整體差距(唯一的一道校正,POP_EXPOSE.melGap;放在和弦形狀、低音平衡之後,它們會動到這個差距)
   popBeatProfile();         // 拍位置放在低音區平衡之後(平衡會動低音區的力度、連帶改變各拍位置的平均)
+  popRunBeatHeads(multiStaff);   // 非古典:快速單音音型的拍點比同一拍裡其他音重(POP_RUN_HEAD;放在拍位置校正之後,不會被它抹平)
   popMelodyOnTop();         // 安全網:旋律不要比同時彈的伴奏小聲
   popSectionJoin();         // 非古典:往下一段漸強時,下一段開頭不低於前一段結尾(SECTION_RISE;放在各項校正之後,結果才不會被後面的步驟改掉)
   popRepeatFloor();         // 非古典:後面的副歌不比前面的小聲(SECTION_REPEAT;放在 popSectionJoin 之後,跟它補過的副歌開頭比)
