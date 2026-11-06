@@ -7342,7 +7342,10 @@ function popPushApply(base, wf){
    單一個十六分音符最多快 10%、相鄰兩個音速度跳 8% 以上 31 處(第 16、17、41、47、48 小節…),穩定的伴奏聽起來像搶拍。
    現在亂數 sd 2%,而且相鄰的音共用一部分(AR 0.6:這個音的亂數 = 0.6 × 上一個 + 0.8 × 新的,整體幅度不變),
    長短是慢慢變的;拍頭/拍尾/進重拍拉長(head/last/barLast)照舊 */
-const POP_MICRO = Object.assign({ head: 0.01, barHead: 0.02, last: 0.025, barLast: 0.06, sd: 0.02, ar: 0.6, minNotes: 3 }, window.POP_MICRO_OVERRIDE || {});
+/* 2026-11 同一首第 16 小節「右手快好多」:66 BPM 的十六分音符一個約 0.23 秒,是一個一個聽得清楚的旋律音(反覆的 A5),
+   不是快速音型;拍頭拉長、後面壓短在這種速度下就是搶拍。現在照實際音長:≤ fullSec 0.17 秒照舊(使用者那首 ♩.=60 的 6/8 十六分音符 0.167 秒)、
+   ≥ offSec 0.22 秒不套用,中間線性 */
+const POP_MICRO = Object.assign({ head: 0.01, barHead: 0.02, last: 0.025, barLast: 0.06, sd: 0.02, ar: 0.6, minNotes: 3, fullSec: 0.17, offSec: 0.22 }, window.POP_MICRO_OVERRIDE || {});
 function popMicroTiming(mult, wf){
   const X = POP_MICRO;
   if (!X || !(X.sd > 0 || X.head || X.last || X.barHead || X.barLast)) return;
@@ -7363,6 +7366,9 @@ function popMicroTiming(mult, wf){
       if (!events[k].notes.some(x => !x.drum && x.freq)) ok = false;
     }
     if (!ok || Math.abs(swingWarp(T[j]) - T[j]) > 1e-9) continue;
+    const noteSec = (C(T[j]) - C(T[i0])) / (j - i0) * 240 / bpm();   // 這一拍每個音實際多長(秒,照目前速度)
+    const amtK = Math.max(0, Math.min(1, (X.offSec - noteSec) / Math.max(1e-6, X.offSec - X.fullSec)));
+    if (!(amtK > 0)) continue;
     const barHead = ev.barPos < 1e-4, nextBar = events[j].barPos != null && events[j].barPos < 1e-4;
     const w = [], e = [], ar = Math.max(0, Math.min(0.95, X.ar || 0)), arK = Math.sqrt(1 - ar * ar);
     let g = gauss(T[i0] * 131.71 + 7.7);
@@ -7372,7 +7378,7 @@ function popMicroTiming(mult, wf){
       let x = X.sd * g;
       if (k === i0) x += barHead ? X.barHead : X.head;
       if (k === j - 1) x += nextBar ? X.barLast : X.last;
-      e.push(Math.exp(x * sc));
+      e.push(Math.exp(x * sc * amtK));
     }
     const sw = w.reduce((a, b) => a + b, 0), swe = w.reduce((a, b, k) => a + b * e[k], 0);
     if (!(sw > 0) || !(swe > 0)) continue;
