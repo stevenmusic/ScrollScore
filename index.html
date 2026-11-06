@@ -7851,7 +7851,8 @@ function updateMeasureHighlight(sec){
    含彈性速度、搖擺)。音符頭的形狀直接取 OSMD 畫好的 SVG 路徑(空心的二分/全音符、鼓的 x 符頭都照原樣),延音線後面的音在自己的時間亮。
    畫面:#scroller 裡另一層沒有濾鏡的 SVG(#noteGlow,樂譜本身有深色主題的反色濾鏡,疊在上面顏色才會對);
    匯出:每格在樂譜點陣圖上用 Path2D 畫(捲動式與翻頁式都有,封面不畫)。只在有音符頭的位置畫,iPhone 每格多不到 1ms */
-const NOTE_GLOW = { fadeSec: 0.22, drumHoldSec: 0.12, popSec: 0.14, pop: 0.3, minSec: 0.09,
+/* 使用者決定(2026-11):「音符不加顏色」——整個功能關掉(on: false,畫面與匯出都不畫、也不量音符頭),程式保留,改回 true 即恢復 */
+const NOTE_GLOW = { on: false, fadeSec: 0.22, drumHoldSec: 0.12, popSec: 0.14, pop: 0.3, minSec: 0.09,
   light: { 1: "#D4921A", 2: "#16998A", d: "#D4921A" },    // 淺色底(匯出、淺色主題)
   dark:  { 1: "#FFC94F", 2: "#5FE0CE", d: "#FFC94F" },    // 深色主題
   blur: 0.9 };                                              // 光暈 = 音符頭高度 × blur
@@ -7934,6 +7935,7 @@ function noteGlowColor(m, pal){ return m.drum ? pal.d : m.staff === 2 ? pal[2] :
 /* 匯出:在畫好樂譜的畫布上畫亮起來的音符頭。(ox, oy) = SVG 的 CSS px 原點在畫布上的位置,sx/sy = CSS px → 畫布倍數;
    only(y) 可以限制只畫某個範圍(翻頁式只畫這一頁) */
 function drawNoteGlow(ctx, src, sec, ox, oy, sx, sy, glowPx, only){
+  if (!NOTE_GLOW.on) return;
   const lit = litHeadsAt(src, sec, true);
   if (!lit.length) return;
   const g = src.geo, pal = NOTE_GLOW.light;
@@ -7964,6 +7966,7 @@ function rebuildScreenNoteGlow(){
   for (const el of glowEls.values()) el.remove();
   glowEls.clear();
   screenGlowSrc = null;
+  if (!NOTE_GLOW.on) return;
   if (!svg || !ov || typeof osmd === "undefined" || !osmd) return;
   screenGlowSrc = collectHeadMarks(osmd, svg);
   ov.setAttribute("viewBox", svg.getAttribute("viewBox") || ("0 0 " + (svg.getAttribute("width") || 0) + " " + (svg.getAttribute("height") || 0)));
@@ -15212,7 +15215,7 @@ async function buildPageScore(cfg, layout){
     r = await renderPageOsmd(contentW, sp); g = readPageGeometry(r.o);
   }
   const svg = r.host.querySelector("svg");
-  const glow = collectHeadMarks(r.o, svg);   // 音符發亮:翻頁版自己的音符頭位置(要在拿掉之前量)
+  const glow = NOTE_GLOW.on ? collectHeadMarks(r.o, svg) : null;   // 音符發亮:翻頁版自己的音符頭位置(要在拿掉之前量)
   const wAttr = parseFloat(svg.getAttribute("width")) || contentW;
   const vb = (svg.getAttribute("viewBox") || "").split(/[\s,]+/).map(Number);
   const vbScale = vb.length === 4 && vb[2] > 0 ? vb[2] / wAttr : 1;   // 畫面 px → SVG 內部座標
