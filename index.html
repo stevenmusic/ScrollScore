@@ -7338,7 +7338,11 @@ function popPushApply(base, wf){
    數字照 (n)ASAP 834 份逐音對照(十六分音符單音音型,間隔 ÷ 前後 7 個間隔的中位數,中位數):拍頭 +0~1%(小節第一拍 +1.2~2.4%)、
    拍內最後一個 +1~3%(進下一小節 +5~6.5%),整體 log 標準差 14.7%(含 MIDI 鋼琴與人手的雜訊);使用者錄音 13.5% 含起步不穩,
    目標取 5~8%。幅度照 popTempoScale 縮(快歌較穩);範圍裡有延長記號/rit.(wf ≠ 1)或搖擺的拍不動 */
-const POP_MICRO = Object.assign({ head: 0.01, barHead: 0.02, last: 0.025, barLast: 0.06, sd: 0.045, minNotes: 3 }, window.POP_MICRO_OVERRIDE || {});
+/* 2026-11 使用者反映〈甲乙丙丁〉「有的地方聽起來會忽然加快」:左手十六分音符分解和弦每個音各自抽亂數(sd 4.5%),
+   單一個十六分音符最多快 10%、相鄰兩個音速度跳 8% 以上 31 處(第 16、17、41、47、48 小節…),穩定的伴奏聽起來像搶拍。
+   現在亂數 sd 2%,而且相鄰的音共用一部分(AR 0.6:這個音的亂數 = 0.6 × 上一個 + 0.8 × 新的,整體幅度不變),
+   長短是慢慢變的;拍頭/拍尾/進重拍拉長(head/last/barLast)照舊 */
+const POP_MICRO = Object.assign({ head: 0.01, barHead: 0.02, last: 0.025, barLast: 0.06, sd: 0.02, ar: 0.6, minNotes: 3 }, window.POP_MICRO_OVERRIDE || {});
 function popMicroTiming(mult, wf){
   const X = POP_MICRO;
   if (!X || !(X.sd > 0 || X.head || X.last || X.barHead || X.barLast)) return;
@@ -7360,10 +7364,12 @@ function popMicroTiming(mult, wf){
     }
     if (!ok || Math.abs(swingWarp(T[j]) - T[j]) > 1e-9) continue;
     const barHead = ev.barPos < 1e-4, nextBar = events[j].barPos != null && events[j].barPos < 1e-4;
-    const w = [], e = [];
+    const w = [], e = [], ar = Math.max(0, Math.min(0.95, X.ar || 0)), arK = Math.sqrt(1 - ar * ar);
+    let g = gauss(T[i0] * 131.71 + 7.7);
     for (let k = i0; k < j; k++) {
       w.push((C(T[k + 1]) - C(T[k])) / mult[k]);
-      let x = X.sd * gauss(T[k] * 131.71 + 7.7);
+      if (k > i0) g = ar * g + arK * gauss(T[k] * 131.71 + 7.7);   // 相鄰的音共用一部分亂數:長短慢慢變,不會一個音突然搶
+      let x = X.sd * g;
       if (k === i0) x += barHead ? X.barHead : X.head;
       if (k === j - 1) x += nextBar ? X.barLast : X.last;
       e.push(Math.exp(x * sc));
@@ -7372,6 +7378,25 @@ function popMicroTiming(mult, wf){
     if (!(sw > 0) || !(swe > 0)) continue;
     const s = sw / swe;
     for (let k = i0; k < j; k++) mult[k] /= e[k - i0] * s;
+  }
+}
+/* 放慢之後慢慢回到原速(POP_RECOVER,只用在非古典;2026-11 使用者反映〈甲乙丙丁〉「有的地方聽起來會忽然加快」):
+   模型的倍率只平滑 ±1/8 全音符(半拍),放慢 6~8% 之後在一拍內就彈回原速(第 5、13、14、25 小節:0.92~0.94 → 1.00),
+   非古典又不加快,所以「回到原速」就是整首唯一的變快,聽起來像突然往前衝。真人放慢後是慢慢回來的(譜上寫 a tempo 才一下回去)。
+   現在模型的倍率往快的方向每拍最多回 perBeat 2.5%(放慢可以照原本的快慢);譜上的 rit./延長記號/a tempo、POP_PUSH 在這之後才套,照舊 */
+const POP_RECOVER = Object.assign({ perBeat: 0.025 }, window.POP_RECOVER_OVERRIDE || {});
+function popRecoverGently(mult, wf){
+  const r = POP_RECOVER.perBeat;
+  if (!(r > 0)) return;
+  let wfEnd = -Infinity;
+  for (let i = 1; i < mult.length; i++) {
+    // 譜上的延長記號/rit. 範圍裡與結束後一小節內不限制,照原本(使用者:「a tempo 不改」——之後一下回到原速)
+    if (wf && (Math.abs(wf[i] - 1) > 1e-6 || Math.abs(wf[i - 1] - 1) > 1e-6)) { wfEnd = events[i].tWhole; continue; }
+    if (events[i].tWhole - wfEnd < (events[i].barLen > 0 ? events[i].barLen : 1) - 1e-6) continue;
+    const L = events[i - 1].beatLen > 0 ? events[i - 1].beatLen : 0.25;
+    const beats = Math.max(0, events[i].tWhole - events[i - 1].tWhole) / L;
+    const cap = mult[i - 1] * Math.exp(r * beats);
+    if (mult[i] > cap) mult[i] = cap;
   }
 }
 /* 每個事件的速度倍率 → 等效全音符座標表(rubatoMap / tempoWordMap 共用) */
@@ -7422,6 +7447,7 @@ function buildRubatoMap(){
   const style = (RUBATO_NONCLASSICAL + (1 - RUBATO_NONCLASSICAL) * cp) * (cp < 0.5 ? popTempoScale().scale : 1);   // 非古典的快歌放慢得更少(POP_SPEED)
   const fastStyle = Math.max(0, (cp - 0.25) / 0.75);   // p ≤ 0.25 不加快,p = 1 跟以前一樣
   const mult = y.map(v => Math.exp((v - med) * (v < med ? RUBATO_AMOUNT.slow * style : RUBATO_AMOUNT.fast * fastStyle)));
+  if (cp < 0.5) popRecoverGently(mult, wf);   // 非古典:放慢之後慢慢回到原速(POP_RECOVER)
   // 延長記號是罕見但明確的情況,模型會低估(訓練時佔比太小):一般延長照 ASAP 真人平均補(那一拍慢 42%、前一個音慢 38%),
   // 長短依記號形狀/文字(fermataFactors,已併在 wf 裡);倍率範圍限制之後才套,很長的延長(0.33)不會被 0.45 下限擋掉
   // (以前最後一小節再 ×0.83,新倍率下會慢到 50%、真人 37%,拿掉)
