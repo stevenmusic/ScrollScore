@@ -7327,22 +7327,28 @@ function popPushApply(base, wf){
   }
 }
 /* 快速音型的拍內鬆緊(POP_MICRO,使用者 2026-10:「鬆緊的部分幫我調整,避免像機器人」;只用在非古典,彈性速度開著才有)。
-   使用者的真人錄音(6/8 十六分音符)間隔變異係數 13.5%、App 2.4%(彈性速度是平滑的速度曲線,一拍裡每個十六分音符一樣長)。
-   規則:一拍裡從拍頭開始、等距離的起音 ≥ minNotes 個(間隔 ≤ 半拍),而且下一個起音剛好在下一拍頭 → 這一拍裡每個間隔乘一個長度倍率,
-   再整拍等比例縮放讓這一拍總長不變(每個拍頭、重拍、段落交界、POP_PUSH 算好的時間都不動,不會累積,也不是「突然加快」——
-   平均速度不變,只是拍內長短不一)。倍率(log):拍頭 head(小節第一拍 barHead)、拍內最後一個音 last(接下一小節的重拍時 barLast,
-   「進重拍前那個音拉長、之後往前推」)+ 常態亂數 sd(種子 = 演奏位置,同樣的播放結果一樣,反覆的第二遍跟第一遍不同)。
-   數字照 (n)ASAP 834 份逐音對照(十六分音符單音音型,間隔 ÷ 前後 7 個間隔的中位數,中位數):拍頭 +0~1%(小節第一拍 +1.2~2.4%)、
-   拍內最後一個 +1~3%(進下一小節 +5~6.5%),整體 log 標準差 14.7%(含 MIDI 鋼琴與人手的雜訊);使用者錄音 13.5% 含起步不穩,
-   目標取 5~8%。幅度照 popTempoScale 縮(快歌較穩);範圍裡有延長記號/rit.(wf ≠ 1)或搖擺的拍不動 */
-const POP_MICRO = Object.assign({ head: 0.01, barHead: 0.02, last: 0.025, barLast: 0.06, sd: 0.045, minNotes: 3 }, window.POP_MICRO_OVERRIDE || {});
+   第二版(使用者 2026-10:「有鬆緊,但現在的版本導致我連續的十六分音符聽起來不平均」):第一版每個音各自加常態亂數(sd 4.5%)、
+   進下一小節前那一個音 +6%,相鄰兩個十六分音符一長一短(相鄰間隔比中位數 5.2%、p90 12.7%,單一位移約 6ms 就聽得出來,
+   Friberg & Sundberg 1995:等距序列裡一個音的位移約 2.5~6% 間隔就察覺得到),聽起來就是不穩。真人的鬆緊是平滑的。
+   現在拍內是一條平滑的 U 形:拍頭、拍尾稍微寬、拍中間稍微緊(ASAP 十六分音符單音音型:拍頭 +0~1%、拍內最後一個 +1~3%、
+   進下一小節 +5~6.5%,方向一樣、只取一部分,攤在整拍上),每個拍頭有一個「寬度」b(拍 beat、小節線 bar),
+   左右兩拍共用同一個值,所以跨拍頭也是接續的;拍內 e(x) = b起·h(x) + b終·h(1−x),h(x) = ((1 + cos πx)/2)²(x = 間隔中點在拍內的位置)。
+   幅度跨小節慢慢變(knot 每 knot 全音符一個固定種子亂數、餘弦內插,× (1 ± vary)),不是每個音獨立亂跳。
+   規則:一拍裡從拍頭開始、等距離的起音 ≥ minNotes 個(間隔 ≤ 半拍),而且下一個起音剛好在下一拍頭 → 這一拍每個間隔乘 exp(e),
+   再整拍等比例縮放讓這一拍總長不變(每個拍頭、重拍、段落交界、POP_PUSH 的時間都不動,平均速度不變)。
+   幅度照 popTempoScale 縮(快歌較穩);範圍裡有延長記號/rit.(wf ≠ 1)或搖擺的拍不動 */
+const POP_MICRO = Object.assign({ beat: 0.025, bar: 0.05, vary: 0.4, knot: 1, minNotes: 3 }, window.POP_MICRO_OVERRIDE || {});
 function popMicroTiming(mult, wf){
   const X = POP_MICRO;
-  if (!X || !(X.sd > 0 || X.head || X.last || X.barHead || X.barLast)) return;
+  if (!X || !(X.beat > 0 || X.bar > 0)) return;
   const n = events.length, T = events.map(ev => ev.tWhole), eps = 1e-6;
   const sc = popTempoScale().scale;
   const C = w => wholeToSec(w) * bpm() / 240;
-  const gauss = seed => { let a = 0; for (let k = 0; k < 3; k++) a += seededRand01(seed + k * 17.31); return Math.max(-2.5, Math.min(2.5, (a - 1.5) * 2)); };
+  const h = x => { const c = (1 + Math.cos(Math.PI * x)) / 2; return c * c; };
+  // 平滑的幅度起伏(固定種子的值雜訊,餘弦內插):同一個位置每次一樣、相鄰拍頭幾乎一樣
+  const knot = k => seededRand01(k * 71.37 + 3.3) * 2 - 1;
+  const vary = t => { const u = t / (X.knot || 1), k = Math.floor(u), f = (1 - Math.cos(Math.PI * (u - k))) / 2; return 1 + (X.vary || 0) * (knot(k) * (1 - f) + knot(k + 1) * f); };
+  const bAt = (t, isBar) => (isBar ? X.bar : X.beat) * vary(t);
   for (let i = 0; i < n;) {
     const ev = events[i], L = ev.beatLen;
     if (ev.barPos == null || !(L > 0) || Math.abs(ev.barPos / L - Math.round(ev.barPos / L)) > 1e-3) { i++; continue; }
@@ -7357,13 +7363,12 @@ function popMicroTiming(mult, wf){
     }
     if (!ok || Math.abs(swingWarp(T[j]) - T[j]) > 1e-9) continue;
     const barHead = ev.barPos < 1e-4, nextBar = events[j].barPos != null && events[j].barPos < 1e-4;
+    const bs = bAt(T[i0], barHead), be = bAt(T[j], nextBar);
     const w = [], e = [];
     for (let k = i0; k < j; k++) {
       w.push((C(T[k + 1]) - C(T[k])) / mult[k]);
-      let x = X.sd * gauss(T[k] * 131.71 + 7.7);
-      if (k === i0) x += barHead ? X.barHead : X.head;
-      if (k === j - 1) x += nextBar ? X.barLast : X.last;
-      e.push(Math.exp(x * sc));
+      const x = (k - i0 + 0.5) / cnt;
+      e.push(Math.exp((bs * h(x) + be * h(1 - x)) * sc));
     }
     const sw = w.reduce((a, b) => a + b, 0), swe = w.reduce((a, b, k) => a + b * e[k], 0);
     if (!(sw > 0) || !(swe > 0)) continue;
@@ -10124,8 +10129,8 @@ function popExposeAccomp(){
       真人一定從低往高快速補上;以前完全同時響、像電腦。從最低音開始分組(組內不超過 reach),第一組在拍上,之後每組晚 rollGap ± rollJit 秒,
       總長不超過到這隻手下一個音的 rollMaxFrac。譜上已經寫琶音的不動
    ③ 兩手時間不完全對齊(pianoHandDrift,非古典):真人兩手常差 10~20ms,而且會連續一小段偏同一邊。每隻手各一條緩慢起伏的時間偏移
-      (AR(1),每個時間點 handAR、標準差 handSd 秒),同一隻手同時彈的音一起移 */
-const PIANO_FEEL = Object.assign({ bassBelowMid: 3, bassMaxCut: 8, reach: 16, rollGap: 0.03, rollJit: 0.01, rollMaxFrac: 0.25, handSd: 0.007, handAR: 0.85 }, window.PIANO_FEEL_OVERRIDE || {});
+      (照秒走的平滑曲線,每 handTau 秒一個亂數、標準差 handSd 秒),同一隻手同時彈的音一起移 */
+const PIANO_FEEL = Object.assign({ bassBelowMid: 3, bassMaxCut: 8, reach: 16, rollGap: 0.03, rollJit: 0.01, rollMaxFrac: 0.25, handSd: 0.007, handTau: 1.2 }, window.PIANO_FEEL_OVERRIDE || {});
 function pianoBassNotHeavy(){
   const F = PIANO_FEEL;
   for (const ev of events) {
@@ -10319,32 +10324,59 @@ function pianoWideChordRoll(multiStaff){
   }
 }
 function pianoHandDrift(multiStaff){
-  const F = PIANO_FEEL, x = {}, k = Math.sqrt(1 - F.handAR * F.handAR);
-  let i = 0;
+  // 2026-10 第二版(使用者:「連續的十六分音符聽起來不平均」):以前是每個事件一步的 AR(1)(handAR 0.85),音越密每秒走越多步,
+  // 同一手連續的十六分音符每個音各自多一個約 ±3.7ms 的獨立偏移(相鄰間隔比中位數 2.5%,220 BPM 十六分音符 5.5%)。
+  // 現在每隻手一條照「秒」走的平滑曲線(固定種子的值雜訊:每 handTau 秒一個常態亂數、餘弦內插,標準差照樣 handSd):
+  // 兩手之間照樣常差 10~20ms、一小段偏同一邊,但同一手相鄰的音幾乎一起移(0.17 秒的十六分音符相鄰差 < 1ms)
+  const F = PIANO_FEEL, tau = F.handTau || 1.2;
+  const g = (k, h) => (seededRand01(k * 13.13 + h * 101.7 + 0.37) + seededRand01(k * 7.77 + h * 53.1 + 0.91) - 1) * Math.sqrt(6);
+  // 餘弦內插讓中間的變異數變小(平均約 0.75 倍),補回 1/√0.75
+  const drift = (sec, h) => { const u = sec / tau, k = Math.floor(u), f = (1 - Math.cos(Math.PI * (u - k))) / 2; return F.handSd * (g(k, h) * (1 - f) + g(k + 1, h) * f) / Math.sqrt(0.75); };
   for (const ev of events) {
-    i++;
-    const hs = new Set();
-    for (const n of ev.notes) if (!n.drum && n.freq) hs.add(multiStaff ? (n.staff || 1) : 1);
-    for (const h of hs) {
-      // 常態分布(兩個均勻亂數相減的近似 × √6 ≈ 標準差 1)
-      const z = (seededRand01(ev.tWhole * 13.13 + h * 101.7 + i * 0.37) + seededRand01(ev.tWhole * 7.77 + h * 53.1 + i * 0.91) - 1) * Math.sqrt(6);
-      x[h] = x[h] == null ? z * F.handSd : F.handAR * x[h] + k * z * F.handSd;
-    }
-    for (const n of ev.notes) if (!n.drum && n.freq) n.pdt = (n.pdt || 0) + x[multiStaff ? (n.staff || 1) : 1];
+    const sec = wholeToSec(ev.tWhole);
+    for (const n of ev.notes) if (!n.drum && n.freq) n.pdt = (n.pdt || 0) + drift(sec, multiStaff ? (n.staff || 1) : 1);
   }
 }
-function pianoVelocityAsync(){
+function pianoVelocityAsync(multiStaff){
+  // 非古典(2026-10,使用者:「連續的十六分音符聽起來不平均」):一隻手正在彈等距的快速單音音型(前後兩個起音等距、間隔 ≤ 半拍)時,
+  // 這隻手的音不因為「另一隻手同時有比較大聲的音」而晚(以前那一下會晚 3~30ms,同一串十六分音符裡忽早忽晚);
+  // 同一手和弦裡的先後照舊,另一隻手(不在快速音型裡)照舊比大聲的晚
+  const pop = classicalProbInfo().p < 0.5;
+  const runHand = pop ? pianoRunHands(multiStaff) : null;
   let k = 0;
   for (const ev of events) {
     const ns = ev.notes.filter(n => !n.drum && n.freq && n.pvel != null && n.rollIndex == null);
     k++;
     if (ns.length < 2) continue;
     const vmax = Math.max(...ns.map(n => n.pvel));
+    const hand = n => multiStaff ? (n.staff || 1) : 1;
+    const hmax = {};
+    if (runHand) for (const n of ns) { const h = hand(n); hmax[h] = Math.max(hmax[h] ?? -Infinity, n.pvel); }
     for (const n of ns) {
-      const lag = Math.min(PIANO_ASYNC.max, (pianoHammerLagMs(n.pvel) - pianoHammerLagMs(vmax)) / 1000);
-      n.pdt = n.pvel >= vmax ? 0 : lag + seededRand01(k * 5.71 + freqToMidi(n.freq) * 0.291) * PIANO_ASYNC.jitter;
+      const ref = runHand && runHand.get(ev)?.has(hand(n)) ? hmax[hand(n)] : vmax;
+      const lag = Math.min(PIANO_ASYNC.max, (pianoHammerLagMs(n.pvel) - pianoHammerLagMs(ref)) / 1000);
+      n.pdt = n.pvel >= ref ? 0 : lag + seededRand01(k * 5.71 + freqToMidi(n.freq) * 0.291) * PIANO_ASYNC.jitter;
     }
   }
+}
+/* 每個事件裡哪幾隻手正在彈等距的快速單音音型:這隻手這個起音只有一個音,而且跟前一個、後一個起音(同一手)等距、間隔 ≤ 半拍 */
+function pianoRunHands(multiStaff){
+  const by = {}, out = new Map(), eps = 1e-6;
+  for (const ev of events) for (const n of ev.notes) if (!n.drum && n.freq) {
+    const h = multiStaff ? (n.staff || 1) : 1, a = by[h] || (by[h] = []);
+    if (!a.length || a[a.length - 1].ev !== ev) a.push({ ev, c: 0 });
+    a[a.length - 1].c++;
+  }
+  for (const h in by) {
+    const a = by[h];
+    for (let i = 1; i + 1 < a.length; i++) {
+      const t0 = a[i - 1].ev.tWhole, t1 = a[i].ev.tWhole, t2 = a[i + 1].ev.tWhole, L = a[i].ev.beatLen || 0.25;
+      if (a[i].c !== 1 || Math.abs((t2 - t1) - (t1 - t0)) > eps || t2 - t1 > L / 2 + eps) continue;
+      if (!out.has(a[i].ev)) out.set(a[i].ev, new Set());
+      out.get(a[i].ev).add(+h);
+    }
+  }
+  return out;
 }
 /* 鋼琴力度依當下速度重算(2026-10 檢查):有幾條規則用秒數(長音衰減後的音量、旋律長音時伴奏透出、太寬的和弦滾開的間隔),
    以前只在載入/移調時算一次,改速度滑桿後最多差 5 力度。跟鼓的 n.perf 一樣:播放/匯出前速度變了就重算(pianoDynSync);
@@ -10721,7 +10753,7 @@ function computePianoDynamics(){
   popSectionJoin();         // 非古典:往下一段漸強時,下一段開頭不低於前一段結尾(SECTION_RISE;放在各項校正之後,結果才不會被後面的步驟改掉)
   popRepeatFloor();         // 非古典:後面的副歌不比前面的小聲(SECTION_REPEAT;放在 popSectionJoin 之後,跟它補過的副歌開頭比)
   if (pop) applyAccentRatios(true);   // 非古典的重音最後才加(見上面)
-  pianoVelocityAsync();
+  pianoVelocityAsync(multiStaff);
   pianoWideChordRoll(multiStaff);
   if (pop) pianoHandDrift(multiStaff);
   for (const x of pn) delete x.n._v0, delete x.n._accDb, delete x.n._momDb, delete x.n._role, delete x.n._secF, delete x.n._lvl;
