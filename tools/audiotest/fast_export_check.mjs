@@ -32,7 +32,7 @@ if (flags.has("--rectest")) await page.addInitScript(() => { window.__rectest = 
 if (flags.has("--noworklet")) await page.addInitScript(() => { window.FORCE_NO_WORKLET = true; });
 if (process.env.DRUM_MASTER_OVERRIDE) await page.addInitScript(o => { window.DRUM_MASTER_OVERRIDE = JSON.parse(o); }, process.env.DRUM_MASTER_OVERRIDE);   // 測試用:鼓母帶參數覆寫(JSON)
 await page.goto(`http://127.0.0.1:${server.address().port}/index.html`);
-if (opt("inst")) await page.selectOption("#instrument", opt("inst"));
+if (opt("inst")) await page.selectOption("#instrument", opt("inst"), { force: true });
 await page.setInputFiles("#fileInput", path.resolve(score));
 await page.waitForFunction(() => typeof events !== "undefined" && events.length > 0, null, { timeout: 120000 });
 await page.evaluate(async () => { const inst = currentInstrument(); if (inst === "drum") await loadDrumKit(); else await loadInstrumentSamples(inst); });

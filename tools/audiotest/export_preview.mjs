@@ -15,7 +15,7 @@ await page.route(/cdn\.jsdelivr\.net\/npm\/jszip/, r => r.fulfill({ path: requir
 await page.route(/raw\.githubusercontent\.com|\.flac|fonts\.g/, r => r.abort());
 page.on("pageerror", e => console.error("[pageerror]", e.message));
 await page.goto(`http://127.0.0.1:${server.address().port}/index.html`);
-if (inst) await page.selectOption("#instrument", inst).catch(() => {});
+if (inst) await page.selectOption("#instrument", inst, { force: true }).catch(() => {});
 await page.setInputFiles("#fileInput", path.resolve(score));
 await page.waitForFunction(() => typeof events !== "undefined" && events.length > 0, null, { timeout: 120000 });
 await page.waitForTimeout(1500);

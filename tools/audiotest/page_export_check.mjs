@@ -13,7 +13,7 @@ const errs = [];
 page.on("pageerror", e => errs.push(e.message));
 page.on("console", m => { if (m.type() === "error") errs.push(m.text()); });
 await page.goto(`http://127.0.0.1:${server.address().port}/index.html`);
-if (inst) await page.selectOption("#instrument", inst).catch(() => {});
+if (inst) await page.selectOption("#instrument", inst, { force: true }).catch(() => {});
 await page.setInputFiles("#fileInput", path.resolve(score));
 await page.waitForFunction(() => typeof events !== "undefined" && events.length > 0, null, { timeout: 120000 });
 await page.waitForTimeout(1000);

@@ -111,7 +111,7 @@ check("重新整理後記住色票、預備拍", await page.evaluate(() => hlCur
 await page.evaluate(() => { $("countIn").checked = false; $("countIn").dispatchEvent(new Event("change")); });
 
 // 8. 鼓譜
-await page.selectOption("#instrument", "drum");
+await page.selectOption("#instrument", "drum", { force: true });
 await page.setInputFiles("#fileInput", path.join(ROOT, "samples/drums-rock.musicxml"));
 await page.waitForFunction(() => events.length > 0 && isDrumScore, null, { timeout: 60000 });
 await page.evaluate(async () => { ensureAudio(); await loadDrumKit(); });
@@ -121,7 +121,7 @@ await page.click("#stopBtn");
 check("鼓組面板沒有多餘黑邊", await page.evaluate(() => { const r = $("keyboardCanvas").getBoundingClientRect(); return r.height <= drumKitNaturalH(r.width) + 1; }));
 
 // 9. 匯出頁面:格式、記住選擇、直式鋼琴不顯示鍵盤選項
-await page.selectOption("#instrument", "piano");
+await page.selectOption("#instrument", "piano", { force: true });
 await page.setInputFiles("#fileInput", path.join(ROOT, "samples/ode-to-joy.musicxml"));
 await page.waitForFunction(() => events.length > 0 && !isDrumScore, null, { timeout: 60000 });
 await wait(500);

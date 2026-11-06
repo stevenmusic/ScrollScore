@@ -533,13 +533,15 @@ body.kb-hidden #keyboardCanvas{display:none}
 }
 /* 目前正在演奏的小節色塊。放在 #scroller 裡面(跟著樂譜一起捲動),
    z-index 壓在樂譜下方,才不會蓋住音符 */
-#measureHighlight{
+#measureHighlight,#measureHighlightPrev{
   position:absolute;top:0;bottom:0;display:none;
   background:var(--measure-col,#C9A24B);
   opacity:var(--measure-op,.18);
   pointer-events:none;z-index:0;border-radius:2px;
 }
-body.measure-hl.score-loaded #measureHighlight{display:block}
+body.measure-hl.score-loaded #measureHighlight,body.measure-hl.score-loaded #measureHighlightPrev{display:block}
+/* 正在響的音符頭(updateNoteGlowLive):疊在樂譜上方、沒有深色主題的反色濾鏡 */
+#noteGlow{position:absolute;left:0;top:0;width:0;height:0;pointer-events:none;z-index:1;overflow:visible}
 .mini-label{font-size:var(--fs-2xs);color:var(--muted)}
 input[type=color]{
   -webkit-appearance:none;appearance:none;border:1px solid var(--gold);
@@ -1142,7 +1144,7 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
       </div>
     </div>
   </div>
-  <div id="scroller"><div id="measureHighlight"></div><div id="score"></div></div>
+  <div id="scroller"><div id="measureHighlightPrev"></div><div id="measureHighlight"></div><div id="score"></div><svg id="noteGlow" aria-hidden="true"></svg></div>
   <div id="playline"></div>
   <!-- 封面樣式選擇(2026-10,使用者問「封面圖如何選擇樣式」:以前收在進階裡找不到):按「存封面圖」後兩種樣式並排、點一下就存那一張 -->
   <div id="coverOverlay" role="dialog" aria-modal="true" aria-labelledby="coverPickTitle">
@@ -4652,6 +4654,7 @@ async function renderScore(xmlText){
   avoidMeasureNumberOverlap(osmd, $("score"));
 
   buildTimeline();
+  rebuildScreenNoteGlow();
   markDrumChokes();
   computeDrumSongDynamics();
   computePianoDynamics();
@@ -7775,14 +7778,194 @@ function measureBoundsAt(sec){
   }
   return null;
 }
+/* 換小節時小節色塊淡入淡出(使用者選的,2026-11):以前直接跳到下一小節,現在新小節的色塊在 MEASURE_FADE_SEC 內淡入、
+   上一小節同時淡出(交叉淡化,總亮度不變)。只看時間算(同一個秒數畫面與匯出一樣),暫停時不淡 */
+const MEASURE_FADE_SEC = 0.15;
+function measureFadeAt(sec, animate){
+  const cur = measureBoundsAt(sec);
+  if (!cur || !animate || !perfMeasures.length) return { cur, prev: null, a: 1 };
+  const w = secToWhole(sec);
+  let lo = 0, hi = perfMeasures.length - 1;
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (perfMeasures[mid].start <= w + 1e-9) lo = mid; else hi = mid - 1; }
+  if (lo === 0) return { cur, prev: null, a: 1 };
+  const st = posToSec(perfMeasures[lo].start, useCalib()), dt = sec - st;
+  if (!(dt >= 0 && dt < MEASURE_FADE_SEC)) return { cur, prev: null, a: 1 };
+  const prev = measureBoundsAt(Math.max(0, st - 1e-3));
+  const a = dt / MEASURE_FADE_SEC, ease = a * a * (3 - 2 * a);
+  return { cur, prev: prev && prev.index !== cur.index ? prev : null, a: ease, st };
+}
 function updateMeasureHighlight(sec){
-  const el = $("measureHighlight");
+  updateNoteGlowLive(sec);
+  const el = $("measureHighlight"), pv = $("measureHighlightPrev");
   if (!el) return;
+  if (pv) pv.style.width = "0px";
   if (!measureHlOn() || !events.length) { el.style.width = "0px"; return; }
-  const b = measureBoundsAt(sec);
+  const f = measureFadeAt(sec, playing);
+  const b = f.cur;
   if (!b) { el.style.width = "0px"; return; }
   el.style.left = b.left + "px";
   el.style.width = Math.max(0, b.right - b.left) + "px";
+  el.style.opacity = f.prev ? "calc(var(--measure-op,.18) * " + f.a.toFixed(3) + ")" : "";
+  if (pv && f.prev) {
+    pv.style.left = f.prev.left + "px";
+    pv.style.width = Math.max(0, f.prev.right - f.prev.left) + "px";
+    pv.style.opacity = "calc(var(--measure-op,.18) * " + (1 - f.a).toFixed(3) + ")";
+  }
+}
+
+/* ── 正在響的音符發亮(使用者選的,2026-11)──────────────────────────
+   樂譜上正在響的音符頭換成鍵盤同一套顏色(右手/第 1 譜表金、左手/第 2 譜表青綠、鼓譜金):按下時亮起並稍微放大(NOTE_GLOW.pop,
+   popSec 內縮回原大小)、響完後 fadeSec 內淡回黑色;鼓是打擊,亮 drumHoldSec 再淡掉。時間跟鍵盤一樣(posToSec + KB_LOOKAHEAD_SEC,
+   含彈性速度、搖擺)。音符頭的形狀直接取 OSMD 畫好的 SVG 路徑(空心的二分/全音符、鼓的 x 符頭都照原樣),延音線後面的音在自己的時間亮。
+   畫面:#scroller 裡另一層沒有濾鏡的 SVG(#noteGlow,樂譜本身有深色主題的反色濾鏡,疊在上面顏色才會對);
+   匯出:每格在樂譜點陣圖上用 Path2D 畫(捲動式與翻頁式都有,封面不畫)。只在有音符頭的位置畫,iPhone 每格多不到 1ms */
+const NOTE_GLOW = { fadeSec: 0.22, drumHoldSec: 0.12, popSec: 0.14, pop: 0.3, minSec: 0.09,
+  light: { 1: "#D4921A", 2: "#16998A", d: "#D4921A" },    // 淺色底(匯出、淺色主題)
+  dark:  { 1: "#FFC94F", 2: "#5FE0CE", d: "#FFC94F" },    // 深色主題
+  blur: 0.9 };                                              // 光暈 = 音符頭高度 × blur
+function collectHeadMarks(o, svg){
+  const out = { byStart: new Map(), geo: null, perf: null, perfKey: null };
+  if (!o || !svg) return out;
+  const vb = (svg.getAttribute("viewBox") || "").split(/[\s,]+/).map(Number);
+  const wA = parseFloat(svg.getAttribute("width")) || 0, hA = parseFloat(svg.getAttribute("height")) || 0;
+  out.geo = vb.length === 4 && vb[2] > 0 && vb[3] > 0 && wA && hA ? { x0: vb[0], y0: vb[1], kx: wA / vb[2], ky: hA / vb[3] } : { x0: 0, y0: 0, kx: 1, ky: 1 };
+  try {
+    for (const staves of o.GraphicSheet.MeasureList) for (const gm of staves) {
+      if (!gm || !gm.parentSourceMeasure || !gm.parentSourceMeasure.AbsoluteTimestamp) continue;
+      const mStart = gm.parentSourceMeasure.AbsoluteTimestamp.RealValue;
+      for (const se of gm.staffEntries || []) {
+        if (!se.relInMeasureTimestamp) continue;
+        const rel = se.relInMeasureTimestamp.RealValue;
+        for (const gve of se.graphicalVoiceEntries || []) for (const gn of gve.notes || []) {
+          const n = gn.sourceNote;
+          if (!n || (n.isRest && n.isRest()) || !n.Length) continue;
+          if (n.ParentVoiceEntry && n.ParentVoiceEntry.IsGrace) continue;
+          const heads = gn.getNoteheadSVGs ? gn.getNoteheadSVGs() : [];
+          if (!heads || !heads.length) continue;
+          const idx = gn.vfnote && heads.length > 1 ? Math.min(heads.length - 1, Math.max(0, gn.vfnote[1] | 0)) : 0;
+          const head = heads[idx];
+          if (!head) continue;
+          const paths = [...head.querySelectorAll("path")].filter(q => !q.classList.contains("ghost-paren") && !q.getAttribute("transform")).map(q => q.getAttribute("d")).filter(Boolean);
+          if (!paths.length) continue;
+          let bb = null; try { bb = head.getBBox(); } catch (e) {}
+          if (!bb || !bb.width) continue;
+          let staff = 1; try { staff = n.ParentVoiceEntry.ParentSourceStaffEntry.ParentStaff.Id || 1; } catch (e) {}
+          const m = { rel, len: n.Length.RealValue, staff, drum: isDrumScore, paths, cx: bb.x + bb.width / 2, cy: bb.y + bb.height / 2, h: bb.height, id: 0 };
+          (out.byStart.get(mStart) || out.byStart.set(mStart, []).get(mStart)).push(m);
+        }
+      }
+    }
+  } catch (e) {}
+  let id = 0; for (const l of out.byStart.values()) for (const m of l) m.id = ++id;
+  return out;
+}
+// 記譜位置的音符頭 → 演奏順序(反覆記號重播的小節再亮一次);perfMeasures 換了才重算
+function headMarksPerf(src){
+  if (src.perf && src.perfKey === perfMeasures) return src.perf;
+  const list = [];
+  for (const pm of perfMeasures) {
+    const l = src.byStart.get(pm.srcStart);
+    if (!l) continue;
+    for (const m of l) if (m.rel < pm.end - pm.start - 1e-9 || pm.end - pm.start <= 0) list.push({ m, t: pm.start + m.rel });
+  }
+  list.sort((a, b) => a.t - b.t);
+  let maxLen = 0; for (const q of list) maxLen = Math.max(maxLen, q.m.len);
+  src.perf = list; src.perfKey = perfMeasures; src.maxLen = maxLen;
+  return list;
+}
+// sec 時正在亮的音符頭:[{ m, a(不透明度), p(放大倍數) }]
+function litHeadsAt(src, sec, pop){
+  if (!src || !src.byStart.size || !events.length) return [];
+  const list = headMarksPerf(src);
+  if (!list.length) return [];
+  const G = NOTE_GLOW, calib = useCalib();
+  const w = secToWhole(sec), wBack = secToWhole(Math.max(0, sec - G.fadeSec - G.drumHoldSec - 0.05));
+  let lo = 0, hi = list.length - 1;
+  if (list[0].t > w + 1e-6) return [];
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (list[mid].t <= w + 1e-6) lo = mid; else hi = mid - 1; }
+  const best = new Map();
+  for (let i = lo; i >= 0 && list[i].t >= wBack - src.maxLen - 1e-6; i--) {
+    const q = list[i], m = q.m;
+    if (q.t + m.len < wBack - 1e-6) continue;
+    const t0 = posToSec(q.t, calib);
+    if (t0 > sec) continue;
+    const end = m.drum ? t0 + G.drumHoldSec : Math.max(posToSec(q.t + m.len, calib), t0 + G.minSec);
+    const a = sec < end ? 1 : 1 - (sec - end) / G.fadeSec;
+    if (a <= 0) continue;
+    const da = sec - t0, p = pop && da < G.popSec ? 1 + G.pop * Math.pow(1 - da / G.popSec, 2) : 1;
+    const o = best.get(m.id);
+    if (!o || a > o.a) best.set(m.id, { m, a, p });
+  }
+  return [...best.values()];
+}
+function noteGlowColor(m, pal){ return m.drum ? pal.d : m.staff === 2 ? pal[2] : m.staff >= 3 ? pal[2] : pal[1]; }
+/* 匯出:在畫好樂譜的畫布上畫亮起來的音符頭。(ox, oy) = SVG 的 CSS px 原點在畫布上的位置,sx/sy = CSS px → 畫布倍數;
+   only(y) 可以限制只畫某個範圍(翻頁式只畫這一頁) */
+function drawNoteGlow(ctx, src, sec, ox, oy, sx, sy, glowPx, only){
+  const lit = litHeadsAt(src, sec, true);
+  if (!lit.length) return;
+  const g = src.geo, pal = NOTE_GLOW.light;
+  ctx.save();
+  const base = ctx.getTransform();   // 預覽/封面可能先縮放過畫布
+  for (const { m, a, p } of lit) {
+    const pyC = (m.cy - g.y0) * g.ky;
+    if (only && !only(pyC)) continue;
+    m.p2d = m.p2d || m.paths.map(d => new Path2D(d));
+    const col = noteGlowColor(m, pal);
+    ctx.globalAlpha = a;
+    ctx.fillStyle = col;
+    ctx.shadowColor = col;
+    ctx.shadowBlur = Math.max(2, m.h * g.ky * sy * NOTE_GLOW.blur) * a;
+    // CSS px → 畫布:X = ox + (u − x0)·kx·sx;以音符頭中心為準放大 p 倍
+    const kx = g.kx * sx * p, ky = g.ky * sy * p;
+    const cxC = ox + (m.cx - g.x0) * g.kx * sx, cyC = oy + pyC * sy;
+    ctx.setTransform(base.multiply(new DOMMatrix([kx, 0, 0, ky, cxC - m.cx * kx, cyC - m.cy * ky])));
+    for (const q of m.p2d) ctx.fill(q);
+  }
+  ctx.restore();
+}
+/* 畫面:#noteGlow(沒有濾鏡的 SVG,跟樂譜同一個 viewBox、疊在樂譜正上方)裡放亮起來的音符頭副本 */
+let screenGlowSrc = null;
+const glowEls = new Map();
+function rebuildScreenNoteGlow(){
+  const svg = $("score") && $("score").querySelector("svg"), ov = $("noteGlow");
+  for (const el of glowEls.values()) el.remove();
+  glowEls.clear();
+  screenGlowSrc = null;
+  if (!svg || !ov || typeof osmd === "undefined" || !osmd) return;
+  screenGlowSrc = collectHeadMarks(osmd, svg);
+  ov.setAttribute("viewBox", svg.getAttribute("viewBox") || ("0 0 " + (svg.getAttribute("width") || 0) + " " + (svg.getAttribute("height") || 0)));
+  ov.setAttribute("preserveAspectRatio", "none");
+  placeScreenNoteGlow();
+}
+function placeScreenNoteGlow(){
+  const svg = $("score") && $("score").querySelector("svg"), ov = $("noteGlow"), sc = $("scroller");
+  if (!svg || !ov || !sc) return;
+  const sr = svg.getBoundingClientRect(), cr = sc.getBoundingClientRect(), s0 = scoreFit.s || 1;
+  ov.style.left = ((sr.left - cr.left) / s0) + "px";
+  ov.style.top = ((sr.top - cr.top) / s0) + "px";
+  ov.style.width = (sr.width / s0) + "px";
+  ov.style.height = (sr.height / s0) + "px";
+}
+function updateNoteGlowLive(sec){
+  const ov = $("noteGlow");
+  if (!ov) return;
+  const lit = screenGlowSrc && !exporting ? litHeadsAt(screenGlowSrc, sec + KB_LOOKAHEAD_SEC, playing) : [];
+  const pal = lightThemeOn() ? NOTE_GLOW.light : NOTE_GLOW.dark, seen = new Set();
+  for (const { m, a, p } of lit) {
+    seen.add(m.id);
+    let el = glowEls.get(m.id);
+    if (!el) {
+      el = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      for (const d of m.paths) { const q = document.createElementNS("http://www.w3.org/2000/svg", "path"); q.setAttribute("d", d); el.appendChild(q); }
+      ov.appendChild(el); glowEls.set(m.id, el);
+    }
+    const col = noteGlowColor(m, pal);
+    if (el._col !== col) { el.setAttribute("fill", col); el.style.filter = "drop-shadow(0 0 " + (m.h * 0.45).toFixed(1) + "px " + col + ")"; el._col = col; }
+    el.setAttribute("opacity", a.toFixed(3));
+    el.setAttribute("transform", p !== 1 ? "translate(" + (m.cx * (1 - p)).toFixed(2) + " " + (m.cy * (1 - p)).toFixed(2) + ") scale(" + p.toFixed(3) + ")" : "");
+  }
+  for (const [id, el] of glowEls) if (!seen.has(id)) { el.remove(); glowEls.delete(id); }
 }
 $("measureHl").addEventListener("change", applyHighlightStyles);
 $("lightTheme").addEventListener("change", applyTheme);
@@ -11623,6 +11806,13 @@ function drawKeyboard(ctx, x, y, w, h, activeMap){
   }
   drawKeyboardDirect(ctx, x, y, w, h, activeMap);
 }
+/* 按下的鍵往下沉(使用者選的,2026-11):鍵的前緣(畫面下緣)縮短、露出底板,後端有被兩旁的鍵擋住的陰影;
+   白鍵縮 2.5%(最少 1.5、最多 5 個單位)、黑鍵縮 4%(最少 1、最多 4)、黑鍵投影變一半。小圖照狀態快取,不影響速度 */
+const KB_PRESS = { white: 0.025, whiteMin: 1.5, whiteMax: 5, black: 0.04, blackMin: 1, blackMax: 4, topShade: 0.12, topAlpha: 0.32, sideAlpha: 0.18, blackShadow: 0.5 };
+function kbPressDip(len, black){
+  const P = KB_PRESS;
+  return black ? Math.min(P.blackMax, Math.max(P.blackMin, len * P.black)) : Math.min(P.whiteMax, Math.max(P.whiteMin, len * P.white));
+}
 let kbShadowScale = 1;   // shadowBlur 不跟著 ctx 的縮放走:在放大 s 倍的小圖上畫光暈時要自己乘 s
 function drawKeyboardSprites(ctx, x, y, w, h, activeMap, s = 1){
   const geo = [x, y, w, h, KB_LOW, KB_HIGH, s].join("|");
@@ -11694,75 +11884,56 @@ function drawWhiteKey(ctx, kx, y, kw, h, info){
   if (attack) baseColor = staff === 2 ? ["#B6FFF4", "#3FBFAE"] : ["#FFF3CC", "#F2B94B"];
   const g = ctx.createLinearGradient(kx, y, kx, y + h);
   g.addColorStop(0, baseColor[0]); g.addColorStop(0.85, baseColor[1]); g.addColorStop(1, baseColor[1]);
+  if (staff) h -= kbPressDip(h, false);   // 按下的鍵往下沉:前緣(畫面下緣)縮短,露出底板(KB_PRESS)
   if (staff) { ctx.save(); ctx.shadowColor = staff === 2 ? "rgba(63,191,174,0.85)" : "rgba(242,185,75,0.85)"; ctx.shadowBlur = (attack ? 24 : 14) * kbShadowScale; }
   kbRoundRect(ctx, kx, y, kw, h, [3, 3, 6, 6]); ctx.fillStyle = g; ctx.fill();
   if (staff) ctx.restore();
+  if (staff) {
+    // 沉下去的鍵:後端被兩旁的鍵擋住的陰影 + 左右兩側的內陰影
+    const sh = ctx.createLinearGradient(kx, y, kx, y + h * KB_PRESS.topShade);
+    sh.addColorStop(0, "rgba(0,0,0," + KB_PRESS.topAlpha + ")"); sh.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.save(); kbRoundRect(ctx, kx, y, kw, h, [3, 3, 6, 6]); ctx.clip();
+    ctx.fillStyle = sh; ctx.fillRect(kx, y, kw, h * KB_PRESS.topShade);
+    const sw = Math.max(1, kw * 0.12);
+    const sl = ctx.createLinearGradient(kx, 0, kx + sw, 0); sl.addColorStop(0, "rgba(0,0,0," + KB_PRESS.sideAlpha + ")"); sl.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = sl; ctx.fillRect(kx, y, sw, h);
+    const sr = ctx.createLinearGradient(kx + kw, 0, kx + kw - sw, 0); sr.addColorStop(0, "rgba(0,0,0," + KB_PRESS.sideAlpha + ")"); sr.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = sr; ctx.fillRect(kx + kw - sw, y, sw, h);
+    ctx.restore();
+  }
   ctx.strokeStyle = "rgba(0,0,0,0.35)"; ctx.lineWidth = 1;
   kbRoundRect(ctx, kx, y, kw, h, [3, 3, 6, 6]); ctx.stroke();
-  ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(kx + 2, y + 1); ctx.lineTo(kx + kw - 2, y + 1); ctx.stroke();
+  if (!staff) {   // 頂端高光只畫在沒按下的鍵(沉下去的鍵後端在陰影裡)
+    ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(kx + 2, y + 1); ctx.lineTo(kx + kw - 2, y + 1); ctx.stroke();
+  }
 }
 function drawBlackKey(ctx, kx, y, blackW, blackH, info){
   const staff = info && info.staff, attack = info && info.attack;
   let baseColor = staff === 2 ? ["#3FBFAE", "#0F5F56"] : staff === 1 ? ["#F2B94B", "#8A6410"] : ["#3a3a3a", "#0a0a0a"];
   if (attack) baseColor = staff === 2 ? ["#8FFFF0", "#22887A"] : staff === 1 ? ["#FFE39A", "#C4901A"] : baseColor;
+  const dip = staff ? kbPressDip(blackH, true) : 0;   // 按下的黑鍵往下沉:變短、投影變短(KB_PRESS)
+  blackH -= dip;
   ctx.fillStyle = "rgba(0,0,0,0.45)";
-  ctx.fillRect(kx - 1, y + blackH, blackW + 2, 6);
+  ctx.fillRect(kx - 1, y + blackH, blackW + 2, staff ? 6 * KB_PRESS.blackShadow : 6);
   const g = ctx.createLinearGradient(kx, y, kx, y + blackH);
   g.addColorStop(0, baseColor[0]); g.addColorStop(1, baseColor[1]);
   if (staff) { ctx.save(); ctx.shadowColor = staff === 2 ? "rgba(63,191,174,0.9)" : "rgba(242,185,75,0.9)"; ctx.shadowBlur = 12 * kbShadowScale; }
   kbRoundRect(ctx, kx, y, blackW, blackH, [2, 2, 4, 4]); ctx.fillStyle = g; ctx.fill();
   if (staff) ctx.restore();
-  ctx.fillStyle = "rgba(255,255,255,0.18)";
+  ctx.fillStyle = "rgba(255,255,255," + (staff ? 0.1 : 0.18) + ")";
   ctx.fillRect(kx + blackW * 0.15, y + 2, blackW * 0.3, blackH * 0.35);
 }
 function drawKeyboardDirect(ctx, x, y, w, h, activeMap){
   const whiteW = w / KB_WHITE_KEYS.length;
-
   // 底板陰影,讓整個鍵盤看起來有深度
   const baseGrad = ctx.createLinearGradient(0, y, 0, y + h);
   baseGrad.addColorStop(0, "#050403");
   baseGrad.addColorStop(1, "#0C0A07");
   ctx.fillStyle = baseGrad;
   ctx.fillRect(x, y, w, h);
-
-  const rr = (cx, cy, cw, ch, r) => {
-    if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(cx, cy, cw, ch, r); }
-    else { ctx.beginPath(); ctx.rect(cx, cy, cw, ch); }
-  };
-
-  // 白鍵:漸層 + 立體邊緣 + 按下時的光暈(觸鍵瞬間更亮,之後轉為持續的普通高亮)
-  for (let i = 0; i < KB_WHITE_KEYS.length; i++) {
-    const m = KB_WHITE_KEYS[i];
-    const kx = x + i * whiteW;
-    const kw = whiteW - 1;
-    const info = activeMap.get(m);
-    const staff = info && info.staff;
-    const attack = info && info.attack;
-    let baseColor = staff === 2 ? ["#5FE0CE", "#22887A"] : staff === 1 ? ["#FFDA7A", "#C4901A"] : ["#FFFDF6", "#DDD6C4"];
-    if (attack) baseColor = staff === 2 ? ["#B6FFF4", "#3FBFAE"] : ["#FFF3CC", "#F2B94B"];
-    const g = ctx.createLinearGradient(kx, y, kx, y + h);
-    g.addColorStop(0, baseColor[0]);
-    g.addColorStop(0.85, baseColor[1]);
-    g.addColorStop(1, baseColor[1]);
-    if (staff) {
-      ctx.save();
-      ctx.shadowColor = staff === 2 ? "rgba(63,191,174,0.85)" : "rgba(242,185,75,0.85)";
-      ctx.shadowBlur = attack ? 24 : 14;
-    }
-    rr(kx, y, kw, h, [3, 3, 6, 6]);
-    ctx.fillStyle = g;
-    ctx.fill();
-    if (staff) ctx.restore();
-    // 鍵縫陰影
-    ctx.strokeStyle = "rgba(0,0,0,0.35)"; ctx.lineWidth = 1;
-    rr(kx, y, kw, h, [3, 3, 6, 6]); ctx.stroke();
-    // 頂端高光細線,增加立體感
-    ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(kx + 2, y + 1); ctx.lineTo(kx + kw - 2, y + 1); ctx.stroke();
-  }
-
-  // 黑鍵:漸層 + 陰影,疊在白鍵上方
+  // 白鍵、黑鍵跟小圖版(drawKeyboardSprites)用同一組函式畫,兩邊才會一模一樣
+  for (let i = 0; i < KB_WHITE_KEYS.length; i++) drawWhiteKey(ctx, x + i * whiteW, y, whiteW - 1, h, activeMap.get(KB_WHITE_KEYS[i]));
   const blackH = h * 0.6, blackW = whiteW * 0.62;
   for (let m = KB_LOW; m <= KB_HIGH; m++) {
     if (!isBlackKey(m)) continue;
@@ -11770,31 +11941,7 @@ function drawKeyboardDirect(ctx, x, y, w, h, activeMap){
     while (isBlackKey(leftWhite)) leftWhite--;
     const li = KB_WHITE_IDX[leftWhite];
     if (li === undefined) continue;
-    const kx = x + (li + 1) * whiteW - blackW / 2;
-    const info = activeMap.get(m);
-    const staff = info && info.staff;
-    const attack = info && info.attack;
-    let baseColor = staff === 2 ? ["#3FBFAE", "#0F5F56"] : staff === 1 ? ["#F2B94B", "#8A6410"] : ["#3a3a3a", "#0a0a0a"];
-    if (attack) baseColor = staff === 2 ? ["#8FFFF0", "#22887A"] : staff === 1 ? ["#FFE39A", "#C4901A"] : baseColor;
-    // 黑鍵投影到白鍵上
-    ctx.fillStyle = "rgba(0,0,0,0.45)";
-    ctx.fillRect(kx - 1, y + blackH, blackW + 2, 6);
-
-    const g = ctx.createLinearGradient(kx, y, kx, y + blackH);
-    g.addColorStop(0, baseColor[0]);
-    g.addColorStop(1, baseColor[1]);
-    if (staff) {
-      ctx.save();
-      ctx.shadowColor = staff === 2 ? "rgba(63,191,174,0.9)" : "rgba(242,185,75,0.9)";
-      ctx.shadowBlur = 12;
-    }
-    rr(kx, y, blackW, blackH, [2, 2, 4, 4]);
-    ctx.fillStyle = g;
-    ctx.fill();
-    if (staff) ctx.restore();
-    // 黑鍵頂端光澤
-    ctx.fillStyle = "rgba(255,255,255,0.18)";
-    ctx.fillRect(kx + blackW * 0.15, y + 2, blackW * 0.3, blackH * 0.35);
+    drawBlackKey(ctx, x + (li + 1) * whiteW - blackW / 2, y, blackW, blackH, activeMap.get(m));
   }
 }
 
@@ -12555,6 +12702,9 @@ function updatePlaylineExtent(){
   // 畫面上的小節色塊上下也照播放軸(以前整個樂譜區高,段落記號 Chorus/Intro 被蓋住;使用者 2026-10)
   const hl = $("measureHighlight");
   if (hl) { hl.style.top = cTop + "px"; hl.style.bottom = "auto"; hl.style.height = Math.max(0, cBot - cTop) + "px"; }
+  const hp = $("measureHighlightPrev");
+  if (hp) { hp.style.top = cTop + "px"; hp.style.bottom = "auto"; hp.style.height = Math.max(0, cBot - cTop) + "px"; }
+  placeScreenNoteGlow();
   setScrollerX(lastScrollX);
 }
 const KB_LOOKAHEAD_SEC = 0.06; // 鍵盤提前量,補償視覺感知上的延遲感
@@ -14129,6 +14279,7 @@ async function renderExportStill(cfg, stale){
   if (stale && stale()) return null;
   const cv = document.createElement("canvas");
   cv.width = cfg.W; cv.height = cfg.H;
+  cfg = { ...cfg, still: true };   // 靜態畫面(預覽、封面):小節色塊不做換小節的淡入淡出
   if (pg) drawExportPageFrame(cv.getContext("2d"), layout, cfg, pg, songSec, useCalib());
   else drawExportFrame(cv.getContext("2d"), layout, cfg, previewRaster.tiles, previewRaster.scale, songSec, useCalib());
   return cv;
@@ -14499,8 +14650,10 @@ async function rasterizeScore(targetH){
   // 實際的水平縮放是 fullW/srcW 而不是 scale(targetH/srcH)。差距雖然只有 1e-5 等級,
   // 但樂譜長達一萬多 px,累積起來就是半個 px 的偏移。匯出時 scale 只用來換算 x
   // (色塊、游標位移),所以直接回傳水平縮放比,讓色塊跟樂譜圖用完全相同的對應關係。
+  exportGlowSy = targetH / srcH;   // 樂譜點陣圖的垂直倍數(音符發亮用)
   return { tiles, scale: fullW / srcW };
 }
+let exportGlowSy = 1;
 
 async function exportCombinedWithVideo(){
   if (!events.length || exporting) return;
@@ -14805,20 +14958,22 @@ function drawExportFrame(ctx, layout, cfg, tiles, scale, songSec, calib){
   // 小節高亮畫在樂譜「之前」,才會在音符底下當底色而不是蓋住音符(跟現場畫面的 z-index 一致)。
   // 上下範圍 = 播放軸的範圍(2026-10 使用者反映太靠近副標題:以前上緣是樂譜內容上緣〔含小節號、速度記號〕,比播放軸高出一截)
   if (!cfg.noCursor && measureHlOn()) {   // noCursor:封面圖不畫小節色塊與播放軸
-    const mb = measureBoundsAt(songSec);
-    if (mb) {
-      const hlTop = plTop;
-      ctx.save();
-      ctx.globalAlpha = hlMeasureOpacity();
-      ctx.fillStyle = exportInkColor(hlMeasureColor()); // 跟游標套用同一條換算規則,兩者在匯出畫面才會同色
+    const f = measureFadeAt(songSec, !cfg.still);   // 換小節時交叉淡化(MEASURE_FADE_SEC)
+    const hlTop = plTop;
+    ctx.save();
+    ctx.fillStyle = exportInkColor(hlMeasureColor()); // 跟游標套用同一條換算規則,兩者在匯出畫面才會同色
+    for (const [mb, k] of [[f.prev, 1 - f.a], [f.cur, f.prev ? f.a : 1]]) {
+      if (!mb || k <= 0) continue;
+      ctx.globalAlpha = hlMeasureOpacity() * k;
       ctx.fillRect(off + mb.left * scale, hlTop, Math.max(0, (mb.right - mb.left) * scale), Math.max(0, plBottom - hlTop));
-      ctx.restore();
     }
+    ctx.restore();
   }
   for (const tl of tiles) {
     const dx = off + tl.x;
     if (dx < W && dx + tl.canvas.width > 0) ctx.drawImage(tl.canvas, dx, topY);
   }
+  if (!cfg.noCursor && screenGlowSrc) drawNoteGlow(ctx, screenGlowSrc, songSec + KB_LOOKAHEAD_SEC, off, topY, scale, exportGlowSy);
   const curCol = exportInkColor(hlCursorColor()); // 米色譜面上要換成深色版本,見函式上方說明
   if (!cfg.noCursor) {
     ctx.save();
@@ -15025,6 +15180,7 @@ async function buildPageScore(cfg, layout){
     r = await renderPageOsmd(contentW, sp); g = readPageGeometry(r.o);
   }
   const svg = r.host.querySelector("svg");
+  const glow = collectHeadMarks(r.o, svg);   // 音符發亮:翻頁版自己的音符頭位置(要在拿掉之前量)
   const wAttr = parseFloat(svg.getAttribute("width")) || contentW;
   const vb = (svg.getAttribute("viewBox") || "").split(/[\s,]+/).map(Number);
   const vbScale = vb.length === 4 && vb[2] > 0 ? vb[2] / wAttr : 1;   // 畫面 px → SVG 內部座標
@@ -15041,7 +15197,7 @@ async function buildPageScore(cfg, layout){
   const svgHead = shell.slice(0, headEnd).replace(/\s(width|height|viewBox|preserveAspectRatio)="[^"]*"/g, "").replace(/\/$/, "")
     + ' width="__W__" height="__H__" viewBox="__VB__" preserveAspectRatio="none">';
   r.host.remove();
-  pageScoreCache = { key, availH, tallest0, tallest: Math.max(...g.systems.map(s => s.bot - s.top)), svgMain, svgHead, parts, vbX: vb.length === 4 ? vb[0] : 0, vbScale, contentW, sp,
+  pageScoreCache = { glow, key, availH, tallest0, tallest: Math.max(...g.systems.map(s => s.bot - s.top)), svgMain, svgHead, parts, vbX: vb.length === 4 ? vb[0] : 0, vbScale, contentW, sp,
     systems: g.systems, measures: g.measures, pages: paginateSystems(g.systems, availH), canvases: new Map(), pending: new Map(), used: new Map(), tick: 0, shown: -1 };
   return pageScoreCache;
 }
@@ -15113,13 +15269,21 @@ function drawExportPageFrame(ctx, layout, cfg, pg, songSec, calib){
   const ink = exportInkColor(hlCursorColor());
   if (onPage && !cfg.noCursor && measureHlOn()) {
     ctx.save();
-    ctx.globalAlpha = hlMeasureOpacity();
     ctx.fillStyle = exportInkColor(hlMeasureColor());
     const padY = pg.sp * 1.5;
-    ctx.fillRect(ox + pos.m.left, oy + pos.sys.staffTop - padY, pos.m.right - pos.m.left, pos.sys.staffBot - pos.sys.staffTop + padY * 2);
+    // 換小節時交叉淡化(上一小節在同一頁才畫)
+    const f = measureFadeAt(songSec, !cfg.still);
+    let prev = null;
+    if (f.prev) { const pq = pagePosAt(pg, f.st - 1e-3); if (pq && pq.m !== pos.m && pq.sys.page === p) prev = pq; }
+    for (const [q, k] of [[prev, 1 - f.a], [pos, prev ? f.a : 1]]) {
+      if (!q || k <= 0) continue;
+      ctx.globalAlpha = hlMeasureOpacity() * k;
+      ctx.fillRect(ox + q.m.left, oy + q.sys.staffTop - padY, q.m.right - q.m.left, q.sys.staffBot - q.sys.staffTop + padY * 2);
+    }
     ctx.restore();
   }
   if (cv) ctx.drawImage(cv, ox, oy + page.y0);
+  if (cv && !cfg.noCursor && pg.glow) drawNoteGlow(ctx, pg.glow, songSec + KB_LOOKAHEAD_SEC, ox, oy, 1, 1, 0, y => y >= page.y0 && y <= page.y1);
   if (onPage && !cfg.noCursor) {
     const pad = pg.sp * (cfg.includeKeyboard ? PLAYLINE_PAD_SPACES_WITH_PANEL : PLAYLINE_PAD_SPACES_SCORE_ONLY);
     const x = ox + pos.x, top = oy + pos.sys.staffTop - pad, bot = oy + pos.sys.staffBot + pad;
