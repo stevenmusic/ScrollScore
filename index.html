@@ -14323,7 +14323,9 @@ async function renderExportStill(cfg, stale){
    有標題時蓋一層半透明底色、把標題放大置中——縮圖在 YouTube 列表上只有約 320px 寬,
    影片裡的標題(畫面寬的 5.5%)縮小後幾乎看不清楚。不放頻道名稱(列表旁邊本來就有)。
    橫式輸出 1280×720(YouTube 縮圖建議尺寸,上限 2MB),直式/方形照影片尺寸;JPEG 0.92 */
-const COVER = { titleMax: 0.15, titleMin: 0.07, widthFrac: 0.86, veil: 0.74, landscapeW: 1280 };
+/* 標題大小(使用者 2026-11:「標題大小可以改」「不要增加選項,直接幫我做好」):YouTube 手機列表的縮圖只有約 170pt 寬,
+   標題至少要佔縮圖寬的四成左右才讀得到。以前 0.15(1280×720 的「甲乙丙丁」約 34% 寬)→ 0.2(約 45%);太長照樣縮字/換行 */
+const COVER = { titleMax: 0.2, titleMin: 0.085, widthFrac: 0.86, veil: 0.74, landscapeW: 1280 };
 async function coverCard(cfg){
   const base = { ...cfg, title: "", subtitle: "", channel: "", noCursor: true };   // 縮圖不放頻道名稱:YouTube 列表旁邊本來就有頻道名與頭像(使用者確認)
   const cv = await renderExportStill(base);
@@ -14424,7 +14426,8 @@ async function coverScoreFrame(cfg){
 // 雜誌分割:一邊是大標題(靠左、金色短線),另一邊是樂譜特寫;直式是上面樂譜、下面標題
 async function coverEditorial(cfg){
   const { cv: frame, top, bot } = await coverScoreFrame(cfg);
-  const W = frame.width, H = frame.height, ref = Math.min(W, H), land = W >= H;
+  // 方形也用上下排(以前跟橫式一樣左右排,文字欄只有 35% 寬,四個字的「甲乙丙丁」被拆成兩行、字很小)
+  const W = frame.width, H = frame.height, ref = Math.min(W, H), land = W > H * 1.2;
   const cv = document.createElement("canvas"); cv.width = W; cv.height = H;
   const ctx = cv.getContext("2d");
   const paper = currentInstrument() === "drum" ? "#FFFFFF" : "#FFFDF6";
@@ -14439,7 +14442,7 @@ async function coverEditorial(cfg){
   const scale = Math.max(area.w / sw, area.h / sh);
   const dw = sw * scale, dh = sh * scale;
   // 橫式上下置中;直式從樂譜第一行開始(不要從中間切掉一行)
-  ctx.drawImage(frame, sx, top, sw, sh, area.x + (area.w - dw) / 2, land ? area.y + (area.h - dh) / 2 : area.y + H * 0.03, dw, dh);
+  ctx.drawImage(frame, sx, top, sw, sh, area.x + (area.w - dw) / 2, cfg.page ? area.y + H * 0.03 : area.y + (area.h - dh) / 2, dw, dh);   // 翻頁式(直式)從第一行開始,單行捲動(橫式、方形)上下置中
   ctx.restore();
   // 樂譜跟文字區的交界淡出
   const fade = land ? ctx.createLinearGradient(area.x, 0, area.x + W * 0.12, 0) : ctx.createLinearGradient(0, area.h, 0, area.h - H * 0.08);
@@ -14449,12 +14452,17 @@ async function coverEditorial(cfg){
   // 文字區
   const tx = land ? W * 0.07 : W * 0.08, tw = land ? W * 0.35 : W * 0.84;   // 橫式文字不要伸進樂譜的淡出區
   // 盡量兩行(字可以縮到起始的六成),真的放不下才三行
-  const start = Math.round(ref * (land ? 0.15 : 0.13));
+  // 標題放大(2026-11):橫式 0.15 → 0.19、直式/方形 0.13 → 0.18;直式下半部以前留一大片空白
+  const start = Math.round(ref * (land ? 0.19 : 0.18));
   let t = cfg.title ? fitCoverText(ctx, cfg.title, tw, 2, start, Math.round(start * 0.6), 700) : { size: Math.round(ref * 0.1), lines: [] };
-  if (cfg.title && !t.ok) t = fitCoverText(ctx, cfg.title, tw, 3, start, Math.round(ref * 0.055), 700);
-  const sub = Math.round(Math.max(ref * 0.034, t.size * 0.34)), lineH = Math.round(t.size * 1.14);
+  if (cfg.title && !t.ok) t = fitCoverText(ctx, cfg.title, tw, 3, start, Math.round(ref * 0.06), 700);
   const barH = Math.max(4, Math.round(ref * 0.008)), barW = Math.round(ref * 0.09);
-  const blockH = barH + t.size * 0.55 + t.lines.length * lineH + (cfg.subtitle ? t.size * 0.3 + sub : 0);
+  const blockOf = t => { const sub = Math.round(Math.max(ref * 0.034, t.size * 0.34)); return barH + t.size * 0.55 + t.lines.length * Math.round(t.size * 1.14) + (cfg.subtitle ? t.size * 0.3 + sub : 0); };
+  // 文字區放不下(長標題放大後三行、把副標題擠出畫面)就再縮,直到整塊放得進去
+  const availH = (land ? H : H - area.h) * 0.86;
+  for (let st = t.size; cfg.title && blockOf(t) > availH && st > ref * 0.04; ) { st = Math.floor(st * 0.92); t = fitCoverText(ctx, cfg.title, tw, 3, st, st, 700); }
+  const sub = Math.round(Math.max(ref * 0.034, t.size * 0.34)), lineH = Math.round(t.size * 1.14);
+  const blockH = blockOf(t);
   let y = land ? Math.round((H - blockH) / 2) : Math.round(area.h + (H - area.h - blockH) / 2);
   ctx.fillStyle = ink; ctx.fillRect(tx, y, barW, barH); y += barH + Math.round(t.size * 0.55);
   ctx.textAlign = "left"; ctx.textBaseline = "top";
@@ -14483,10 +14491,15 @@ let coverPick = null;
 $("coverBtn").addEventListener("click", async () => {
   const cfg = buildExportCfg();
   if (!cfg) { setStatus(T("statusExportRangeInvalid")); return; }
+  renderCoverChoices(cfg);
+});
+// 兩種樣式都畫出來給使用者選(token:關掉再開時,還在畫的舊的那批就不放上去)
+async function renderCoverChoices(baseCfg){
+  const cfg = baseCfg;
   const ov = $("coverOverlay"), token = {};
   coverPick = { token, cfg, canvases: {} };
   for (const b of ov.querySelectorAll(".cover-choice")) {
-    b.classList.add("busy"); b.disabled = true; b.querySelector("img").removeAttribute("src");
+    b.classList.add("busy"); b.disabled = true;
     b.setAttribute("aria-checked", String(b.dataset.v === (COVER_STYLES[exportPrefs.cover] ? exportPrefs.cover : "editorial")));
   }
   for (const img of ov.querySelectorAll(".cover-thumb img")) img.removeAttribute("src");
@@ -14502,7 +14515,7 @@ $("coverBtn").addEventListener("click", async () => {
       }
     } catch (e) { setStatus(T("exportFailed", { msg: e.message || e })); }
   }
-});
+}
 for (const b of document.querySelectorAll("#coverOverlay .cover-choice")) b.addEventListener("click", async () => {
   const cv = coverPick && coverPick.canvases[b.dataset.v];
   if (!cv) return;
