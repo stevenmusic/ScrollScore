@@ -377,6 +377,7 @@
 
 ## Git 流程
 - 所有改動完成後直接 commit 並 push 到 main，不用先問我
+- **每次都要 push 到 main(使用者 2026-11 再次強調:「每次都要記得push到main」)**:網站(GitHub Pages)只讀 main。工作環境指定了別的分支(例如 claude/…)時,照樣在那個分支開發、push,**同一次一定也 push 到 main**(git push origin HEAD:main;main 有別人的新改動時先 fetch、合併、處理衝突再推)。2026-11 曾經只推分支、沒推 main,使用者開網頁聽到的一直是舊版
 
 ## 絕不能做的事
 - 不要把單檔拆成多檔案，除非我明確要求（PWA部署依賴單檔架構）
