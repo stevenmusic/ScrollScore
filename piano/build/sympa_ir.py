@@ -8,6 +8,8 @@
 App 把踩著踏板時的琴聲送進這個 IR(ConvolverNode),輸出經過踏板閘門(放開踏板 = 制音器落下 → 共鳴止住)。
 聲音跟某條弦的泛音重疊越多,那條弦就響越大,所以 C 和弦會帶出所有 C/E/G 的弦,這就是真鋼琴踩踏板時的「光暈」。
 左右:每個泛音到兩支麥克風的相位與大小各自不同(響板輻射,500Hz 以上左右不相關、低頻同相),共鳴聽起來是包圍的一片,不是一個點。
+2026-11 起預設是響板輻射模型(SYMPA_MODEL=board,使用者 A/B/C 選 C):左右相位差是頻率的平緩函數、所有弦共用,
+剛響時只有 1/4(集中在琴的位置)、0.45 秒內散開;舊的「每條弦各自隨機」= SYMPA_MODEL=string(共鳴左右每秒轉 5~30 rad,真鋼琴 0.5~6)。
 長度 5 秒、最後 2 秒淡出(放開踏板時 App 的閘門會收掉,不會跨踏板糊在一起)。固定種子,每次產生的一樣。"""
 import sys, numpy as np, soundfile as sf
 # 2026-11 新版(使用者試聽:「B 比較有共鳴在繞圈的感覺」):5 秒(最後 2 秒淡出)、相鄰弦差 1.6 cent、T60 A0 30 秒 → C8 4 秒、高次泛音變快係數 0.02。
@@ -21,8 +23,7 @@ T60_LO, T60_HI, HARM_K = (float(v) for v in os.environ.get('SYMPA_T60', '30,4,0.
 OUT = sys.argv[1] if len(sys.argv) > 1 else 'piano/sympa.flac'
 rng = np.random.default_rng(88)
 DECOR_F, DECOR_DB = 500.0, 2.5
-# 擴散(2026-11,試聽中:repo 裡的 piano/sympa.flac 還是前一版〔沒有 BLOOM/DRIFT〕,使用者選定後才重新產生;
-#   重新產生:SYMPA_MATCH=舊的 sympa.flac python3 piano/build/sympa_ir.py → 照舊檔前 1 秒響度對齊,App 的 send 不用改)
+# 擴散(2026-11;piano/sympa.flac 是預設參數〔board 模型〕產生的,直接 python3 piano/build/sympa_ir.py 就重現):
 # 使用者:「希望共鳴聽起來是一個球形,有擴散出去的感覺」):
 #   BLOOM:左右差異(相位、大小)剛響起時只有 BLOOM0 倍,BLOOM_SEC 秒內 smoothstep 長到完整 → 共鳴先在琴的位置、再往四周散開
 #   DRIFT:每個泛音左右的相位差/大小差各自用很慢的正弦飄移(DRIFT_HZ 範圍內隨機,約 2~7 秒一圈)→ 共鳴在空間裡慢慢流動
@@ -37,11 +38,11 @@ MATCH = os.environ.get('SYMPA_MATCH', '')
 #   跟哪一條弦無關 → 用隨頻率平滑變化的隨機轉移函數(每 BOARD_DF Hz 一個隨機點、複數內插),所有弦共用;
 #   每條弦再加一點自己的偏差 STRING_SD 弧度(弦在琴橋上的位置不同)。同組弦微走音的拍頻 × 這個偏差 = 左右相位緩慢移動,
 #   速度自然跟頻率成正比(真鋼琴取樣實測:600~1500Hz 約 1.5 rad/s、1.5~4kHz 約 5 rad/s;見 fine/realphase.py)
-MODEL = os.environ.get('SYMPA_MODEL', 'string')
-BOARD_DF = float(os.environ.get('SYMPA_BOARD_DF', 25))
+MODEL = os.environ.get('SYMPA_MODEL', 'board')
+BOARD_DF = float(os.environ.get('SYMPA_BOARD_DF', 250))
 STRING_SD = float(os.environ.get('SYMPA_STRING_SD', 0.5))
 BOARD_DB = float(os.environ.get('SYMPA_BOARD_DB', 2.0))
-BOARD_PH = float(os.environ.get('SYMPA_BOARD_PH', 1.2))   # 左右相位差的大小(常態分布標準差,弧度)                  # 指定舊檔:照它前 1 秒的響度對齊(App 的 send 不用改)
+BOARD_PH = float(os.environ.get('SYMPA_BOARD_PH', 1.2))   # 左右相位差的大小(常態分布標準差,弧度)
 n = int(SR * SEC); t = np.arange(n) / SR
 u = np.clip(t / BLOOM_SEC, 0, 1) if BLOOM_SEC > 0 else np.ones(n)
 bloom = BLOOM0 + (1 - BLOOM0) * u * u * (3 - 2 * u)

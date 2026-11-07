@@ -11138,7 +11138,7 @@ function pianoPlan(need, auxBytes){
 /* 取樣檔快取(Cache Storage):第一次下載後存在裝置上,之後開 App / 換曲子直接從本機讀,不用再下載
    (鋼琴 16 層全部約 156MB,手機網路下載是載入最慢的部分)。取樣檔重新產生時要把 SAMPLE_CACHE 的版本號加一,
    不然使用者會繼續用到舊檔。不支援 Cache Storage(非 https、無痕模式、儲存空間不足)時照原本直接下載 */
-const SAMPLE_CACHE = "scrollscore-samples-v5";   // v2(2026-10):piano/hall.flac 換成真實音樂廳;v3:銅鈸補回完整尾巴;v4:piano/sympa.flac 左右改成響板輻射(不相關);v5(2026-11):piano/sympa.flac 5 秒、弦衰減照取樣、相鄰弦 1.6 cent
+const SAMPLE_CACHE = "scrollscore-samples-v6";   // v6(2026-11):piano/sympa.flac 改響板輻射模型(先集中再散開);v2(2026-10):piano/hall.flac 換成真實音樂廳;v3:銅鈸補回完整尾巴;v4:piano/sympa.flac 左右改成響板輻射(不相關);v5(2026-11):piano/sympa.flac 5 秒、弦衰減照取樣、相鄰弦 1.6 cent
 let sampleCachePromise = null;
 function sampleCache(){
   if (!sampleCachePromise) sampleCachePromise = (typeof caches !== "undefined" && window.isSecureContext)
