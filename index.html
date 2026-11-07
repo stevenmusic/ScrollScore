@@ -7281,8 +7281,9 @@ function popBreathFactors(){
    在目標點剛好回到原速;前面 compMul 倍長的一段 sin² 形狀稍微放慢,補回推前省下的時間(每個目標點各自算到剛好抵消),
    所以下一段第一拍的時間跟沒有推的時候一樣,拍子交接不早不晚。範圍裡有譜上延長記號/rit. 就不推(那裡照記號)。
    快歌照 POP_SPEED 縮(popTempoScale)。不加段落結尾放慢、樂句結尾拉寬、旋律最高點停留(使用者拿掉的,POP_BREATH 維持 1)。
-   base = 已經算好的倍率(模型 + 曲尾 + 記號),直接改在上面 */
-const POP_PUSH = Object.assign({ amt: 0.03, bars: 2, minBeats: 2, compMul: 2, compMax: 0.03 }, window.POP_PUSH_OVERRIDE || {});
+   base = 已經算好的倍率(模型 + 曲尾 + 記號),直接改在上面
+   **2026-11 拿掉(amt 0,使用者決定)**:〈甲乙丙丁〉第 16 小節進副歌前右手聽起來變快;程式保留,POP_PUSH_OVERRIDE {amt:0.03} 可恢復 */
+const POP_PUSH = Object.assign({ amt: 0, bars: 2, minBeats: 2, compMul: 2, compMax: 0.03 }, window.POP_PUSH_OVERRIDE || {});
 function popPushApply(base, wf){
   const X = POP_PUSH;
   if (!X || !(X.amt > 0)) return;
@@ -9363,7 +9364,7 @@ function pianoToneFor(vel){
    piano/sympa.flac 是全部琴弦當共振器的脈衝響應(piano/build/sympa_ir.py:每條弦的泛音含非諧和性、低音弦衰減慢、
    低音左高音右),踩著踏板時發出的音送進去;放開踏板 = 制音器落下,閘門 0.1 秒內關掉。
    send 校正成單音的共鳴比琴聲本身小約 15dB(0.3~3 秒,實測 send 3.2e-4 時 18dB),和弦的音互相是泛音關係,共鳴自然更大 */
-const PIANO_SYMPA = { send: 3.1e-4, closeTau: 0.1, openTau: 0.02 };   // sympa.flac 改成左右不相關(2026-10)後峰值正規化讓檔案大 2.4dB,send 4.5e-4 → 3.4e-4 讓共鳴響度不變(整體 −20 LU);2026-11 sympa.flac 換成 5 秒、弦衰減照取樣(T60 30→4 秒)、相鄰弦 1.6 cent,3.4e-4 → 3.1e-4 讓前 1 秒共鳴音量不變
+const PIANO_SYMPA = { send: 3.9e-4, closeTau: 0.1, openTau: 0.02, lowF: 200, lowCloseTau: 0.3 };   // sympa.flac 改成左右不相關(2026-10)後峰值正規化讓檔案大 2.4dB,send 4.5e-4 → 3.4e-4 讓共鳴響度不變(整體 −20 LU);2026-11 sympa.flac 換成 5 秒、弦衰減照取樣(T60 30→4 秒)、相鄰弦 1.6 cent,3.4e-4 → 3.1e-4 讓前 1 秒共鳴音量不變;之後 +2dB → 3.9e-4(使用者交給 Claude 決定)。lowF / lowCloseTau:放開踏板時 200Hz 以下的共鳴慢一點收(低音弦制音器壓不太住)
 function isIOSDevice(){ return /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1); }
 /* Safari(iPhone/iPad 上所有瀏覽器與 App 的 WKWebView、Mac Safari)的 AudioWorklet 會把經過它的聲音弄髒(2026-10-17 iPhone 自檢:
    同一個鋼琴音不經過 AudioWorklet 8kHz 以上 −61dB,經過限幅器 AudioWorklet 變 −42dB = 使用者聽到的沙沙聲;離線合成時圖裡有
@@ -11229,6 +11230,31 @@ function getPianoBus(){
   pianoBusIn = mud; pianoBusCtx = audioCtx;
   return mud;
 }
+/* 尾巴變寬(PIANO_TAIL_WIDTH,使用者 2026-11:「我自己彈的時候覺得共鳴比較立體」):量到長音後段左右相關 0.6~0.8,
+   聲音寬度主要卡在取樣本身(Salamander 一對麥克風 + 單聲道相容處理 side×0.8)。擊鍵那一下不動,
+   每個音從 start 秒起到 full 秒,side(左右差)線性加到 1 + amount 倍:每個音多送一份到共用的 side 處理(每音只多一個 GainNode),
+   那裡只取 (L−R)/2、左加右減回去 → 左+右(單聲道)完全不變。記憶體不夠改單聲道的取樣 side 是 0,不受影響 */
+const PIANO_TAIL_WIDTH = Object.assign({ amount: 0.35, start: 0.25, full: 1.0, hp: 150, lp: 1000 }, window.PIANO_TAIL_WIDTH_OVERRIDE || {});
+let pianoTailIn = null, pianoTailCtx = null;
+function getPianoTailWiden(){
+  if (pianoTailIn && pianoTailCtx === audioCtx) return pianoTailIn;
+  const input = audioCtx.createGain(); input.channelCount = 2; input.channelCountMode = "explicit"; input.channelInterpretation = "speakers";   // Safari 的 splitter 收到單聲道時右聲道是空的
+  const split = audioCtx.createChannelSplitter(2), gl = audioCtx.createGain(), gr = audioCtx.createGain(), side = audioCtx.createGain();
+  gl.gain.value = 0.5; gr.gain.value = -0.5;
+  const neg = audioCtx.createGain(); neg.gain.value = -1;
+  const merge = audioCtx.createChannelMerger(2);
+  input.connect(split); split.connect(gl, 0); split.connect(gr, 1); gl.connect(side); gr.connect(side);
+  // 只加寬 hp~lp(150Hz~1kHz):1.2~5kHz 已經有 PIANO_WIDTH ×1.5(長音後段左右相關約 −0.1,再加會變反相、聽起來空)、
+  // 120Hz 以下最後本來就收成單聲道(BASS_MONO)
+  const hp = audioCtx.createBiquadFilter(), lp = audioCtx.createBiquadFilter();
+  hp.type = "highpass"; hp.frequency.value = PIANO_TAIL_WIDTH.hp; hp.Q.value = -3.0103;   // Web Audio 的 Q 是 dB:Butterworth
+  lp.type = "lowpass"; lp.frequency.value = PIANO_TAIL_WIDTH.lp; lp.Q.value = -3.0103;
+  side.connect(hp); hp.connect(lp);
+  lp.connect(merge, 0, 0); lp.connect(neg); neg.connect(merge, 0, 1);
+  merge.connect(getPianoBus());
+  pianoTailIn = input; pianoTailCtx = audioCtx;
+  return input;
+}
 /* 踏板共鳴的卷積器(見 PIANO_SYMPA);sympa.flac 還沒載到就回傳 null(這次不加共鳴,載到後的音才有) */
 let pianoResIn = null, pianoResGate = null, pianoResCtx = null;
 function getPianoResonance(){
@@ -11237,10 +11263,19 @@ function getPianoResonance(){
   if (!ir) return null;
   const input = audioCtx.createGain();
   const conv = audioCtx.createConvolver(); conv.normalize = false; conv.buffer = ir;   // 不自動正規化:send 是對檔案本身校正的
+  // 閘門分兩段(2026-11):LR4 分頻 PIANO_SYMPA.lowF,放開踏板時低段照 lowCloseTau 慢一點收(真鋼琴低音弦粗、制音器壓不太住,
+  // 放開踏板後低音還會「嗡」一下),高段照 closeTau。LR4 的低通 + 高通相加 = 全通,打開時跟沒分頻一樣大聲
+  const lr4 = type => { const a = audioCtx.createBiquadFilter(), b = audioCtx.createBiquadFilter();
+    for (const f of [a, b]) { f.type = type; f.frequency.value = PIANO_SYMPA.lowF; f.Q.value = -3.0103; }   // Web Audio 的 Q 是 dB:Butterworth
+    a.connect(b); return [a, b]; };
+  const [l1, l2] = lr4("lowpass"), [h1, h2] = lr4("highpass");
   const gate = audioCtx.createGain(); gate.gain.value = 0;
+  const gateLow = audioCtx.createGain(); gateLow.gain.value = 0;
+  const out = audioCtx.createGain();
+  conv.connect(h1); h2.connect(gate); conv.connect(l1); l2.connect(gateLow); gate.connect(out); gateLow.connect(out);
   const verb = audioCtx.createGain(); verb.gain.value = PIANO_VERB_SEND;
-  input.connect(conv); conv.connect(gate); gate.connect(getPianoBus()); gate.connect(verb); verb.connect(getPianoVerb());
-  pianoResIn = input; pianoResGate = gate; pianoResCtx = audioCtx;
+  input.connect(conv); out.connect(getPianoBus()); out.connect(verb); verb.connect(getPianoVerb());
+  pianoResIn = input; pianoResGate = { gains: [gate, gateLow], taus: [PIANO_SYMPA.closeTau, PIANO_SYMPA.lowCloseTau] }; pianoResCtx = audioCtx;
   return input;
 }
 /* ── 鋼琴專用殘響(取代共用的 buildImpulseResponse 大廳)────────────────
@@ -11473,6 +11508,11 @@ function playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel
   if (damperAt < end) g.gain.setTargetAtTime(0, damperAt, tau);
   src.connect(pres); pres.connect(air); air.connect(g);
   pianoConnect(g, PIANO_VERB_SEND);   // harmonyEndSec 一定有值(至少是同時最長音的結尾),不能拿來判斷踏板
+  if (PIANO_TAIL_WIDTH.amount > 0 && end > when + PIANO_TAIL_WIDTH.start) {   // 尾巴變寬(PIANO_TAIL_WIDTH):擊鍵那一下不動
+    const tw = audioCtx.createGain(), T = PIANO_TAIL_WIDTH;
+    tw.gain.setValueAtTime(0, when); tw.gain.setValueAtTime(0, when + T.start); tw.gain.linearRampToValueAtTime(T.amount, when + T.full);
+    g.connect(tw); tw.connect(getPianoTailWiden());
+  }
   if (pedal || autoPedal) { const res = getPianoResonance(); if (res) { const rs = audioCtx.createGain(); rs.gain.value = PIANO_SYMPA.send; g.connect(rs); rs.connect(res); } }
   src.start(when); src.stop(end + 0.05);
   scheduled.push(src);
@@ -11519,20 +11559,23 @@ function pianoSchedulePedalNoise(fromSec, toSec, timeToCtx){
   // 踏板共鳴閘門:從開始播放的位置起,踩下(制音器離弦)打開、放開(制音器落下)關掉
   getPianoResonance();
   if (pianoResGate) {
-    const p = pianoResGate.gain, now = audioCtx.currentTime;
+    const now = audioCtx.currentTime;
     let open = false;
     for (const [sec, o] of gateMoves) if (sec <= fromSec) open = o;
-    p.cancelScheduledValues(0); p.setValueAtTime(open ? 1 : 0, now);
-    for (const [sec, o] of gateMoves) {
-      if (sec <= fromSec || sec > toSec) continue;
-      p.setTargetAtTime(o ? 1 : 0, Math.max(now, timeToCtx(sec)), o ? PIANO_SYMPA.openTau : PIANO_SYMPA.closeTau);
-    }
+    pianoResGate.gains.forEach((gg, gi) => {
+      const p = gg.gain;
+      p.cancelScheduledValues(0); p.setValueAtTime(open ? 1 : 0, now);
+      for (const [sec, o] of gateMoves) {
+        if (sec <= fromSec || sec > toSec) continue;
+        p.setTargetAtTime(o ? 1 : 0, Math.max(now, timeToCtx(sec)), o ? PIANO_SYMPA.openTau : pianoResGate.taus[gi]);
+      }
+    });
   }
 }
 /* 停止播放:踏板共鳴的閘門關掉(不然停在踩踏板的地方,共鳴會留到下一次播放) */
 function pianoCloseResonance(){
   if (!pianoResGate || pianoResCtx !== audioCtx) return;
-  const p = pianoResGate.gain; p.cancelScheduledValues(0); p.setTargetAtTime(0, audioCtx.currentTime, PIANO_SYMPA.closeTau);
+  for (const gg of pianoResGate.gains) { const p = gg.gain; p.cancelScheduledValues(0); p.setTargetAtTime(0, audioCtx.currentTime, PIANO_SYMPA.closeTau); }
 }
 /* 踏板範圍(記譜位置):有踏板記號就用記號,沒有就用自動踏板 */
 function pianoRanges(){ return pianoRangesAll; }   // 譜上踏板 + 自動踏板(踏板記號很少時兩種都有,見 PEDAL_SPARSE)
@@ -15483,7 +15526,7 @@ function solveExportGain(E, P, block, releaseSec){
 function exportHasDrums(){ return events.some(ev => ev.notes.some(n => n.drum)); }
 // 離線算聲音時要暫時換掉的全域狀態(audioCtx 與所有快取的匯流排),算完還原
 const EXPORT_AUDIO_KEEP = ["audioCtx", "masterGain", "masterLimiter", "masterOut", "monitorOut", "masterBus", "masterLimiterNode", "masterFbOut", "masterNativeLim", "masterReady", "reverbBus", "reverbConvolver", "reverbWet", "reverbPreDelay",
-    "pianoRoomBus", "pianoBusIn", "pianoBusCtx", "pianoVerbIn", "pianoVerbWet", "pianoVerbCtx", "pianoVerbConv", "pianoVerbPre", "pianoVerbHp", "pianoVerbHall", "pianoRoomConv", "pianoRoomWet", "pianoVerbPop", "pianoResIn", "pianoResGate", "pianoResCtx", "gtrVerbIn", "gtrVerbWet", "gtrVerbCtx", "drumBus", "drumVerbIn", "drumVerbWet", "drumRoomConv", "drumRoomWet", "drumRoomIn",
+    "pianoRoomBus", "pianoBusIn", "pianoBusCtx", "pianoVerbIn", "pianoVerbWet", "pianoVerbCtx", "pianoVerbConv", "pianoVerbPre", "pianoVerbHp", "pianoVerbHall", "pianoRoomConv", "pianoRoomWet", "pianoVerbPop", "pianoResIn", "pianoResGate", "pianoResCtx", "pianoTailIn", "pianoTailCtx", "gtrVerbIn", "gtrVerbWet", "gtrVerbCtx", "drumBus", "drumVerbIn", "drumVerbWet", "drumRoomConv", "drumRoomWet", "drumRoomIn",
     "scheduled", "startCtxTime", "ringingOpenHat", "ringingCymbals", "noteSched", "pianoPedalQueue", "pianoVoices", "pianoLastByKey", "pianoRRFlip", "gtrRR"];
 /* 匯出中途按「取消」:各階段(準備、試編、離線合成、限幅器)都要停得下來,不能等整段算完(審查發現:以前要等到聲音全部算完才看取消) */
 const exportCancelError = () => Object.assign(new Error("cancelled"), { cancelled: true });
