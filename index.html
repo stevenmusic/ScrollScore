@@ -10730,6 +10730,22 @@ function pianoTopUpLayers(){
   });
 }
 function pianoDynSyncLater(){ clearTimeout(pianoDynTimer); pianoDynTimer = setTimeout(pianoDynSync, PIANO_DYN_RESYNC_MS); }
+/* 非古典的力度軟上限(POP_CEIL,使用者 2026-11:「有些地方的音符力度太大,聲音有點爆掉」):高潮彈重(POP_CLIMAX)與後面副歌補足
+   把最後一次副歌推到 108~116(〈甲乙丙丁〉第 47~50 小節,3 秒響度 −9.6 LUFS、比整首中位數大 4.4dB),用到最亮最硬的
+   第 15 層錄音 + 逐音高頻補償約 +18dB,手機喇叭上聽起來快爆開。knee 以下不動,以上只留 ratio(116 → 104、100 → 96);
+   譜上力度記號寫得比較大聲(n._lvl > 0)時上限跟著提高。window.POP_CEIL_OVERRIDE 可改({ ratio: 1 } 關掉) */
+const POP_CEIL = { knee: 92, ratio: 1 };   // 試聽中:ratio 0.5 = 92 以上只留一半(使用者確認後才打開);1 = 關掉
+function popVelocityCeiling(){
+  const C = Object.assign({}, POP_CEIL, window.POP_CEIL_OVERRIDE || {});
+  if (C.ratio >= 1) return;
+  const ns = []; for (const ev of events) for (const n of ev.notes) if (n.pvel && !n.drum) ns.push(n);
+  if (!ns.length) return;
+  const lvlMean = ns.reduce((t, n) => t + (n._lvl || 0), 0) / ns.length;   // 譜上力度記號比整首平均大聲的地方,上限跟著提高
+  for (const n of ns) {
+    const k = C.knee + Math.max(0, (n._lvl || 0) - lvlMean);
+    if (n.pvel > k) n.pvel = k + (n.pvel - k) * C.ratio;
+  }
+}
 function computePianoDynamics(){
   pianoDynBpm = bpm();
   const multiStaff = events.some(ev => ev.notes.some(n => !n.drum && n.freq && (n.staff || 1) > 1));
@@ -11072,6 +11088,7 @@ function computePianoDynamics(){
   popMelodyOnTop();         // 安全網:旋律不要比同時彈的伴奏小聲
   popSectionJoin();         // 非古典:往下一段漸強時,下一段開頭不低於前一段結尾(SECTION_RISE;放在各項校正之後,結果才不會被後面的步驟改掉)
   popRepeatFloor();         // 非古典:後面的副歌不比前面的小聲(SECTION_REPEAT;放在 popSectionJoin 之後,跟它補過的副歌開頭比)
+  if (pop) popVelocityCeiling();   // 非古典:最大聲的音軟上限(POP_CEIL;重音在後面照比例加)
   if (pop) applyAccentRatios(true);   // 非古典的重音最後才加(見上面)
   pianoVelocityAsync(multiStaff);
   pianoWideChordRoll(multiStaff);
