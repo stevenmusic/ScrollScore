@@ -32,11 +32,32 @@ BLOOM_SEC = float(os.environ.get('SYMPA_BLOOM_SEC', 0.45))
 DRIFT_RAD = float(os.environ.get('SYMPA_DRIFT', 1.2))      # 相位差飄移幅度(弧度)
 DRIFT_DB = float(os.environ.get('SYMPA_DRIFT_DB', 1.5))    # 左右大小差飄移幅度(dB)
 DRIFT_HZ = tuple(float(v) for v in os.environ.get('SYMPA_DRIFT_HZ', '0.15,0.45').split(','))
-MATCH = os.environ.get('SYMPA_MATCH', '')                  # 指定舊檔:照它前 1 秒的響度對齊(App 的 send 不用改)
+MATCH = os.environ.get('SYMPA_MATCH', '')
+# 響板輻射模型(SYMPA_MODEL=board,2026-11):真鋼琴所有弦都經過同一片響板發聲,到左右的相位/大小是「頻率」的函數(響板在那個頻率的振動形狀),
+#   跟哪一條弦無關 → 用隨頻率平滑變化的隨機轉移函數(每 BOARD_DF Hz 一個隨機點、複數內插),所有弦共用;
+#   每條弦再加一點自己的偏差 STRING_SD 弧度(弦在琴橋上的位置不同)。同組弦微走音的拍頻 × 這個偏差 = 左右相位緩慢移動,
+#   速度自然跟頻率成正比(真鋼琴取樣實測:600~1500Hz 約 1.5 rad/s、1.5~4kHz 約 5 rad/s;見 fine/realphase.py)
+MODEL = os.environ.get('SYMPA_MODEL', 'string')
+BOARD_DF = float(os.environ.get('SYMPA_BOARD_DF', 25))
+STRING_SD = float(os.environ.get('SYMPA_STRING_SD', 0.5))
+BOARD_DB = float(os.environ.get('SYMPA_BOARD_DB', 2.0))
+BOARD_PH = float(os.environ.get('SYMPA_BOARD_PH', 1.2))   # 左右相位差的大小(常態分布標準差,弧度)                  # 指定舊檔:照它前 1 秒的響度對齊(App 的 send 不用改)
 n = int(SR * SEC); t = np.arange(n) / SR
 u = np.clip(t / BLOOM_SEC, 0, 1) if BLOOM_SEC > 0 else np.ones(n)
 bloom = BLOOM0 + (1 - BLOOM0) * u * u * (3 - 2 * u)
 L = np.zeros(n); R = np.zeros(n)
+brng = np.random.default_rng(1088)
+kn = np.arange(0, 9200, BOARD_DF)
+def smooth_cplx():   # 隨頻率平滑變化的單位複數(相位均勻隨機)
+    z = np.exp(1j * brng.uniform(0, 2 * np.pi, len(kn)))
+    def f(fq):
+        re = np.interp(fq, kn, z.real); im = np.interp(fq, kn, z.imag); return np.angle(re + 1j * im)
+    return f
+def smooth_real(sd):
+    v = brng.normal(0, sd, len(kn)); return lambda fq: np.interp(fq, kn, v)
+# 左右相位差 Φ(f):隨頻率平緩變化(每 BOARD_DF Hz 一個常態隨機點、線性內插)。BOARD_DF 跟「兩耳/兩支麥克風到響板各處的距離差」有關:
+#   距離差約 1 公尺 → 左右延遲差約 3ms → 相位差每幾百 Hz 才明顯變化(太小的 BOARD_DF 會讓頻率很近的兩條弦彼此拍頻時左右相位快速轉圈,聽起來晃)
+phD = smooth_real(BOARD_PH); gLdb, gRdb = smooth_real(BOARD_DB), smooth_real(BOARD_DB)
 for m in range(21, 109):
     f0 = 440 * 2 ** ((m - 69) / 12)
     B = 8e-5 * np.exp(0.055 * (m - 21))                   # 非諧和係數:A0 ≈ 8e-5,C8 ≈ 1e-2
@@ -57,6 +78,16 @@ for m in range(21, 109):
             # (響板各處振動模態不同);以前左右是同一個正弦波只差音量 → 共鳴是「擺在某個位置的點」,很扁。
             # 低頻波長長、兩支麥克風收到的幾乎同相,DECOR_F 以上完全不相關;大小差 ±DECOR_DB(常態分布)
             dec = min(1.0, fk / DECOR_F)
+            if MODEL == 'board':
+                ph = rng.uniform(0, 2 * np.pi); ff = fk * det
+                # 左右相位差 = 響板(頻率的函數,所有弦共用)+ 這條弦自己的偏差;剛響時只有 BLOOM0 倍,BLOOM_SEC 內長到完整
+                pd0 = (phD(ff) + rng.normal(0, STRING_SD)) * dec
+                db0 = (gRdb(ff) - gLdb(ff)) * dec
+                dph = pd0 * bloom; ldb = db0 * bloom
+                base = 2 * np.pi * ff * t + ph
+                L += np.sin(base - dph / 2) * env * (amp * gl * 10 ** (-ldb / 40))
+                R += np.sin(base + dph / 2) * env * (amp * gr * 10 ** (ldb / 40))
+                continue
             d0 = rng.uniform(-np.pi, np.pi) * dec
             dl, dr = rng.normal(0, DECOR_DB * dec), rng.normal(0, DECOR_DB * dec)
             fd = rng.uniform(*DRIFT_HZ); pd = rng.uniform(0, 2 * np.pi)

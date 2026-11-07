@@ -5,7 +5,7 @@ import { chromium } from "playwright";
 import http from "node:http"; import fs from "node:fs"; import path from "node:path"; import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const [jsonPath, outPath, setArg] = process.argv.slice(2);   // 第三個參數(可省略):{"MASTER.compRatio":2,...} 改設定物件的欄位
-const ROOT = path.resolve(path.join(path.dirname(new URL(import.meta.url).pathname), "../.."));
+const ROOT = process.env.ROOT ? path.resolve(process.env.ROOT) : path.resolve(path.join(path.dirname(new URL(import.meta.url).pathname), "../.."));   // ROOT=別的目錄:換取樣/IR 做 A/B
 const server = http.createServer((req, res) => { const p = path.join(ROOT, decodeURIComponent(req.url.split("?")[0])); if (!p.startsWith(ROOT) || !fs.existsSync(p) || fs.statSync(p).isDirectory()) { res.writeHead(404); return res.end(); } fs.createReadStream(p).pipe(res); });
 await new Promise(r => server.listen(0, "127.0.0.1", r));
 const browser = await chromium.launch(); const page = await browser.newPage();
@@ -25,6 +25,7 @@ await page.evaluate(async d => {
   // 讓載入器照這份 MIDI 載需要的音 × 力度層
   events = d.notes.map(n => ({ tWhole: n.t, notes: [{ freq: hz(n.m), durWhole: n.d, pvel: n.v }] }));
   pedalRanges = d.pedals.map(([a, b]) => ({ start: a, end: b }));
+  pianoRanges = () => pedalRanges;   // 讓載入器知道有踏板(載入琴弦共鳴 sympa)
   computePianoDynamics = () => {};
   pianoComputeNeeds = () => {
     const need = new Map();
@@ -37,11 +38,13 @@ await page.evaluate(async d => {
   ensureAudio();
   await masterReady;
   await loadPianoSamples();
+  for (let i = 0; i < 200 && !(pianoAux.sympa && pianoAux.hall && pianoAux.room); i++) await new Promise(r => setTimeout(r, 50));
+  if (!pianoAux.sympa) throw new Error("sympa 沒載入");
   for (let i = 0; i < 100 && !pianoVerbUseHall(); i++) await new Promise(r => setTimeout(r, 50));
   const T0 = 0.2;
   pianoResetVoices();
   getPianoResonance();
-  if (pianoResGate) { const p = pianoResGate.gain; p.setValueAtTime(0, 0); for (const [a, b] of d.pedals) { p.setTargetAtTime(1, T0 + a, PIANO_SYMPA.openTau); p.setTargetAtTime(0, T0 + b, PIANO_SYMPA.closeTau); } }
+  if (pianoResGate) pianoResGate.gains.forEach((g, i) => { const p = g.gain; p.setValueAtTime(0, 0); for (const [a, b] of d.pedals) { p.setTargetAtTime(1, T0 + a, PIANO_SYMPA.openTau); p.setTargetAtTime(0, T0 + b, pianoResGate.taus[i]); } });
   for (const [a, b] of d.pedals) { const dn = pianoAux.pedalD1, up = pianoAux.pedalU1, g = PIANO_GAIN * Math.pow(10, (-20 + 1.5) / 20) * 0.6; if (dn) pianoOneShot(dn, T0 + a + 0.05, g * 0.8, 1, PIANO_VERB_SEND); if (up) pianoOneShot(up, T0 + b, g, 1, PIANO_VERB_SEND); }
   for (const n of [...d.notes].sort((x, y) => x.t - y.t)) playPianoNote(hz(n.m), T0 + n.t, n.d, false, n.ped, T0 + n.damp, null, n.v, false);
 }, data);
