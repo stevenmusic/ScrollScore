@@ -10730,21 +10730,22 @@ function pianoTopUpLayers(){
   });
 }
 function pianoDynSyncLater(){ clearTimeout(pianoDynTimer); pianoDynTimer = setTimeout(pianoDynSync, PIANO_DYN_RESYNC_MS); }
-/* 非古典的力度軟上限(POP_CEIL,使用者 2026-11:「有些地方的音符力度太大,聲音有點爆掉」):高潮彈重(POP_CLIMAX)與後面副歌補足
-   把最後一次副歌推到 108~116(〈甲乙丙丁〉第 47~50 小節,3 秒響度 −9.6 LUFS、比整首中位數大 4.4dB),用到最亮最硬的
-   第 15 層錄音 + 逐音高頻補償約 +18dB,手機喇叭上聽起來快爆開。knee 以下不動,以上只留 ratio(116 → 104、100 → 96);
-   譜上力度記號寫得比較大聲(n._lvl > 0)時上限跟著提高。window.POP_CEIL_OVERRIDE 可改({ ratio: 1 } 關掉) */
-const POP_CEIL = { knee: 92, ratio: 1 };   // 試聽中:ratio 0.5 = 92 以上只留一半(使用者確認後才打開);1 = 關掉
-function popVelocityCeiling(){
+/* 非古典整首力度照比例縮(POP_CEIL,使用者 2026-11:「有些地方的音符力度太大,聲音有點爆掉」「只改強的音會打破起伏的邏輯,應該一起調小聲」):
+   高潮彈重(POP_CLIMAX)與後面副歌補足把最後一次副歌推到 108~116(〈甲乙丙丁〉第 47~50 小節,用到最亮最硬的第 15 層錄音
+   + 逐音高頻補償約 +18dB),手機喇叭上聽起來快爆開。整首第 99 百分位力度超過 p99 時,所有音乘同一個倍數 p99/實際值
+   (比例、起伏、重音、旋律伴奏差都不變),再用 pianoSongGain 把整首音量補回原本(能量 Σ 音量² 相同)→ 音量一樣、
+   最用力的音改用比較柔的錄音層。沒超過的曲子不動。window.POP_CEIL_OVERRIDE 可改({ on:false } 關掉) */
+const POP_CEIL = { on: false, p99: 100 };   // 試聽中(使用者確認後才打開)
+let pianoSongGain = 1;
+function popVelocityScale(){
   const C = Object.assign({}, POP_CEIL, window.POP_CEIL_OVERRIDE || {});
-  if (C.ratio >= 1) return;
   const ns = []; for (const ev of events) for (const n of ev.notes) if (n.pvel && !n.drum) ns.push(n);
-  if (!ns.length) return;
-  const lvlMean = ns.reduce((t, n) => t + (n._lvl || 0), 0) / ns.length;   // 譜上力度記號比整首平均大聲的地方,上限跟著提高
-  for (const n of ns) {
-    const k = C.knee + Math.max(0, (n._lvl || 0) - lvlMean);
-    if (n.pvel > k) n.pvel = k + (n.pvel - k) * C.ratio;
-  }
+  if (!C.on || ns.length < 20) return;
+  const v = ns.map(n => n.pvel).sort((a, b) => a - b), q = v[Math.min(v.length - 1, Math.floor(v.length * 0.99))];
+  if (q <= C.p99) return;
+  const f = C.p99 / q; let e0 = 0, e1 = 0;
+  for (const n of ns) { const a = pianoVelGain(n.pvel); e0 += a * a; n.pvel = Math.max(1, n.pvel * f); const b = pianoVelGain(n.pvel); e1 += b * b; }
+  pianoSongGain = Math.sqrt(e0 / e1);
 }
 function computePianoDynamics(){
   pianoDynBpm = bpm();
@@ -11088,8 +11089,8 @@ function computePianoDynamics(){
   popMelodyOnTop();         // 安全網:旋律不要比同時彈的伴奏小聲
   popSectionJoin();         // 非古典:往下一段漸強時,下一段開頭不低於前一段結尾(SECTION_RISE;放在各項校正之後,結果才不會被後面的步驟改掉)
   popRepeatFloor();         // 非古典:後面的副歌不比前面的小聲(SECTION_REPEAT;放在 popSectionJoin 之後,跟它補過的副歌開頭比)
-  if (pop) popVelocityCeiling();   // 非古典:最大聲的音軟上限(POP_CEIL;重音在後面照比例加)
   if (pop) applyAccentRatios(true);   // 非古典的重音最後才加(見上面)
+  pianoSongGain = 1; if (pop) popVelocityScale();   // 非古典:整首力度照比例縮、音量補回(POP_CEIL;放在重音之後,比例全部保留)
   pianoVelocityAsync(multiStaff);
   pianoWideChordRoll(multiStaff);
   if (pop) pianoHandDrift(multiStaff);
@@ -11550,7 +11551,7 @@ function playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel
     }
   }
   const rate = Math.pow(2, (tm - s.c + ((pianoMan.tune[m] || 0) / 100)) / 12);
-  const gain = PIANO_GAIN * pianoVelGain(vel) * Math.pow(10, V.gainDb * rv.n() / 20);
+  const gain = PIANO_GAIN * pianoSongGain * pianoVelGain(vel) * Math.pow(10, V.gainDb * rv.n() / 20);
   let keyUp = Math.max(dur, 0.05);
   if (artic) {
     // 斷音照「秒」(使用者 2026-10 選的):真人的斷音大約固定一小段時間、跟速度關係不大;以前一律音長的一半,
