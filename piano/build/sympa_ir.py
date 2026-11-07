@@ -21,7 +21,21 @@ T60_LO, T60_HI, HARM_K = (float(v) for v in os.environ.get('SYMPA_T60', '30,4,0.
 OUT = sys.argv[1] if len(sys.argv) > 1 else 'piano/sympa.flac'
 rng = np.random.default_rng(88)
 DECOR_F, DECOR_DB = 500.0, 2.5
+# 擴散(2026-11,試聽中:repo 裡的 piano/sympa.flac 還是前一版〔沒有 BLOOM/DRIFT〕,使用者選定後才重新產生;
+#   重新產生:SYMPA_MATCH=舊的 sympa.flac python3 piano/build/sympa_ir.py → 照舊檔前 1 秒響度對齊,App 的 send 不用改)
+# 使用者:「希望共鳴聽起來是一個球形,有擴散出去的感覺」):
+#   BLOOM:左右差異(相位、大小)剛響起時只有 BLOOM0 倍,BLOOM_SEC 秒內 smoothstep 長到完整 → 共鳴先在琴的位置、再往四周散開
+#   DRIFT:每個泛音左右的相位差/大小差各自用很慢的正弦飄移(DRIFT_HZ 範圍內隨機,約 2~7 秒一圈)→ 共鳴在空間裡慢慢流動
+#   單聲道(左+右)的音量會跟著飄移一點,但每個泛音飄的速度不同,加起來是平的
+BLOOM0 = float(os.environ.get('SYMPA_BLOOM0', 0.25))
+BLOOM_SEC = float(os.environ.get('SYMPA_BLOOM_SEC', 0.45))
+DRIFT_RAD = float(os.environ.get('SYMPA_DRIFT', 1.2))      # 相位差飄移幅度(弧度)
+DRIFT_DB = float(os.environ.get('SYMPA_DRIFT_DB', 1.5))    # 左右大小差飄移幅度(dB)
+DRIFT_HZ = tuple(float(v) for v in os.environ.get('SYMPA_DRIFT_HZ', '0.15,0.45').split(','))
+MATCH = os.environ.get('SYMPA_MATCH', '')                  # 指定舊檔:照它前 1 秒的響度對齊(App 的 send 不用改)
 n = int(SR * SEC); t = np.arange(n) / SR
+u = np.clip(t / BLOOM_SEC, 0, 1) if BLOOM_SEC > 0 else np.ones(n)
+bloom = BLOOM0 + (1 - BLOOM0) * u * u * (3 - 2 * u)
 L = np.zeros(n); R = np.zeros(n)
 for m in range(21, 109):
     f0 = 440 * 2 ** ((m - 69) / 12)
@@ -43,17 +57,25 @@ for m in range(21, 109):
             # (響板各處振動模態不同);以前左右是同一個正弦波只差音量 → 共鳴是「擺在某個位置的點」,很扁。
             # 低頻波長長、兩支麥克風收到的幾乎同相,DECOR_F 以上完全不相關;大小差 ±DECOR_DB(常態分布)
             dec = min(1.0, fk / DECOR_F)
-            phr = ph + rng.uniform(-np.pi, np.pi) * dec
-            al = 10 ** (rng.normal(0, DECOR_DB * dec) / 20); ar = 10 ** (rng.normal(0, DECOR_DB * dec) / 20)
-            base = 2 * np.pi * fk * det * t
-            L += np.sin(base + ph) * env * (amp * gl * al)
-            R += np.sin(base + phr) * env * (amp * gr * ar)
+            d0 = rng.uniform(-np.pi, np.pi) * dec
+            dl, dr = rng.normal(0, DECOR_DB * dec), rng.normal(0, DECOR_DB * dec)
+            fd = rng.uniform(*DRIFT_HZ); pd = rng.uniform(0, 2 * np.pi)
+            fl = rng.uniform(*DRIFT_HZ); pl = rng.uniform(0, 2 * np.pi)
+            dph = (d0 + DRIFT_RAD * dec * np.sin(2 * np.pi * fd * t + pd)) * bloom   # 左右相位差:先小、再散開,之後慢慢飄
+            ldb = ((dr - dl) / 2 + DRIFT_DB * dec * np.sin(2 * np.pi * fl * t + pl)) * bloom
+            base = 2 * np.pi * fk * det * t + ph
+            L += np.sin(base - dph / 2) * env * (amp * gl * 10 ** (-ldb / 40) * 10 ** ((dl + dr) / 40))
+            R += np.sin(base + dph / 2) * env * (amp * gr * 10 ** (ldb / 40) * 10 ** ((dl + dr) / 40))
 fade = int(float(os.environ.get('SYMPA_FADE', 2.0)) * SR)   # 最後幾秒慢慢收(太短會聽到共鳴在踏板中途突然不見)
 win = np.ones(n); win[-fade:] = np.cos(np.linspace(0, np.pi / 2, fade)) ** 2
 L *= win; R *= win
 # 起頭 3ms 淡入(避免卷積時產生喀聲)
 fi = int(0.003 * SR); L[:fi] *= np.linspace(0, 1, fi); R[:fi] *= np.linspace(0, 1, fi)
 x = np.stack([L, R], 1)
-x *= 0.9 / np.abs(x).max()                   # 峰值 −0.9dBFS。App 的 PIANO_SYMPA.send 是對這個檔案校正的(重建後要重新校正)
+if MATCH:   # 照舊檔前 1 秒的響度對齊(App 的 PIANO_SYMPA.send 不用改)
+    o = sf.read(MATCH)[0][:SR]; x *= np.sqrt(np.mean(o ** 2) / np.mean(x[:SR] ** 2))
+    print(f'peak {20*np.log10(np.abs(x).max()):.2f} dBFS')
+else:
+    x *= 0.9 / np.abs(x).max()               # 峰值 −0.9dBFS。App 的 PIANO_SYMPA.send 是對這個檔案校正的(重建後要重新校正)
 sf.write(OUT, x, SR, subtype='PCM_16', format='FLAC')
 print(f'wrote {OUT}: {SEC}s')
