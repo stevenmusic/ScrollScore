@@ -38,8 +38,8 @@ await page.evaluate(async d => {
   ensureAudio();
   await masterReady;
   await loadPianoSamples();
-  for (let i = 0; i < 200 && !(pianoAux.sympa && pianoAux.hall && pianoAux.room); i++) await new Promise(r => setTimeout(r, 50));
-  if (!pianoAux.sympa) throw new Error("sympa 沒載入");
+  for (let i = 0; i < 200 && !((pianoAux.sympa || !d.pedals.length) && pianoAux.hall && pianoAux.room); i++) await new Promise(r => setTimeout(r, 50));
+  if (d.pedals.length && !pianoAux.sympa) throw new Error("sympa 沒載入");
   for (let i = 0; i < 100 && !pianoVerbUseHall(); i++) await new Promise(r => setTimeout(r, 50));
   const T0 = 0.2;
   pianoResetVoices();
