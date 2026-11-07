@@ -3,22 +3,21 @@
 踩下延音踏板時,所有制音器離開琴弦,88 組琴弦都會被正在響的音(經由琴橋/響板)帶動、跟著共振。
 這個 IR 就是「全部琴弦一起當共振器」:每條弦的每個泛音是一個衰減的正弦波
   頻率 f_n = n·f0·√(1 + B·n²)        (B = 鋼弦的非諧和係數,低音約 1e-4、高音約 1e-2)
-  衰減 T60 = 低音弦約 18 秒 → 最高音約 2 秒,高次泛音衰減較快
+  衰減 T60 = 低音弦約 30 秒 → 最高音約 4 秒(照取樣實測),高次泛音衰減稍快
   位置   低音在左、高音在右(跟 pf_build.py 的 PAN 一樣,±0.25)
 App 把踩著踏板時的琴聲送進這個 IR(ConvolverNode),輸出經過踏板閘門(放開踏板 = 制音器落下 → 共鳴止住)。
 聲音跟某條弦的泛音重疊越多,那條弦就響越大,所以 C 和弦會帶出所有 C/E/G 的弦,這就是真鋼琴踩踏板時的「光暈」。
 左右:每個泛音到兩支麥克風的相位與大小各自不同(響板輻射,500Hz 以上左右不相關、低頻同相),共鳴聽起來是包圍的一片,不是一個點。
-長度 3 秒(更長的部分已經比直達聲小 30dB 以上,而且卷積成本隨長度增加),最後 0.6 秒淡出。固定種子,每次產生的一樣。"""
+長度 5 秒、最後 2 秒淡出(放開踏板時 App 的閘門會收掉,不會跨踏板糊在一起)。固定種子,每次產生的一樣。"""
 import sys, numpy as np, soundfile as sf
-# 預設值 = 目前 piano/sympa.flac(3 秒、相鄰弦差 0.87 cent、T60 18→2 秒)。
-# 2026-11 試聽中的新版(還沒放進 App):SYMPA_SEC=5 SYMPA_DETUNE=1.6 SYMPA_T60=30,4,0.02 SYMPA_FADE=2
-#   原因:實測取樣本身中音區 T60 約 10~20 秒,舊模型 4~9 秒,共鳴 3 秒後就沒了;相鄰弦 1.6 cent 讓共鳴有起伏。
-#   換檔時 PIANO_SYMPA.send 3.4e-4 → 3.1e-4(前 1 秒共鳴音量不變),SAMPLE_CACHE 版本加一
+# 2026-11 新版(使用者試聽:「B 比較有共鳴在繞圈的感覺」):5 秒(最後 2 秒淡出)、相鄰弦差 1.6 cent、T60 A0 30 秒 → C8 4 秒、高次泛音變快係數 0.02。
+#   原因:實測取樣本身中音區 T60 約 10~20 秒,舊模型(18 → 2 秒、係數 0.06)只有 4~9 秒,共鳴 3 秒後就沒了;
+#   舊版 3 秒、0.87 cent。換檔要重新校正 App 的 PIANO_SYMPA.send(這版 3.1e-4,前 1 秒共鳴音量跟舊版一樣)、SAMPLE_CACHE 版本加一
 import os
 SR = 48000
-SEC = float(os.environ.get('SYMPA_SEC', 3.0))
-DETUNE_CENT = float(os.environ.get('SYMPA_DETUNE', 0.866))   # 同組相鄰兩條弦相差幾 cent
-T60_LO, T60_HI, HARM_K = (float(v) for v in os.environ.get('SYMPA_T60', '18,2,0.06').split(','))   # A0 / C8 的 T60 秒數、高次泛音變快的係數
+SEC = float(os.environ.get('SYMPA_SEC', 5.0))
+DETUNE_CENT = float(os.environ.get('SYMPA_DETUNE', 1.6))   # 同組相鄰兩條弦相差幾 cent
+T60_LO, T60_HI, HARM_K = (float(v) for v in os.environ.get('SYMPA_T60', '30,4,0.02').split(','))   # A0 / C8 的 T60 秒數、高次泛音變快的係數
 OUT = sys.argv[1] if len(sys.argv) > 1 else 'piano/sympa.flac'
 rng = np.random.default_rng(88)
 DECOR_F, DECOR_DB = 500.0, 2.5
@@ -49,7 +48,7 @@ for m in range(21, 109):
             base = 2 * np.pi * fk * det * t
             L += np.sin(base + ph) * env * (amp * gl * al)
             R += np.sin(base + phr) * env * (amp * gr * ar)
-fade = int(float(os.environ.get('SYMPA_FADE', 0.6)) * SR)   # 最後幾秒慢慢收(太短會聽到共鳴在踏板中途突然不見)
+fade = int(float(os.environ.get('SYMPA_FADE', 2.0)) * SR)   # 最後幾秒慢慢收(太短會聽到共鳴在踏板中途突然不見)
 win = np.ones(n); win[-fade:] = np.cos(np.linspace(0, np.pi / 2, fade)) ** 2
 L *= win; R *= win
 # 起頭 3ms 淡入(避免卷積時產生喀聲)

@@ -9363,7 +9363,7 @@ function pianoToneFor(vel){
    piano/sympa.flac 是全部琴弦當共振器的脈衝響應(piano/build/sympa_ir.py:每條弦的泛音含非諧和性、低音弦衰減慢、
    低音左高音右),踩著踏板時發出的音送進去;放開踏板 = 制音器落下,閘門 0.1 秒內關掉。
    send 校正成單音的共鳴比琴聲本身小約 15dB(0.3~3 秒,實測 send 3.2e-4 時 18dB),和弦的音互相是泛音關係,共鳴自然更大 */
-const PIANO_SYMPA = { send: 3.4e-4, closeTau: 0.1, openTau: 0.02 };   // sympa.flac 改成左右不相關(2026-10)後峰值正規化讓檔案大 2.4dB,send 4.5e-4 → 3.4e-4 讓共鳴響度不變(整體 −20 LU)
+const PIANO_SYMPA = { send: 3.1e-4, closeTau: 0.1, openTau: 0.02 };   // sympa.flac 改成左右不相關(2026-10)後峰值正規化讓檔案大 2.4dB,send 4.5e-4 → 3.4e-4 讓共鳴響度不變(整體 −20 LU);2026-11 sympa.flac 換成 5 秒、弦衰減照取樣(T60 30→4 秒)、相鄰弦 1.6 cent,3.4e-4 → 3.1e-4 讓前 1 秒共鳴音量不變
 function isIOSDevice(){ return /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1); }
 /* Safari(iPhone/iPad 上所有瀏覽器與 App 的 WKWebView、Mac Safari)的 AudioWorklet 會把經過它的聲音弄髒(2026-10-17 iPhone 自檢:
    同一個鋼琴音不經過 AudioWorklet 8kHz 以上 −61dB,經過限幅器 AudioWorklet 變 −42dB = 使用者聽到的沙沙聲;離線合成時圖裡有
@@ -11062,7 +11062,7 @@ function pianoPlan(need, auxBytes){
 /* 取樣檔快取(Cache Storage):第一次下載後存在裝置上,之後開 App / 換曲子直接從本機讀,不用再下載
    (鋼琴 16 層全部約 156MB,手機網路下載是載入最慢的部分)。取樣檔重新產生時要把 SAMPLE_CACHE 的版本號加一,
    不然使用者會繼續用到舊檔。不支援 Cache Storage(非 https、無痕模式、儲存空間不足)時照原本直接下載 */
-const SAMPLE_CACHE = "scrollscore-samples-v4";   // v2(2026-10):piano/hall.flac 換成真實音樂廳;v3:銅鈸補回完整尾巴;v4:piano/sympa.flac 左右改成響板輻射(不相關)
+const SAMPLE_CACHE = "scrollscore-samples-v5";   // v2(2026-10):piano/hall.flac 換成真實音樂廳;v3:銅鈸補回完整尾巴;v4:piano/sympa.flac 左右改成響板輻射(不相關);v5(2026-11):piano/sympa.flac 5 秒、弦衰減照取樣、相鄰弦 1.6 cent
 let sampleCachePromise = null;
 function sampleCache(){
   if (!sampleCachePromise) sampleCachePromise = (typeof caches !== "undefined" && window.isSecureContext)
