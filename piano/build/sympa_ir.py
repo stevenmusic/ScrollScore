@@ -59,7 +59,10 @@ def smooth_real(sd):
 # 左右相位差 Φ(f):隨頻率平緩變化(每 BOARD_DF Hz 一個常態隨機點、線性內插)。BOARD_DF 跟「兩耳/兩支麥克風到響板各處的距離差」有關:
 #   距離差約 1 公尺 → 左右延遲差約 3ms → 相位差每幾百 Hz 才明顯變化(太小的 BOARD_DF 會讓頻率很近的兩條弦彼此拍頻時左右相位快速轉圈,聽起來晃)
 phD = smooth_real(BOARD_PH); gLdb, gRdb = smooth_real(BOARD_DB), smooth_real(BOARD_DB)
+HI_M = int(os.environ.get('SYMPA_HI_M', 999))  # 設 89:另外輸出沒有制音器的高音弦(F#6 以上)一個檔(試過 2026-11:不踩踏板時只有整體 −43 LU、聽不到,App 沒用)
+L0 = R0 = None
 for m in range(21, 109):
+    if m == HI_M: L0, R0 = L.copy(), R.copy()   # 之後加進去的 = 沒有制音器的高音弦
     f0 = 440 * 2 ** ((m - 69) / 12)
     B = 8e-5 * np.exp(0.055 * (m - 21))                   # 非諧和係數:A0 ≈ 8e-5,C8 ≈ 1e-2
     t60 = T60_LO * (T60_HI / T60_LO) ** ((m - 21) / 87)   # 對數內插(照取樣實測,見檔頭)
@@ -100,14 +103,19 @@ for m in range(21, 109):
             R += np.sin(base + dph / 2) * env * (amp * gr * 10 ** (ldb / 40) * 10 ** ((dl + dr) / 40))
 fade = int(float(os.environ.get('SYMPA_FADE', 2.0)) * SR)   # 最後幾秒慢慢收(太短會聽到共鳴在踏板中途突然不見)
 win = np.ones(n); win[-fade:] = np.cos(np.linspace(0, np.pi / 2, fade)) ** 2
-L *= win; R *= win
-# 起頭 3ms 淡入(避免卷積時產生喀聲)
-fi = int(0.003 * SR); L[:fi] *= np.linspace(0, 1, fi); R[:fi] *= np.linspace(0, 1, fi)
-x = np.stack([L, R], 1)
+fi = int(0.003 * SR); ramp = np.ones(n); ramp[:fi] = np.linspace(0, 1, fi)   # 起頭 3ms 淡入(避免卷積時產生喀聲)
+shape = lambda a, b: np.stack([a * win * ramp, b * win * ramp], 1)
+full = shape(L, R)
+# 沒有制音器的高音弦(HI_M 以上)另外存一個檔:App 不踩踏板也一直送(真鋼琴 F#6 以上的弦彈任何音都會跟著響);
+# 主檔 = 全部 − 高音弦(踩踏板才開)。兩檔相加 = 以前的單一檔,共用同一個正規化倍數
+x = shape(L0, R0) if L0 is not None else full
+xh = full - x if L0 is not None else None
 if MATCH:   # 照舊檔前 1 秒的響度對齊(App 的 PIANO_SYMPA.send 不用改)
-    o = sf.read(MATCH)[0][:SR]; x *= np.sqrt(np.mean(o ** 2) / np.mean(x[:SR] ** 2))
-    print(f'peak {20*np.log10(np.abs(x).max()):.2f} dBFS')
+    o = sf.read(MATCH)[0][:SR]; k = np.sqrt(np.mean(o ** 2) / np.mean(full[:SR] ** 2))
 else:
-    x *= 0.9 / np.abs(x).max()               # 峰值 −0.9dBFS。App 的 PIANO_SYMPA.send 是對這個檔案校正的(重建後要重新校正)
-sf.write(OUT, x, SR, subtype='PCM_16', format='FLAC')
-print(f'wrote {OUT}: {SEC}s')
+    k = 0.9 / np.abs(full).max()             # 兩檔相加的峰值 −0.9dBFS。App 的 PIANO_SYMPA.send 是對這個校正的(重建後要重新校正)
+x = x * k; print(f'peak(全部) {20*np.log10(np.abs(full * k).max()):.2f} dBFS')
+sf.write(OUT, x, SR, subtype='PCM_16', format='FLAC'); print(f'wrote {OUT}: {SEC}s')
+if xh is not None:
+    OUT_HI = sys.argv[2] if len(sys.argv) > 2 else OUT.replace('.flac', 'Hi.flac')
+    sf.write(OUT_HI, xh * k, SR, subtype='PCM_16', format='FLAC'); print(f'wrote {OUT_HI}')

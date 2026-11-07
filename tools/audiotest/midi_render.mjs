@@ -19,7 +19,7 @@ await page.addInitScript(sec => {
 }, data.sec);
 await page.goto(`http://127.0.0.1:${server.address().port}/index.html`);
 await page.waitForFunction(() => typeof loadPianoSamples === "function");
-await page.evaluate(sets => { for (const [k, v] of Object.entries(sets)) { const [o, f] = k.split("."); eval(o)[f] = v; } }, JSON.parse(setArg || "{}"));
+await page.evaluate(sets => { for (const [k, v] of Object.entries(sets)) { if (!k.includes(".")) { eval(k + " = " + JSON.stringify(v)); continue; } const [o, f] = k.split("."); eval(o)[f] = v; } }, JSON.parse(setArg || "{}"));   // 沒有點的是全域變數(let)
 await page.evaluate(async d => {
   const hz = m => 440 * Math.pow(2, (m - 69) / 12);
   // 讓載入器照這份 MIDI 載需要的音 × 力度層

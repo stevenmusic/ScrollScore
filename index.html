@@ -9364,7 +9364,7 @@ function pianoHalfPedalTau(m){ return PIANO_HALF_PEDAL * Math.max(0.35, 1.3 - (m
    - 起音:pres 在敲下瞬間再多 attack×(力度/127) dB,20ms 時間常數回到原值(琴槌敲弦那一下的亮度)
    參數用 tools/audiotest 的模擬器對 7 首 MAESTRO 演奏校正:各力度區間亮度差 ≤ 2dB、起音高頻 1.8dB(真鋼琴 1.9)、
    1~5kHz 頻譜形狀差 ≤ 3dB;補到 12dB 的高頻後,取樣的底噪仍在 −100dBFS 左右 */
-const PIANO_TONE = { presFreq: 2000, presLo: -10, presHi: 5, presV0: 45, presV1: 105, airFreq: 6500, airLo: 4, airHi: 21, airExp: 1.4, attack: 12, attackExp: 1, attackTau: 0.02 };
+const PIANO_TONE = { presFreq: 2000, presLo: -10, presHi: 5, presV0: 45, presV1: 105, airFreq: 6500, airLo: 4, airHi: 21, airExp: 1.4, attack: 12, attackExp: 1, attackTau: 0.02, sustLift: 0, sustStart: 0.12, sustTau: 0.5 };
 function pianoToneFor(vel){
   const T = PIANO_TONE, v = Math.max(1, Math.min(127, vel));
   const pres = T.presLo + (T.presHi - T.presLo) * Math.max(0, Math.min(1, (v - T.presV0) / (T.presV1 - T.presV0)));
@@ -11271,7 +11271,7 @@ function pianoResetVoices(){ pianoVoices = []; pianoLastByKey = {}; pianoRRFlip 
    舊版 2.8kHz −3.5dB + 9kHz +1.5dB 已拿掉(會讓強音更悶、高頻補得不夠)。
    另外試過給鋼琴獨立的慢起音壓縮器取代 loudnessComp,實測同樣響度下 p→ff 的差距從 7.7dB 縮到 5.6dB、
    清晰度沒有變好,所以壓縮維持原本的 */
-const PIANO_EQ = { mudFreq: 450, mudGain: -2, mudQ: 1.0, harshFreq: 3300, harshGain: -4.5, harshQ: 1.1, lowFreq: 100, lowGain: 0 };
+const PIANO_EQ = { mudFreq: 450, mudGain: -2, mudQ: 1.0, harshFreq: 3300, harshGain: -4.5, harshQ: 1.1, lowFreq: 100, lowGain: 0, presFreq: 2000, presGain: 0, presQ: 1.2 };
 /* 鋼琴立體聲寬度(PIANO_WIDTH):side(左右差)在 hp Hz 以上乘 gain,M/S 做法——單聲道(左+右)完全不變,手機單喇叭聽起來一樣。
    跟 Keyscape / Claire 同一首曲子比:250Hz~4kHz 左右相關性他們 0.1~0.4 / ~0,我們 0.4~0.6(偏窄、聲音集中在中間) */
 const PIANO_WIDTH = { gain: 1.5, hp: 300, lp: 5000 };
@@ -11283,7 +11283,8 @@ function getPianoBus(){
   const mud = peq(E.mudFreq, E.mudGain, E.mudQ), harsh = peq(E.harshFreq, E.harshGain, E.harshQ);
   // 低頻架式(lowGain 0 = 不接):2026-10 母帶處理計畫 A 拿掉 +1.5dB(先加再被 PIANO_MASTER 低段壓縮器壓掉是矛盾的)
   let low = harsh;
-  if (E.lowGain) { low = audioCtx.createBiquadFilter(); low.type = "lowshelf"; low.frequency.value = E.lowFreq; low.gain.value = E.lowGain; harsh.connect(low); }
+  if (E.presGain) { const pq = peq(E.presFreq, E.presGain, E.presQ); harsh.connect(pq); low = pq; }
+  if (E.lowGain) { const ls = audioCtx.createBiquadFilter(); ls.type = "lowshelf"; ls.frequency.value = E.lowFreq; ls.gain.value = E.lowGain; low.connect(ls); low = ls; }
   mud.connect(harsh);
   if (PIANO_WIDTH.gain !== 1) {
     // L' = L + k·HP(S)、R' = R − k·HP(S),S = (L−R)/2、k = gain − 1
@@ -11574,6 +11575,7 @@ function playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel
   const tone = { pres: tone0.pres + V.presDb * rv.n(), air: tone0.air + V.airDb * rv.n(), attack: tone0.attack * (1 + V.attack * rv.n()) };   // 琴槌碰到弦的位置、角度每次都不一樣
   const pres = audioCtx.createBiquadFilter(); pres.type = "highshelf"; pres.frequency.value = PIANO_TONE.presFreq;
   pres.gain.setValueAtTime(tone.pres + tone.attack, when); pres.gain.setTargetAtTime(tone.pres, when, PIANO_TONE.attackTau);
+  if (PIANO_TONE.sustLift) pres.gain.setTargetAtTime(tone.pres + PIANO_TONE.sustLift, when + PIANO_TONE.sustStart, PIANO_TONE.sustTau);   // 持續音高頻慢慢回升(PIANO_TONE.sustLift)
   const air = audioCtx.createBiquadFilter(); air.type = "highshelf"; air.frequency.value = PIANO_TONE.airFreq; air.gain.value = tone.air;
   const g = audioCtx.createGain();
   g.gain.setValueAtTime(gain, when);
