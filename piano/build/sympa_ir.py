@@ -10,7 +10,15 @@ App 把踩著踏板時的琴聲送進這個 IR(ConvolverNode),輸出經過踏板
 左右:每個泛音到兩支麥克風的相位與大小各自不同(響板輻射,500Hz 以上左右不相關、低頻同相),共鳴聽起來是包圍的一片,不是一個點。
 長度 3 秒(更長的部分已經比直達聲小 30dB 以上,而且卷積成本隨長度增加),最後 0.6 秒淡出。固定種子,每次產生的一樣。"""
 import sys, numpy as np, soundfile as sf
-SR, SEC = 48000, 3.0
+# 預設值 = 目前 piano/sympa.flac(3 秒、相鄰弦差 0.87 cent、T60 18→2 秒)。
+# 2026-11 試聽中的新版(還沒放進 App):SYMPA_SEC=5 SYMPA_DETUNE=1.6 SYMPA_T60=30,4,0.02 SYMPA_FADE=2
+#   原因:實測取樣本身中音區 T60 約 10~20 秒,舊模型 4~9 秒,共鳴 3 秒後就沒了;相鄰弦 1.6 cent 讓共鳴有起伏。
+#   換檔時 PIANO_SYMPA.send 3.4e-4 → 3.1e-4(前 1 秒共鳴音量不變),SAMPLE_CACHE 版本加一
+import os
+SR = 48000
+SEC = float(os.environ.get('SYMPA_SEC', 3.0))
+DETUNE_CENT = float(os.environ.get('SYMPA_DETUNE', 0.866))   # 同組相鄰兩條弦相差幾 cent
+T60_LO, T60_HI, HARM_K = (float(v) for v in os.environ.get('SYMPA_T60', '18,2,0.06').split(','))   # A0 / C8 的 T60 秒數、高次泛音變快的係數
 OUT = sys.argv[1] if len(sys.argv) > 1 else 'piano/sympa.flac'
 rng = np.random.default_rng(88)
 DECOR_F, DECOR_DB = 500.0, 2.5
@@ -19,18 +27,18 @@ L = np.zeros(n); R = np.zeros(n)
 for m in range(21, 109):
     f0 = 440 * 2 ** ((m - 69) / 12)
     B = 8e-5 * np.exp(0.055 * (m - 21))                   # 非諧和係數:A0 ≈ 8e-5,C8 ≈ 1e-2
-    t60 = 18 * (2 / 18) ** ((m - 21) / 87)               # 18 秒 → 2 秒(對數內插)
+    t60 = T60_LO * (T60_HI / T60_LO) ** ((m - 21) / 87)   # 對數內插(照取樣實測,見檔頭)
     pan = (m - 64.5) / 43.5 * 0.25
     gl, gr = np.sqrt(0.5 - pan), np.sqrt(0.5 + pan)       # 等功率擺位
     strings = 1 if m < 29 else 2 if m < 41 else 3          # 單弦 / 雙弦 / 三弦一組(同組各弦有一點點走音 → 拍頻)
     for k in range(1, 61):
         fk = k * f0 * np.sqrt(1 + B * k * k)
         if fk > 9000: break
-        tk = t60 / (1 + 0.06 * (k - 1) ** 1.3)             # 高次泛音衰減較快
+        tk = t60 / (1 + HARM_K * (k - 1) ** 1.3)           # 高次泛音衰減較快
         amp = 1 / k ** 0.8 / np.sqrt(strings)
         env = np.exp(-6.91 * t / tk)
         for s in range(strings):
-            det = 1 + (s - (strings - 1) / 2) * 0.6 / 1200 if strings > 1 else 1   # 同組弦相差約 ±0.3 cent
+            det = 2 ** ((s - (strings - 1) / 2) * DETUNE_CENT / 1200) if strings > 1 else 1   # 同組相鄰弦相差 DETUNE_CENT
             ph = rng.uniform(0, 2 * np.pi)
             # 響板輻射(2026-10 加):共振的弦是透過整片響板向四面發聲,兩支麥克風收到同一個泛音的相位、大小都不一樣
             # (響板各處振動模態不同);以前左右是同一個正弦波只差音量 → 共鳴是「擺在某個位置的點」,很扁。
@@ -41,7 +49,7 @@ for m in range(21, 109):
             base = 2 * np.pi * fk * det * t
             L += np.sin(base + ph) * env * (amp * gl * al)
             R += np.sin(base + phr) * env * (amp * gr * ar)
-fade = int(0.6 * SR)
+fade = int(float(os.environ.get('SYMPA_FADE', 0.6)) * SR)   # 最後幾秒慢慢收(太短會聽到共鳴在踏板中途突然不見)
 win = np.ones(n); win[-fade:] = np.cos(np.linspace(0, np.pi / 2, fade)) ** 2
 L *= win; R *= win
 # 起頭 3ms 淡入(避免卷積時產生喀聲)
