@@ -10067,7 +10067,12 @@ const POP_BEAT = Object.assign({ down: -2, back: 1.5, beat: 0, off: 0 }, window.
    結尾倍率、譜上力度記號)、contour = 旋律音離前後 8 個旋律音平均的距離 × contour。2026-10 動態放寬 bar 0.33 → 0.45;
    力度規則整理拿掉 mel(同時彈的最高音與其他的差 × 0.65:跟主迴圈的旋律 +4/伴奏 −3、popExposeAccomp 的 melGap 三個在管同一件事,
    只留 melGap) */
-const POP_CAL_DEFAULT = { bar: 0.45, contour: 0.3 };
+/* 2026-11 觸鍵(使用者:「整體還是太一致,聽起來是一個段落同一種觸鍵,變化不夠自然」):
+   contour 0.3 → 0.7:0.3 當初是為了「旋律每半音力度」對齊 Pop1K7,後來查出那個數字是旋律休息時露在最上面的伴奏造成的
+   (popExposeAccomp 已處理),旋律本身不該壓到三成;0.3 時旋律相鄰兩個音平均只差 2.6 力度,每一句都像同一種觸鍵。
+   inBar 0.8:bar 0.45 原本把每小節往「整首平均」拉,連段落裡面的起伏也壓掉;現在段落之間的大小聲照 bar 收斂,
+   段落裡面(相對這一段平均)的起伏只收到 inBar */
+const POP_CAL_DEFAULT = { bar: 0.45, contour: 0.7, inBar: 0.8 };
 /* 高潮段落彈重一點(POP_CLIMAX,使用者要求 2026-10:「副歌/高潮力度彈重一點,讓大聲段用到較亮的錄音層」;非古典):
    專業翻彈的大聲段 4~8kHz(對 1kHz)約 −17~−21dB,App〈甲乙丙丁〉以前 −26:流行曲力度整體偏輕,副歌也停在中強的錄音層(柔、暗)。
    能量 = 每小節「自動推測」的平均力度(popDynamicsCalibrate 的 r:織度、和聲、旋律走向,前後小節 1:2:1 平滑;**不含段落名稱的倍率與譜上力度記號**,
@@ -10218,7 +10223,17 @@ function popDynamicsCalibrate(){
   const sm1 = a => a.map((v, i) => (a[Math.max(0, i - 1)] + 2 * v + a[Math.min(a.length - 1, i + 1)]) / 4);
   const e = sm1(bm), G = notes.reduce((s2, x) => s2 + x.r, 0) / notes.length;
   const climax = popClimaxFactors(e), shift = new Map(), fac = new Map();
-  bars.forEach((b2, i) => { shift.set(b2, (c.bar - 1) * (e[i] - G)); fac.set(b2, climax ? Math.pow(climax[i], hasMarks ? 0.5 : 1) : 1); });   // 有力度記號時退讓:高潮倍率開根號
+  // 每小節的「段落平均」:有段落記號用演奏順序的段落(perfSections),沒有就用前後 8 小節的移動平均
+  const SGb = scoreSections.length ? perfSections() : null, barT = new Map();
+  for (const { ev } of notes) if (ev.mIdx != null && !barT.has(ev.mIdx)) barT.set(ev.mIdx, ev.tWhole);
+  const segOf = b2 => { if (!SGb || !SGb.length) return -1; const t = barT.get(b2); let k = 0; for (let j = 0; j < SGb.length; j++) if (SGb[j].t <= t + 1e-6) k = j; return k; };
+  const segK = bars.map(segOf), base = e.map((v, i) => {
+    let s2 = 0, k = 0;
+    if (segK[i] >= 0) { for (let j = 0; j < e.length; j++) if (segK[j] === segK[i]) { s2 += e[j]; k++; } }
+    else for (let j = Math.max(0, i - 4); j <= Math.min(e.length - 1, i + 4); j++) { s2 += e[j]; k++; }
+    return k ? s2 / k : v; });
+  const inBar = c.inBar != null ? c.inBar : c.bar;
+  bars.forEach((b2, i) => { shift.set(b2, (c.bar - 1) * (base[i] - G) + (inBar - 1) * (e[i] - base[i])); fac.set(b2, climax ? Math.pow(climax[i], hasMarks ? 0.5 : 1) : 1); });   // 有力度記號時退讓:高潮倍率開根號
   for (const x of notes) {
     const sh = shift.get(x.ev.mIdx) || 0, f = fac.get(x.ev.mIdx) || 1;
     x.n.pvel = clampV((x.r + sh + x.mk) * f * (x.n._secF || 1));
@@ -10557,6 +10572,28 @@ function popRunBeatHeads(multiStaff){
   }
 }
 const POP_ONTOP = Object.assign({ margin: 1, melShare: 1, melMax: 4 }, window.POP_ONTOP_OVERRIDE || {});
+/* 每一下觸鍵的自然差異(POP_TOUCH,2026-11 使用者:「整體還是太一致」):真人就算想彈得一樣,每一下的力度也會差
+   (研究量到熟練鋼琴家刻意彈平均時鍵速仍有約 5~10% 的差異),以前每個音只有 ±2.5 的均勻亂數,再被各項校正平均掉,
+   同一句的旋律相鄰兩個音平均只差 2.6 力度。現在在所有校正之後加:同一隻手同一個時間點共用一份(手的重量,handSd)+
+   每個音各自一份(手指,noteSd),常態分布、固定種子(原調音高 + 演奏位置:同樣的播放結果一樣、移調不變)。
+   只用在非古典;旋律在伴奏之上(popMelodyOnTop)、重音、段落銜接都在這之後,不會被打亂 */
+const POP_TOUCH = Object.assign({ handSd: 1.3, noteSd: 1.1 }, window.POP_TOUCH_OVERRIDE || {});
+function popTouchVariety(){
+  const X = POP_TOUCH;
+  if (!(X.handSd > 0 || X.noteSd > 0)) return;
+  const gauss = seed => { const u = Math.max(1e-9, seededRand01(seed)), v = seededRand01(seed + 7.77); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
+  for (const ev of events) {
+    const hands = {};
+    for (const n of ev.notes) { if (n.drum || !n.freq || n.pvel == null) continue; (hands[n.staff || 1] = hands[n.staff || 1] || []).push(n); }
+    for (const st of Object.keys(hands)) {
+      const h = X.handSd * gauss(ev.tWhole * 13.71 + st * 5.3 + 0.21);
+      for (const n of hands[st]) {
+        const m = Math.round(freqToMidi(n.freq)) - transposeSemitones;
+        n.pvel = Math.max(8, Math.min(124, n.pvel + h + X.noteSd * gauss(ev.tWhole * 7.93 + m * 0.311 + 3.1)));
+      }
+    }
+  }
+}
 function popMelodyOnTop(){
   if (classicalProbInfo().p >= 0.5 || !POP_ONTOP) return;
   const P = POP_ONTOP, clampV = v => Math.max(8, Math.min(124, v));
@@ -10994,6 +11031,7 @@ function computePianoDynamics(){
   popExposeAccomp();        // 旋律與伴奏的整體差距(唯一的一道校正,POP_EXPOSE.melGap;放在和弦形狀、低音平衡之後,它們會動到這個差距)
   popBeatProfile();         // 拍位置放在低音區平衡之後(平衡會動低音區的力度、連帶改變各拍位置的平均)
   popRunBeatHeads(multiStaff);   // 非古典:快速單音音型的拍點比同一拍裡其他音重(POP_RUN_HEAD;放在拍位置校正之後,不會被它抹平)
+  if (pop) popTouchVariety();   // 非古典:每一下觸鍵的自然差異(POP_TOUCH;放在各項校正之後才不會被平均掉,旋律在伴奏之上的安全網在後面)
   popMelodyOnTop();         // 安全網:旋律不要比同時彈的伴奏小聲
   popSectionJoin();         // 非古典:往下一段漸強時,下一段開頭不低於前一段結尾(SECTION_RISE;放在各項校正之後,結果才不會被後面的步驟改掉)
   popRepeatFloor();         // 非古典:後面的副歌不比前面的小聲(SECTION_REPEAT;放在 popSectionJoin 之後,跟它補過的副歌開頭比)
