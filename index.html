@@ -10735,7 +10735,7 @@ function pianoDynSyncLater(){ clearTimeout(pianoDynTimer); pianoDynTimer = setTi
    + 逐音高頻補償約 +18dB),手機喇叭上聽起來快爆開。整首第 99 百分位力度超過 p99 時,所有音乘同一個倍數 p99/實際值
    (比例、起伏、重音、旋律伴奏差都不變),再用 pianoSongGain 把整首音量補回原本(能量 Σ 音量² 相同)→ 音量一樣、
    最用力的音改用比較柔的錄音層。沒超過的曲子不動。window.POP_CEIL_OVERRIDE 可改({ on:false } 關掉) */
-const POP_CEIL = { on: false, p99: 100 };   // 試聽中(使用者確認後才打開)
+const POP_CEIL = { on: true, p99: 100 };   // 使用者 A/B/C 選 B(2026-11)
 let pianoSongGain = 1;
 function popVelocityScale(){
   const C = Object.assign({}, POP_CEIL, window.POP_CEIL_OVERRIDE || {});
