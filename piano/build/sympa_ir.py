@@ -1,4 +1,6 @@
-"""踏板共鳴(sympathetic resonance)的脈衝響應:python3 piano/build/sympa_ir.py [輸出.flac,預設 piano/sympa.flac]
+"""**2026-11-08 起 App 的 piano/sympa.flac 是 1582cc7 那版(使用者:共鳴改太多、乾淨的鋼琴聲不見了;要重現用 git show 1582cc7:piano/build/sympa_ir.py)。這支程式的預設(board 模型、5 秒)只是保留下來的試驗版本,產生的檔案不要直接換進 App。**
+
+踏板共鳴(sympathetic resonance)的脈衝響應:python3 piano/build/sympa_ir.py [輸出.flac,預設 piano/sympa.flac]
 
 踩下延音踏板時,所有制音器離開琴弦,88 組琴弦都會被正在響的音(經由琴橋/響板)帶動、跟著共振。
 這個 IR 就是「全部琴弦一起當共振器」:每條弦的每個泛音是一個衰減的正弦波
