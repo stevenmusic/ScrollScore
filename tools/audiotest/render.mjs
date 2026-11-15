@@ -51,7 +51,7 @@ await page.addInitScript(([taps, fixedSec]) => {
 // 環境變數:SPEAKER=1/0/ext 強制手機喇叭補償開/關/外接耳機等的低音補回(window.SPEAKER_PROFILE_OVERRIDE);NOWK=1 模擬 iPhone 沒有 AudioWorklet
 if (process.env.SPEAKER) await page.addInitScript(v => { window.SPEAKER_PROFILE_OVERRIDE = v === "ext" ? "external" : (v === "1"); }, process.env.SPEAKER);
 if (process.env.NOWK) await page.addInitScript(() => { window.FORCE_NO_WORKLET = true; });
-await page.goto(`http://127.0.0.1:${port}/index.html`);
+await page.goto(`http://127.0.0.1:${port}/index.html${opt("sfzdir", null) ? "?pro" : ""}`);
 await page.waitForFunction(() => typeof loadScoreFile === "function");
 const inst = opt("inst", null);
 // --set '{"MASTER.makeup":1.4,"DRUM_BUS.makeup":0.8}':在樂譜載入前改全域設定物件的欄位
@@ -61,6 +61,13 @@ await page.evaluate(sets => { for (const [k, v] of Object.entries(sets)) { const
 await page.evaluate(i => { try { localStorage.clear(); } catch (e) {} if (i) $("instrument").value = i; }, inst);
 await page.setInputFiles("#fileInput", path.resolve(scorePath));
 await page.waitForFunction(() => typeof events !== "undefined" && events.length > 0 && typeof totalWhole !== "undefined" && totalWhole > 0, null, { timeout: 120000 });
+// --sfzdir 目錄 [--sfz 檔名]:用「自己的鋼琴音源」(USER_PIANO)彈,跟網頁選資料夾一樣
+if (opt("sfzdir", null)) {
+  await page.setInputFiles("#userPianoDir", path.resolve(opt("sfzdir")));
+  await page.waitForFunction(() => typeof userPiano !== "undefined" && userPiano && userPiano.regions, null, { timeout: 120000 });
+  if (opt("sfz", null)) await page.evaluate(n => { const k = userPiano.sfzList.find(x => x.endsWith(n.toLowerCase())); const sel = $("userPianoSfz"); sel.value = k; sel.dispatchEvent(new Event("change")); }, opt("sfz"));
+  await page.waitForFunction(n => userPiano && (!n || userPiano.sfzName.endsWith(n.toLowerCase())), (opt("sfz", "") || "").toLowerCase(), { timeout: 120000 });
+}
 if (inst) await page.evaluate(i => { $("instrument").value = i; }, inst);
 const tempo = opt("tempo", null), reverb = opt("reverb", null);
 await page.evaluate(([t, rv]) => {
@@ -71,6 +78,7 @@ const info = await page.evaluate(async () => {
   const hasDrum = events.some(e => e.notes.some(n => n.drum));
   const hasPitched = events.some(e => e.notes.some(n => !n.drum && n.freq));
   if (hasPitched) await loadInstrumentSamples(currentInstrument());
+  if (hasPitched && typeof userPiano !== "undefined" && userPiano) await pianoLoading;
   if (hasDrum) await loadDrumKit();
   ensureAudio();
   if (window.__busGain) masterBus.gain.value = window.__busGain;   // --busgain:模擬匯出時的響度標準化增益
