@@ -22,7 +22,10 @@ if (!scorePath || !outPath) { console.error("usage: node render.mjs score.xml ou
 
 const MIME = { ".html": "text/html", ".json": "application/json", ".flac": "audio/flac", ".js": "text/javascript" };
 const server = http.createServer((req, res) => {
-  const p = path.join(ROOT, decodeURIComponent(req.url.split("?")[0]));
+  const u = decodeURIComponent(req.url.split("?")[0]);
+  const SFZD = opt("sfzdir", null) && path.resolve(opt("sfzdir"));
+  const p = SFZD && u.startsWith("/__sfz/") ? path.join(SFZD, u.slice(7)) : path.join(ROOT, u);
+  if (SFZD && u.startsWith("/__sfz/")) { if (!fs.existsSync(p)) { res.writeHead(404); return res.end(); } res.writeHead(200); return fs.createReadStream(p).pipe(res); }
   if (!p.startsWith(ROOT) || !fs.existsSync(p) || fs.statSync(p).isDirectory()) { res.writeHead(404); return res.end(); }
   res.writeHead(200, { "content-type": MIME[path.extname(p)] || "application/octet-stream" });
   fs.createReadStream(p).pipe(res);
@@ -33,7 +36,7 @@ const port = server.address().port;
 const browser = await chromium.launch({ args: ["--autoplay-policy=no-user-gesture-required"] });
 const page = await browser.newPage();
 page.on("pageerror", e => console.error("[pageerror]", e.message));
-page.on("console", m => { if (m.type() === "error") console.error("[console]", m.text()); });
+page.on("console", m => { if (m.type() === "error" || /自己的音源/.test(m.text()) || process.env.ALLLOG) console.error("[console]", m.text()); });
 await page.route(/cdn\.jsdelivr\.net\/npm\/opensheetmusicdisplay/, r => r.fulfill({ path: require.resolve("opensheetmusicdisplay/build/opensheetmusicdisplay.min.js"), contentType: "text/javascript" }));
 await page.route(/cdn\.jsdelivr\.net\/npm\/jszip/, r => r.fulfill({ path: require.resolve("jszip/dist/jszip.min.js"), contentType: "text/javascript" }));
 await page.route(/raw\.githubusercontent\.com|tonejs\.github\.io|nbrosowsky/, r => r.abort());   // 只測本機取樣
@@ -63,9 +66,17 @@ await page.setInputFiles("#fileInput", path.resolve(scorePath));
 await page.waitForFunction(() => typeof events !== "undefined" && events.length > 0 && typeof totalWhole !== "undefined" && totalWhole > 0, null, { timeout: 120000 });
 // --sfzdir 目錄 [--sfz 檔名]:用「自己的鋼琴音源」(USER_PIANO)彈,跟網頁選資料夾一樣
 if (opt("sfzdir", null)) {
-  await page.setInputFiles("#userPianoDir", path.resolve(opt("sfzdir")));
+  // 整個資料夾用 setInputFiles 傳進瀏覽器太慢(幾 GB),改成「用到才向本機伺服器讀」的檔案物件,跟真的選資料夾一樣只讀需要的檔
+  const root = path.resolve(opt("sfzdir")), list = [];
+  const walk = d => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const f = path.join(d, e.name); if (e.isDirectory()) walk(f); else list.push([path.relative(root, f).split(path.sep).join("/"), fs.statSync(f).size]); } };
+  walk(root);
+  await page.evaluate(([list, top]) => {
+    const fl = list.map(([rel, size]) => ({ name: rel.split("/").pop(), webkitRelativePath: top + "/" + rel, size,
+      text: () => fetch("/__sfz/" + rel).then(r => r.text()), arrayBuffer: () => fetch("/__sfz/" + rel).then(r => r.arrayBuffer()) }));
+    window.userPianoUse(fl);
+  }, [list, path.basename(root)]);
   await page.waitForFunction(() => typeof userPiano !== "undefined" && userPiano && userPiano.regions, null, { timeout: 120000 });
-  if (opt("sfz", null)) await page.evaluate(n => { const k = userPiano.sfzList.find(x => x.endsWith(n.toLowerCase())); const sel = $("userPianoSfz"); sel.value = k; sel.dispatchEvent(new Event("change")); }, opt("sfz"));
+  if (opt("sfz", null)) await page.evaluate(n => { const k = userPiano.sfzList.find(x => x.endsWith(n.toLowerCase())); window.userPianoUse([...userPiano.files.values()], k); }, opt("sfz"));
   await page.waitForFunction(n => userPiano && (!n || userPiano.sfzName.endsWith(n.toLowerCase())), (opt("sfz", "") || "").toLowerCase(), { timeout: 120000 });
 }
 if (inst) await page.evaluate(i => { $("instrument").value = i; }, inst);

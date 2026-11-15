@@ -11697,7 +11697,7 @@ function playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel
    key/lokey/hikey/pitch_keycenter(數字或音名)、lovel/hivel、locc64/hicc64、on_locc64/on_hicc64、trigger、seq_length/seq_position、
    lorand/hirand、volume、amp_veltrack、tune、transpose、offset、pan、ampeg_attack、ampeg_release、rt_decay、cutoff/fil_veltrack/resonance(低通)。
    音量:跟內建鋼琴同一套 sfz 力度曲線(amp_veltrack),整體音量用 C4 力度 100 的響度對齊內建鋼琴(USER_PIANO.refRms) */
-const USER_PIANO = { refRms: 0.081, budget: 1.6e9, conc: 6 };
+const USER_PIANO = { refRms: 0.081, budget: 1.0e9, conc: 6 };
 let userPiano = null;   // { name, sfzName, regions, buf: Map, needSec: Map, hasPedalSamples, gain, seq: {} }
 function userPianoActive(){ return !!(userPiano && userPiano.regions && userPiano.regions.length && userPiano.ready); }
 function proMode(){
@@ -11747,7 +11747,9 @@ function sfzParse(text, sfzDir){
   text = text.replace(/\/\*[\s\S]*?\*\//g, "").split("\n").map(l => l.replace(/(^|\s)\/\/.*$/, "")).join("\n");
   const ctl = {}, regions = [];
   let level = null, glob = {}, master = {}, group = {}, cur = null;
-  const flush = () => { if (cur && level === "region") regions.push(Object.assign({}, glob, master, group, cur)); };
+  // key= 同時設定 lokey/hikey/pitch_keycenter:後面層級(例如 region)的 key 要蓋過前面層級(group)的 lokey/hikey
+  const merge = (...lv) => { const o = {}; for (const x of lv) { if (x.key !== undefined) { delete o.lokey; delete o.hikey; delete o.pitch_keycenter; } Object.assign(o, x); } return o; };
+  const flush = () => { if (cur && level === "region") regions.push(merge(glob, master, group, cur)); };
   const re = /<(\w+)>|([A-Za-z0-9_]+)=/g;
   let m, last = null, lastEnd = 0;
   const setOp = (k, v) => { if (cur) cur[k] = v.trim(); };
@@ -11779,7 +11781,7 @@ function sfzParse(text, sfzDir){
     const first = k => r[k] !== undefined ? String(r[k]).trim().split(/\s+/)[0] : undefined;
     const nn = k => { const v = first(k); if (v === undefined) return undefined; const x = sfzNoteNum(v); return isFinite(x) ? x + noteOff : undefined; };
     const key = nn("key");
-    const lokey = nn("lokey") ?? key ?? 0, hikey = nn("hikey") ?? key ?? 127;
+    const lokey = nn("lokey") ?? key ?? 0, hikey = nn("hikey") ?? key ?? 127;   // 同一層同時寫 key 與 lokey/hikey 時以 lokey/hikey 為準
     const trig = (first("trigger") || "attack").toLowerCase();
     const onLo = first("on_locc64"), onHi = first("on_hicc64");
     res.push({
@@ -11917,18 +11919,38 @@ function userPianoNeeds(){
 async function userPianoLoadNeeded(gen, quiet){
   const U = userPiano, need = userPianoNeeds();
   for (const k of [...U.buf.keys()]) if (!need.has(k)) U.buf.delete(k);
-  const est = (f, sec) => { const full = /\.wav$/i.test(f.name) ? f.size / 3 * 4 * 1.1 : f.size * 3; return full; };
-  let total = 0; const jobs = [];
-  for (const [p, sec] of need) { const f = U.files.get(p); if (!f) continue; total += est(f, sec); if (!U.buf.has(p)) jobs.push([p, f, sec]); }
+  // 解碼後的大小(float32、播放取樣率):WAV 讀檔頭(位元數、聲道、取樣率),其他格式粗估壓縮率 3 倍
+  if (!U.info) U.info = new Map();
+  const sr = audioCtx.sampleRate;
+  await runLimited([...need.keys()].filter(p => U.files.has(p) && !U.info.has(p)).map(p => async () => {
+    const f = U.files.get(p); let inf = { bytesPerSec: 0, full: 0 };
+    try {
+      if (/\.wav$/i.test(f.name) && f.slice) {
+        const h = new DataView(await f.slice(0, 4096).arrayBuffer());
+        let o = 12, ch = 2, rate = 44100, bits = 16;
+        while (o + 8 <= h.byteLength) { const id = String.fromCharCode(h.getUint8(o), h.getUint8(o + 1), h.getUint8(o + 2), h.getUint8(o + 3)), len = h.getUint32(o + 4, true);
+          if (id === "fmt ") { ch = h.getUint16(o + 10, true); rate = h.getUint32(o + 12, true); bits = h.getUint16(o + 22, true); break; } o += 8 + len + (len & 1); }
+        const sec = f.size / (rate * ch * bits / 8); inf = { bytesPerSec: sr * ch * 4, full: sec };
+      }
+    } catch (e) {}
+    if (!inf.full) inf = { bytesPerSec: sr * 2 * 4, full: f.size * 3 / (sr * 2 * 4) };
+    U.info.set(p, inf);
+  }), 16);
+  const jobs = []; let total = 0, totalTrim = 0;
+  const trimSec = sec => Math.max(3, sec * 1.6 + 2);
+  for (const [p, sec] of need) { const f = U.files.get(p); if (!f) continue; const inf = U.info.get(p); total += inf.full * inf.bytesPerSec; totalTrim += Math.min(inf.full, trimSec(sec)) * inf.bytesPerSec; if (!U.buf.has(p)) jobs.push([p, f, sec]); }
   const trim = total > USER_PIANO.budget;
+  // 截短了還放不下:照「用到的長度」再等比例縮,最短 2 秒(寧可長音提早淡出,也不要把瀏覽器記憶體用爆)
+  const shrink = trim && totalTrim > USER_PIANO.budget ? USER_PIANO.budget / totalTrim : 1;
+  console.log("自己的音源:這首要用 " + need.size + " 個檔案、還要讀 " + jobs.length + " 個,完整 " + Math.round(total / 1e6) + "MB" + (trim ? "(超過預算 " + Math.round(USER_PIANO.budget / 1e6) + "MB,截短到約 " + Math.round(Math.min(totalTrim, USER_PIANO.budget) / 1e6) + "MB)" : ""));
   let done = 0;
   const missing = [...need.keys()].filter(p => !U.files.has(p));
   if (missing.length) console.warn("自己的音源:找不到 " + missing.length + " 個檔案,例如", missing.slice(0, 3));
   await runLimited(jobs.map(([p, f, sec]) => async () => {
     try {
       let b = await audioCtx.decodeAudioData(await f.arrayBuffer());
-      if (trim && sec > 0) {
-        const n = Math.min(b.length, Math.round(Math.max(3, sec * 1.6 + 2) * b.sampleRate));
+      if (trim) {
+        const n = Math.min(b.length, Math.round(Math.max(2, trimSec(sec) * shrink) * b.sampleRate));
         if (n < b.length) { const o = audioCtx.createBuffer(b.numberOfChannels, n, b.sampleRate), fade = Math.min(n >> 2, Math.round(0.8 * b.sampleRate)); for (let c = 0; c < o.numberOfChannels; c++) { const d = o.getChannelData(c); d.set(b.getChannelData(c).subarray(0, n)); for (let i = 0; i < fade; i++) d[n - fade + i] *= Math.pow(Math.cos(i / fade * Math.PI / 2), 2); } b = o; }
       }
       if (gen === pianoGen) U.buf.set(p, b);
@@ -11945,9 +11967,9 @@ async function userPianoLoadNeeded(gen, quiet){
       if (!b) { try { b = await audioCtx.decodeAudioData(await U.files.get(r.path).arrayBuffer()); } catch (e) { continue; } }
       const n = Math.min(b.length, Math.round(2 * b.sampleRate)); let e2 = 0;
       for (let c = 0; c < b.numberOfChannels; c++) { const d = b.getChannelData(c); for (let i = 0; i < n; i++) e2 += d[i] * d[i]; }
-      sum += Math.sqrt(e2 / n / b.numberOfChannels) * r.amp * sfzVelGain(r.veltrack, 100);
+      sum += e2 / n / b.numberOfChannels * Math.pow(r.amp * sfzVelGain(r.veltrack, 100), 2);   // 同時響的區域照能量相加
     }
-    U.gain = sum > 0 ? USER_PIANO.refRms / sum : 1; U.gainPending = false;
+    U.gain = sum > 0 ? USER_PIANO.refRms / Math.sqrt(sum) : 1; U.gainPending = false;
     console.log("自己的音源:音量倍率 " + U.gain.toFixed(3));
   }
   U.ready = true;
