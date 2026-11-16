@@ -18,7 +18,7 @@ const opt = k => { const i = args.indexOf("--" + k); return i >= 0 ? args[i + 1]
 const pos = args.filter((a, i) => !a.startsWith("--") && !(i > 0 && (args[i - 1] === "--inst" || args[i - 1] === "--cancel" || args[i - 1] === "--hide")) && !(i > 1 && args[i - 2] === "--hide"));
 const [score, out, format = "landscape", s0, s1] = pos;
 const ROOT = path.resolve(path.join(path.dirname(new URL(import.meta.url).pathname), "../.."));
-const server = http.createServer((req, res) => { const p = path.join(ROOT, decodeURIComponent(req.url.split("?")[0])); if (!fs.existsSync(p) || fs.statSync(p).isDirectory()) { res.writeHead(404); return res.end(); } res.writeHead(200); fs.createReadStream(p).pipe(res); });
+const server = http.createServer((req, res) => { const u = decodeURIComponent(req.url.split("?")[0]); const p = opt("sfzdir") && u.startsWith("/__sfz/") ? path.join(path.resolve(opt("sfzdir")), u.slice(7)) : path.join(ROOT, u); if (!fs.existsSync(p) || fs.statSync(p).isDirectory()) { res.writeHead(404); return res.end(); } res.writeHead(200); fs.createReadStream(p).pipe(res); });
 await new Promise(r => server.listen(0, "127.0.0.1", r));
 const browser = await chromium.launch({ args: ["--autoplay-policy=no-user-gesture-required"] });
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
@@ -31,12 +31,27 @@ if (flags.has("--noearly")) await page.addInitScript(() => { window.FAST_EARLY_A
 if (flags.has("--rectest")) await page.addInitScript(() => { window.__rectest = true; });
 if (flags.has("--noworklet")) await page.addInitScript(() => { window.FORCE_NO_WORKLET = true; });
 if (process.env.DRUM_MASTER_OVERRIDE) await page.addInitScript(o => { window.DRUM_MASTER_OVERRIDE = JSON.parse(o); }, process.env.DRUM_MASTER_OVERRIDE);   // 測試用:鼓母帶參數覆寫(JSON)
-await page.goto(`http://127.0.0.1:${server.address().port}/index.html`);
+await page.goto(`http://127.0.0.1:${server.address().port}/index.html${opt("sfzdir") ? "?pro" : ""}`);
 if (opt("inst")) await page.selectOption("#instrument", opt("inst"), { force: true });
 await page.setInputFiles("#fileInput", path.resolve(score));
 await page.waitForFunction(() => typeof events !== "undefined" && events.length > 0, null, { timeout: 120000 });
+// --sfzdir 目錄:用「自己的鋼琴音源」匯出(檔案用到才向本機伺服器讀,跟網頁選資料夾一樣)
+if (opt("sfzdir")) {
+  const root = path.resolve(opt("sfzdir")), list = [];
+  const walk = d => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const f = path.join(d, e.name); if (e.isDirectory()) walk(f); else list.push([path.relative(root, f).split(path.sep).join("/"), fs.statSync(f).size]); } };
+  walk(root);
+  await page.evaluate(([list, top]) => { window.userPianoUse(list.map(([rel, size]) => ({ name: rel.split("/").pop(), webkitRelativePath: top + "/" + rel, size, slice: (a, b) => ({ arrayBuffer: () => fetch("/__sfz/" + rel, { headers: { Range: "bytes=" + a + "-" + (b - 1) } }).then(r => r.arrayBuffer()) }), text: () => fetch("/__sfz/" + rel).then(r => r.text()), arrayBuffer: () => fetch("/__sfz/" + rel).then(r => r.arrayBuffer()) }))); }, [list, path.basename(root)]);
+  await page.waitForFunction(() => userPiano && userPiano.ready, null, { timeout: 300000 });
+  await page.evaluate(() => { const o = userPianoVoice, p = playPianoNote; window.__upc = { user: 0, notes: 0 }; userPianoVoice = function () { window.__upc.user++; return o.apply(this, arguments); }; playPianoNote = function () { window.__upc.notes++; return p.apply(this, arguments); }; });
+}
 await page.evaluate(async () => { const inst = currentInstrument(); if (inst === "drum") await loadDrumKit(); else await loadInstrumentSamples(inst); });
 await page.waitForTimeout(500);
+// --audioonly(配合 --sfzdir):只跑快速匯出的聲音合成(renderExportAudioFast),看自己的音源有沒有被用到(雲端沒有聲音編碼器,整條快速匯出走不到)
+if (flags.has("--audioonly")) {
+  const r = await page.evaluate(async () => { window.__upc = window.__upc || { user: 0, notes: 0 }; const before = { ...window.__upc }; const a = await renderExportAudioFast(0, 8, null); return { before, after: window.__upc, keys: a ? Object.keys(a) : null }; });
+  console.log("audioonly", JSON.stringify(r), errs.slice(0, 5).join(" | "));
+  await browser.close(); server.close(); process.exit(0);
+}
 // --noinc:離線合成照舊先把整首排好(比較 OFFLINE_SCHED 邊合成邊排的速度)
 if (flags.has("--noinc")) await page.evaluate(() => { OFFLINE_SCHED.on = false; });
 // --sched step,ahead:改 OFFLINE_SCHED 的間隔(比較速度)
@@ -94,4 +109,5 @@ if (flags.has("--log")) console.log(res.log.join("\n"));
 console.log("longest unchanged title", (res.maxStall / 1000).toFixed(1) + "s", JSON.stringify(res.stallTitle), "| time past end:", res.overTime || "none", "| note:", res.note || "-");
 console.log("music", res.len.toFixed(1) + "s", "export took", (res.ms / 1000).toFixed(1) + "s", "status:", res.status, res.liveCtx ? "" : "| ✗ audioCtx 還是離線的");
 console.log(errs.filter(e => !/ERR_FAILED|wakeLock|Wake Lock/.test(e)).slice(0, 10).join("\n") || "no errors");
+if (opt("sfzdir")) console.log("user piano calls", JSON.stringify(await page.evaluate(() => window.__upc)), "active", await page.evaluate(() => userPianoActive()));
 await browser.close(); server.close();
