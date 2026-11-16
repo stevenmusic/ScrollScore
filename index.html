@@ -11829,7 +11829,7 @@ function sfzParse(text, sfzDir){
 }
 /* 力度對應(使用者 2026-11 選 A:「自己的音源」只沿用演奏,力度數字照這套音源重新對應):
    演奏規則算出的力度(n.pvel)是照真人資料校正的「手怎麼彈」,不動;換成別的音源時,
-   ① 選哪一層錄音:照這首的力度分布,第 5 百分位對到這套音源第 2 層(通常是 p)的中間、第 95 百分位對到最上層(通常是 f/ff)裡面一點,
+   ① 選哪一層錄音:照這首的力度分布,第 5 百分位對到這套音源第 2 層(通常是 p)的上緣(p/mp 交界)、第 95 百分位對到最上層(通常是 f/ff)裡面一點,
       中間線性(音源只有 5 層、最高到 f 時,副歌高潮才用得到最亮的那層,前奏用 p/pp;以前 98% 落在 p~mf,聽起來悶、段落差別小)
    ② 音量:照內建鋼琴的力度曲線 pianoVelGain(原本的力度),用 C4 每一層實際量到的響度校正 → 大小聲起伏跟內建鋼琴一樣,不受音源各層錄音大小影響 */
 function userPianoLib(){ return !!(userPiano || userPianoPending); }
@@ -11847,8 +11847,10 @@ function userPianoVelMap(U){
   let map = null;
   if (L.length >= 2 && v.length >= 20) {
     const q = f => v[Math.min(v.length - 1, Math.floor(v.length * f))], p5 = q(0.05), p95 = q(0.95);
+    // 小聲的地方對到第 2 層(通常是 p)的上緣 = p/mp 交界,不往 pp 走(使用者 2026-11:對到 p 的中間時「小聲的地方太刻意、糊成一團」——
+    // 最輕的錄音琴槌軟、起音弱,音量再照內建曲線補大,房間聲與踩踏板的琴弦共鳴相對變多)
     const lay = L[L.length >= 4 ? 1 : 0], top = L[L.length - 1];
-    const t5 = (Math.max(1, lay.lo) + lay.hi) / 2, t95 = top.lo + 0.3 * (top.hi - top.lo);
+    const t5 = L.length >= 4 ? lay.hi : (Math.max(1, lay.lo) + lay.hi) / 2, t95 = top.lo + 0.3 * (top.hi - top.lo);
     if (p95 > p5 + 5 && t95 > t5) map = { p5, p95, t5, t95 };
   }
   U.vmap = { map, layers: L }; U.vmapFor = events;
