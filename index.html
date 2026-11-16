@@ -11980,7 +11980,9 @@ async function userPianoFromFiles(fileList, sfzPick){
   for (const f of fileList) files.set(sfzNormPath(f.webkitRelativePath || f.name), f);
   const sfzs = [...files.keys()].filter(k => k.endsWith(".sfz")).sort();
   if (!sfzs.length) throw new Error(T("userPianoNoSfz"));
-  const pick = sfzPick && files.has(sfzPick) ? sfzPick : sfzs[0];
+  // 預設挑近距離麥克風的(Close/Near/Direct),環境/房間/遠處麥克風(Ambient/Room/Far/Hall)最後:遠的麥克風殘響多,聽起來悶、糊
+  const sfzScore = k => { const n = k.split("/").pop(); return (/close|near|direct|mic ?1|player/i.test(n) ? 2 : 0) - (/ambi|room|far|hall|amb\b|surround/i.test(n) ? 2 : 0) - k.split("/").length * 0.01; };
+  const pick = sfzPick && files.has(sfzPick) ? sfzPick : [...sfzs].sort((a, b) => sfzScore(b) - sfzScore(a))[0];
   const dir = pick.split("/").slice(0, -1).join("/");
   const regions = sfzParse(await sfzLoadText(files.get(pick), dir, files), dir);
   if (!regions.length) throw new Error(T("userPianoNoRegions"));
