@@ -11716,7 +11716,7 @@ function playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel
    key/lokey/hikey/pitch_keycenter(數字或音名)、lovel/hivel、locc64/hicc64、on_locc64/on_hicc64、trigger、seq_length/seq_position、
    lorand/hirand、volume、amp_veltrack、tune、transpose、offset、pan、ampeg_attack、ampeg_release、rt_decay、cutoff/fil_veltrack/resonance(低通)。
    音量:跟內建鋼琴同一套 sfz 力度曲線(amp_veltrack),整體音量用 C4 力度 100 的響度對齊內建鋼琴(USER_PIANO.refRms) */
-const USER_PIANO = { refRms: 0.081, budget: 1.0e9, conc: 6 };
+const USER_PIANO = { refRms: 0.081, budget: 1.0e9, conc: 6, raw: true };   // raw(使用者 2026-11:「外部 sfz 讓我聽預設的音色,不要改掉」):照 .sfz 原廠設定播,見 userPianoVoice
 let userPiano = null;   // { name, sfzName, regions, buf: Map, needSec: Map, hasPedalSamples, gain, seq: {} }
 function userPianoActive(){ return !!(userPiano && userPiano.regions && userPiano.regions.length && userPiano.ready); }
 function proMode(){
@@ -11816,6 +11816,8 @@ function sfzParse(text, sfzDir){
       lorand: num(first("lorand"), 0), hirand: num(first("hirand"), 1),
       amp: Math.pow(10, num(first("volume"), 0) / 20) * Math.pow(10, num(first("amplitude"), 100) / 100 === 1 ? 0 : 20 * Math.log10(Math.max(1e-4, num(first("amplitude"), 100) / 100)) / 20),
       veltrack: num(first("amp_veltrack"), 100) / 100,
+      velcurve: (() => { const pts = Object.keys(r).map(k => /^amp_velcurve_(\d+)$/.exec(k)).filter(Boolean).map(mm => [Math.min(127, +mm[1]), num(first(mm[0]), 0)]); if (!pts.length) return null;
+        pts.sort((a, b) => a[0] - b[0]); if (pts[0][0] > 0) pts.unshift([0, 0]); if (pts[pts.length - 1][0] < 127) pts.push([127, 1]); return pts; })(),
       tune: num(first("tune"), 0), transpose: num(first("transpose"), 0),
       offset: num(first("offset"), 0), pan: num(first("pan"), 0) / 100,
       attack: num(first("ampeg_attack"), 0), release: num(first("ampeg_release"), 0.001),
@@ -11858,6 +11860,7 @@ function userPianoVelMap(U){
   return U.vmap;
 }
 function userVelFor(v, U = userPiano){
+  if (USER_PIANO.raw) return v;   // 原廠模式:力度照演奏算出來的,不重新對應
   const M = userPianoVelMap(U).map;
   if (!M) return v;
   return Math.max(1, Math.min(127, M.t5 + (v - M.p5) * (M.t95 - M.t5) / (M.p95 - M.p5)));
@@ -11871,6 +11874,13 @@ function userGainFor(v, vq, U = userPiano){
   let e = lv[i]; for (let d = 1; !e && d < lv.length; d++) e = lv[i - d] || lv[i + d];
   if (!e) return target / (U.c4Rms || USER_PIANO.refRms);
   return target / e.rms;   // 換層只換音色,音量連續(照原本力度的內建曲線)
+}
+/* 原廠的力度 → 音量:有 amp_velcurve_N 就照那幾個點線性內插,沒有就照 amp_veltrack(平方曲線) */
+function sfzVelAmp(r, vel){
+  const v = Math.max(1, Math.min(127, vel)), c = r.velcurve;
+  if (!c) return sfzVelGain(r.veltrack, v);
+  for (let i = 1; i < c.length; i++) if (v <= c[i][0]) { const [a, ga] = c[i - 1], [b, gb] = c[i]; return b > a ? ga + (gb - ga) * (v - a) / (b - a) : gb; }
+  return c[c.length - 1][1];
 }
 function sfzVelGain(t, vel){ const v = Math.max(1, Math.min(127, vel)) / 127; return (1 - t) + t * v * v; }
 /* 這個音(key、力度、踏板)會用到的區域;pick = 真的要彈時才依 seq / rand 選一個 */
@@ -11898,7 +11908,7 @@ function userPianoPlayRegions(regs, when, vel, gainMul, tm, dest){
     const src = audioCtx.createBufferSource(); src.buffer = b; src.playbackRate.value = rate;
     // 層內不再套音源的力度曲線(amp_veltrack/amp_velcurve):大小聲由 userGainFor 照內建曲線決定,這裡只用區域本身的 volume。
     // 以前層內照 (力度/127)² 起伏、跨層又被校正拉回 → 換層時音量鋸齒(p→mp 力度 39→40 反而小 3dB,使用者:「整首都不自然」)
-    const g = audioCtx.createGain(), amp = gainMul * r.amp;
+    const g = audioCtx.createGain(), amp = gainMul * r.amp * (USER_PIANO.raw ? sfzVelAmp(r, vel) : 1);
     if (r.attack > 0.002) { g.gain.setValueAtTime(0, when); g.gain.linearRampToValueAtTime(amp, when + r.attack); } else g.gain.setValueAtTime(amp, when);
     let node = src;
     if (r.cutoff > 0) {
@@ -11926,13 +11936,16 @@ function userPianoVoice(m, tm, when, vel, keyUp, damperAt, halfPedal, pedalDown,
   const out = audioCtx.createGain(); out.gain.setValueAtTime(1, when); out.connect(getUserPianoBus());
   // 按住時的衰減(ampeg_hold/decay/sustain,例如 The Experience 系列 decay 60 秒到 5%):hold 之後指數往 sustain 收(約 decay/5 時間常數)
   { const r0 = regs[0]; if (r0 && r0.decay > 0 && r0.sustain < 1) out.gain.setTargetAtTime(Math.max(1e-4, r0.sustain), when + r0.attack + r0.hold, r0.decay / 5); }
-  const gain = userGainFor(vel, vq);
+  const raw = USER_PIANO.raw;
+  // 原廠模式:整體只乘一個固定倍數(C4 力度 100 對齊內建鋼琴的音量,不改音色);沒踩踏板的音照譜上長度放開,不做和聲延長/半踏板
+  if (raw && !pedalDown) { damperAt = keyUp; halfPedal = false; }
+  const gain = raw ? U.gain : userGainFor(vel, vq);
   const { srcs, bufEnd } = userPianoPlayRegions(regs, when, vq, gain, tm, out);
   // 制音器:用音源自己的 ampeg_release(SFZ 的放開時間 ≈ 5 個時間常數);半踏板(程式依和聲自動延長)照內建規則
   // 換踏板/放鍵收音(使用者 2026-11 選 B):取「音源設定的放開時間」與內建制音器模型(pianoDamperTau,低音 0.16 → 高音 0.045 秒)較快的那個,
   // 舊和弦不會拖進新和弦(很多音源 ampeg_release 設 1 秒以上,踩踏板的段落換踏板時聽起來糊);沒有制音器的高音(F#6 以上)照音源
   const rel = Math.max(...regs.map(r => r.release));
-  const tau = m >= 89 ? Math.max(0.02, rel / 5) : Math.max(0.02, Math.min(rel / 5, pianoDamperTau(m)));
+  const tau = (raw || m >= 89) ? Math.max(0.02, rel / 5) : Math.max(0.02, Math.min(rel / 5, pianoDamperTau(m)));   // 原廠模式照 ampeg_release
   if (halfPedal) out.gain.setTargetAtTime(0, keyUp, pianoHalfPedalTau(m));
   if (damperAt < bufEnd) out.gain.setTargetAtTime(0, damperAt, tau);
   const end = Math.min(bufEnd, damperAt + tau * 7);
@@ -11947,8 +11960,11 @@ function userPianoVoice(m, tm, when, vel, keyUp, damperAt, halfPedal, pedalDown,
       const groups = new Map(); for (const r of rr) { const k = r.rtDecay; (groups.get(k) || groups.set(k, []).get(k)).push(r); }
       // 放鍵聲(制音器、機械聲)是固定音量錄的,不能用琴音的倍數(輕的層要放大很多 → 輕彈的音放鍵聲被放得太大,音色怪):
       // 用力度 100 那一層的倍數,再照原廠力度曲線(amp_veltrack/amp_velcurve 的平方近似)變小聲
-      const relBase = userGainFor(100, userVelFor(100));
-      for (const [dec, list] of groups) for (const r of list) userPianoPlayRegions([r], damperAt, vq, relBase * sfzVelGain(r.veltrack, vq) / sfzVelGain(r.veltrack, userVelFor(100)) * Math.pow(10, -dec * held / 20), tm, rg);
+      if (raw) { for (const [dec, list] of groups) userPianoPlayRegions(list, damperAt, vq, gain * Math.pow(10, -dec * held / 20), tm, rg); }
+      else {
+        const relBase = userGainFor(100, userVelFor(100));
+        for (const [dec, list] of groups) for (const r of list) userPianoPlayRegions([r], damperAt, vq, relBase * sfzVelGain(r.veltrack, vq) / sfzVelGain(r.veltrack, userVelFor(100)) * Math.pow(10, -dec * held / 20), tm, rg);
+      }
       v.rel.push(rg);
     }
   }
@@ -12064,7 +12080,7 @@ async function userPianoLoadNeeded(alive, quiet, U = userPiano){
       if (!b) { try { b = await audioCtx.decodeAudioData(await U.files.get(r.path).arrayBuffer()); } catch (e) { continue; } }
       const n = Math.min(b.length, Math.round(2 * b.sampleRate)); let e2 = 0;
       for (let c = 0; c < b.numberOfChannels; c++) { const d = b.getChannelData(c); for (let i = 0; i < n; i++) e2 += d[i] * d[i]; }
-      sum += e2 / n / b.numberOfChannels * r.amp * r.amp;   // 同時響的區域照能量相加
+      sum += e2 / n / b.numberOfChannels * Math.pow(r.amp * (USER_PIANO.raw ? sfzVelAmp(r, 100) : 1), 2);   // 同時響的區域照能量相加
     }
     U.c4Rms = Math.sqrt(sum) || 0; U.gain = sum > 0 ? USER_PIANO.refRms / Math.sqrt(sum) : 1; U.gainPending = false;
     console.log("自己的音源:音量倍率 " + U.gain.toFixed(3));
