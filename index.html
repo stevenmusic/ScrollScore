@@ -11819,6 +11819,7 @@ function sfzParse(text, sfzDir){
       tune: num(first("tune"), 0), transpose: num(first("transpose"), 0),
       offset: num(first("offset"), 0), pan: num(first("pan"), 0) / 100,
       attack: num(first("ampeg_attack"), 0), release: num(first("ampeg_release"), 0.001),
+      hold: num(first("ampeg_hold"), 0), decay: num(first("ampeg_decay"), 0), sustain: Math.max(0, Math.min(100, num(first("ampeg_sustain"), 100))) / 100,
       rtDecay: num(first("rt_decay"), 0),
       cutoff: num(first("cutoff"), 0), filVel: num(first("fil_veltrack"), 0), reso: num(first("resonance"), 0),
       pitchTrack: num(first("pitch_keytrack"), 100) / 100,
@@ -11869,7 +11870,7 @@ function userGainFor(v, vq, U = userPiano){
   let i = vm.layers.findIndex(l => vq <= l.hi + 0.5); if (i < 0) i = vm.layers.length - 1;
   let e = lv[i]; for (let d = 1; !e && d < lv.length; d++) e = lv[i - d] || lv[i + d];
   if (!e) return target / (U.c4Rms || USER_PIANO.refRms);
-  return target / (e.rms * sfzVelGain(e.vt, vq) / sfzVelGain(e.vt, e.v));
+  return target / e.rms;   // 換層只換音色,音量連續(照原本力度的內建曲線)
 }
 function sfzVelGain(t, vel){ const v = Math.max(1, Math.min(127, vel)) / 127; return (1 - t) + t * v * v; }
 /* 這個音(key、力度、踏板)會用到的區域;pick = 真的要彈時才依 seq / rand 選一個 */
@@ -11895,7 +11896,9 @@ function userPianoPlayRegions(regs, when, vel, gainMul, tm, dest){
     const b = userPiano.buf.get(r.path); if (!b) continue;
     const rate = Math.pow(2, ((tm - r.center) * r.pitchTrack + r.transpose + r.tune / 100) / 12);
     const src = audioCtx.createBufferSource(); src.buffer = b; src.playbackRate.value = rate;
-    const g = audioCtx.createGain(), amp = gainMul * r.amp * sfzVelGain(r.veltrack, vel);
+    // 層內不再套音源的力度曲線(amp_veltrack/amp_velcurve):大小聲由 userGainFor 照內建曲線決定,這裡只用區域本身的 volume。
+    // 以前層內照 (力度/127)² 起伏、跨層又被校正拉回 → 換層時音量鋸齒(p→mp 力度 39→40 反而小 3dB,使用者:「整首都不自然」)
+    const g = audioCtx.createGain(), amp = gainMul * r.amp;
     if (r.attack > 0.002) { g.gain.setValueAtTime(0, when); g.gain.linearRampToValueAtTime(amp, when + r.attack); } else g.gain.setValueAtTime(amp, when);
     let node = src;
     if (r.cutoff > 0) {
@@ -11921,6 +11924,8 @@ function userPianoVoice(m, tm, when, vel, keyUp, damperAt, halfPedal, pedalDown,
   pianoVoices = pianoVoices.filter(v => v.end > when);
   while (pianoVoices.length >= PIANO_MAX_VOICES) pianoKill(pianoVoices.shift(), when);
   const out = audioCtx.createGain(); out.gain.setValueAtTime(1, when); out.connect(getUserPianoBus());
+  // 按住時的衰減(ampeg_hold/decay/sustain,例如 The Experience 系列 decay 60 秒到 5%):hold 之後指數往 sustain 收(約 decay/5 時間常數)
+  { const r0 = regs[0]; if (r0 && r0.decay > 0 && r0.sustain < 1) out.gain.setTargetAtTime(Math.max(1e-4, r0.sustain), when + r0.attack + r0.hold, r0.decay / 5); }
   const gain = userGainFor(vel, vq);
   const { srcs, bufEnd } = userPianoPlayRegions(regs, when, vq, gain, tm, out);
   // 制音器:用音源自己的 ampeg_release(SFZ 的放開時間 ≈ 5 個時間常數);半踏板(程式依和聲自動延長)照內建規則
@@ -11940,7 +11945,10 @@ function userPianoVoice(m, tm, when, vel, keyUp, damperAt, halfPedal, pedalDown,
     if (rr.length) {
       const rg = audioCtx.createGain(); rg.connect(getUserPianoBus());
       const groups = new Map(); for (const r of rr) { const k = r.rtDecay; (groups.get(k) || groups.set(k, []).get(k)).push(r); }
-      for (const [dec, list] of groups) userPianoPlayRegions(list, damperAt, vq, gain * Math.pow(10, -dec * held / 20), tm, rg);
+      // 放鍵聲(制音器、機械聲)是固定音量錄的,不能用琴音的倍數(輕的層要放大很多 → 輕彈的音放鍵聲被放得太大,音色怪):
+      // 用力度 100 那一層的倍數,再照原廠力度曲線(amp_veltrack/amp_velcurve 的平方近似)變小聲
+      const relBase = userGainFor(100, userVelFor(100));
+      for (const [dec, list] of groups) for (const r of list) userPianoPlayRegions([r], damperAt, vq, relBase * sfzVelGain(r.veltrack, vq) / sfzVelGain(r.veltrack, userVelFor(100)) * Math.pow(10, -dec * held / 20), tm, rg);
       v.rel.push(rg);
     }
   }
@@ -12041,7 +12049,7 @@ async function userPianoLoadNeeded(alive, quiet, U = userPiano){
         if (!b) { try { b = await audioCtx.decodeAudioData(await U.files.get(r.path).arrayBuffer()); } catch (e) { continue; } }
         const n = Math.min(b.length, Math.round(2 * b.sampleRate)); let e2 = 0;
         for (let c = 0; c < b.numberOfChannels; c++) { const d = b.getChannelData(c); for (let i = 0; i < n; i++) e2 += d[i] * d[i]; }
-        sum += e2 / n / b.numberOfChannels * Math.pow(r.amp * sfzVelGain(r.veltrack, vc), 2); vt = r.veltrack;
+        sum += e2 / n / b.numberOfChannels * r.amp * r.amp; vt = r.veltrack;
       }
       U.layerLoud.push(sum > 0 ? { rms: Math.sqrt(sum), v: vc, vt } : null);
     }
@@ -12056,7 +12064,7 @@ async function userPianoLoadNeeded(alive, quiet, U = userPiano){
       if (!b) { try { b = await audioCtx.decodeAudioData(await U.files.get(r.path).arrayBuffer()); } catch (e) { continue; } }
       const n = Math.min(b.length, Math.round(2 * b.sampleRate)); let e2 = 0;
       for (let c = 0; c < b.numberOfChannels; c++) { const d = b.getChannelData(c); for (let i = 0; i < n; i++) e2 += d[i] * d[i]; }
-      sum += e2 / n / b.numberOfChannels * Math.pow(r.amp * sfzVelGain(r.veltrack, 100), 2);   // 同時響的區域照能量相加
+      sum += e2 / n / b.numberOfChannels * r.amp * r.amp;   // 同時響的區域照能量相加
     }
     U.c4Rms = Math.sqrt(sum) || 0; U.gain = sum > 0 ? USER_PIANO.refRms / Math.sqrt(sum) : 1; U.gainPending = false;
     console.log("自己的音源:音量倍率 " + U.gain.toFixed(3));

@@ -72,7 +72,7 @@ if (opt("sfzdir", null)) {
   walk(root);
   await page.evaluate(([list, top]) => {
     const fl = list.map(([rel, size]) => ({ name: rel.split("/").pop(), webkitRelativePath: top + "/" + rel, size,
-      text: () => fetch("/__sfz/" + rel).then(r => r.text()), arrayBuffer: () => fetch("/__sfz/" + rel).then(r => r.arrayBuffer()) }));
+      text: () => fetch("/__sfz/" + rel.split("/").map(encodeURIComponent).join("/")).then(r => r.text()), arrayBuffer: () => fetch("/__sfz/" + rel.split("/").map(encodeURIComponent).join("/")).then(r => r.arrayBuffer()) }));
     window.userPianoUse(fl);
   }, [list, path.basename(root)]);
   await page.waitForFunction(() => typeof userPiano !== "undefined" && userPiano && userPiano.regions, null, { timeout: 120000 });
