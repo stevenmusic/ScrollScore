@@ -1055,6 +1055,7 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
       <button class="btn" type="button" id="userPianoPick" data-i18n="userPianoPick">選擇 SFZ 資料夾</button>
       <select id="userPianoSfz" hidden data-i18n-attr="aria-label:userPianoSfzAria"></select>
       <button class="btn" type="button" id="userPianoOff" hidden data-i18n="userPianoOff">改回內建</button>
+      <select id="userPianoMem" data-i18n-attr="aria-label:userPianoMemAria"></select>
       <span id="userPianoInfo" class="switch-sub"></span>
       <input type="file" id="userPianoDir" webkitdirectory directory multiple hidden>
     </div>
@@ -1588,7 +1589,7 @@ const I18N = {
     statusDrumKitReady: "鼓音色就緒",
     statusLoadingPiano: "載入鋼琴音色中…{pct}%",
     statusPianoReady: "鋼琴已就緒",
-    userPianoLabel: "自己的音源", userPianoPick: "選擇 SFZ 資料夾", userPianoOff: "改回內建", userPianoSfzAria: "選擇 SFZ 檔",
+    userPianoLabel: "自己的音源", userPianoPick: "選擇 SFZ 資料夾", userPianoOff: "改回內建", userPianoSfzAria: "選擇 SFZ 檔", userPianoMemAria: "自己的音源可以用多少記憶體", userPianoMemAuto: "記憶體:自動({gb} GB)", userPianoMemGB: "記憶體 {gb} GB", userPianoTrimmed: "。記憶體上限放不下完整錄音,部分長音的尾巴被截短,可以調高記憶體上限(太高可能讓分頁當掉)",
     userPianoReady: "自己的音源已就緒({name})", userPianoNoSfz: "資料夾裡找不到 .sfz 檔", userPianoNoRegions: "這個 .sfz 裡沒有可用的取樣",
     userPianoLoading: "讀取音源中…", userPianoInfo: "{name}:{n} 個取樣區域{ped}(檔案只在這台電腦,不會上傳;重新整理後要再選一次)", userPianoPed: ",有踩踏板取樣", userPianoFail: "讀取失敗:{msg}", userPianoReselect: "上次用的是「{name}」。重新整理後要再選一次資料夾,現在是內建鋼琴。", expToneUser: "鋼琴音色:自己的音源({name})", expToneBuiltin: "鋼琴音色:內建",
     statusExportRangeInvalid: "匯出區間不正確,請確認開始/結束時間(結束需晚於開始至少0.5秒)",
@@ -1857,7 +1858,7 @@ const I18N = {
     statusDrumKitReady: "Drum sounds ready",
     statusLoadingPiano: "Loading piano sounds… {pct}%",
     statusPianoReady: "Piano ready",
-    userPianoLabel: "Own library", userPianoPick: "Choose SFZ folder", userPianoOff: "Use built-in", userPianoSfzAria: "Choose SFZ file",
+    userPianoLabel: "Own library", userPianoPick: "Choose SFZ folder", userPianoOff: "Use built-in", userPianoSfzAria: "Choose SFZ file", userPianoMemAria: "How much memory your library may use", userPianoMemAuto: "Memory: auto ({gb} GB)", userPianoMemGB: "Memory {gb} GB", userPianoTrimmed: ". The full recordings don't fit in the memory limit, so some long tails are shortened; raise the limit (too high may crash the tab)",
     userPianoReady: "Own piano ready ({name})", userPianoNoSfz: "No .sfz file in this folder", userPianoNoRegions: "No usable samples in this .sfz",
     userPianoLoading: "Reading library…", userPianoInfo: "{name}: {n} regions{ped} (files stay on this computer; choose again after reloading)", userPianoPed: ", with pedal-down samples", userPianoFail: "Could not read: {msg}", userPianoReselect: "Last time you used “{name}”. Choose the folder again after reloading; the built-in piano is playing now.", expToneUser: "Piano sound: own library ({name})", expToneBuiltin: "Piano sound: built-in",
     statusExportRangeInvalid: "Invalid export range — check start/end times (end must be at least 0.5s after start)",
@@ -8112,6 +8113,7 @@ $("themeToggle").addEventListener("click", () => {
    狀態列裡「已載入 xxx.xml」這類事件當下的訊息)不重新渲染——那是時間點的
    紀錄,語言切換之後被下一個動作蓋掉是預期行為,不是漏翻。 */
 function refreshDynamicI18nText(){
+  if (window.__fillUserPianoMem) window.__fillUserPianoMem();
   if (typeof updateTransposeLabel === "function") updateTransposeLabel();
   if (typeof updateTransposeAvailability === "function") updateTransposeAvailability();
   if (typeof updateActionButtonTitles === "function") updateActionButtonTitles();
@@ -9240,7 +9242,7 @@ function userPianoUiUpdate(){
   if (on) {
     sel.innerHTML = ""; for (const k of userPiano.sfzList) { const o = document.createElement("option"); o.value = k; o.textContent = k.split("/").pop(); sel.appendChild(o); }
     sel.value = userPiano.sfzName;
-    $("userPianoInfo").textContent = T("userPianoInfo", { name: userPiano.sfzName.split("/").pop(), n: userPiano.regions.length, ped: userPiano.hasPedalSamples ? T("userPianoPed") : "" });
+    $("userPianoInfo").textContent = T("userPianoInfo", { name: userPiano.sfzName.split("/").pop(), n: userPiano.regions.length, ped: userPiano.hasPedalSamples ? T("userPianoPed") : "" }) + (userPiano.trimmed ? T("userPianoTrimmed") : "");
   } else $("userPianoInfo").textContent = "";
 }
 /* 換音源/換 .sfz:新的先在背景讀好這首要用的取樣(舊的照樣能播),讀完才換過去;連續切換只算最後一次 */
@@ -9273,6 +9275,16 @@ function initUserPianoUi(){
   $("userPianoSfz").addEventListener("change", e => { if (lastFiles) userPianoUse(lastFiles, e.target.value); });
   $("userPianoOff").addEventListener("click", () => { userPianoSwitchId++; userPiano = null; userPianoPending = null; try { localStorage.removeItem("ss_userPianoLast"); } catch (e) {} $("userPianoSfz").disabled = false; userPianoUiUpdate(); userPianoReload(); });
   window.userPianoUse = userPianoUse;   // 測試用
+  // 記憶體上限選單(自動 / 1~4 GB);改了就照新上限重讀這首要用的取樣(以前截短的會重新完整解碼)
+  const mem = $("userPianoMem"), fillMem = () => {
+    let cur = ""; try { cur = localStorage.getItem("ss_userPianoMem") || ""; } catch (e) {}
+    mem.innerHTML = "";
+    const auto = USER_PIANO.budget * ((navigator.deviceMemory || 0) >= 8 && !isIOSDevice() ? 2 : 1) / 1e9;
+    for (const v of ["", "1", "2", "3", "4"]) { const o = document.createElement("option"); o.value = v; o.textContent = v ? T("userPianoMemGB", { gb: v }) : T("userPianoMemAuto", { gb: auto }); mem.appendChild(o); }
+    mem.value = cur;
+  };
+  fillMem(); window.__fillUserPianoMem = fillMem;
+  mem.addEventListener("change", () => { try { if (mem.value) localStorage.setItem("ss_userPianoMem", mem.value); else localStorage.removeItem("ss_userPianoMem"); } catch (e) {} if (userPiano) userPianoReload(); });
 }
 
 /* 鼓組的音符高低位置代表打擊的鼓件(小鼓/大鼓/銅鈸...),不是真正的音高,移調沒有意義,
@@ -11786,7 +11798,14 @@ function playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel
    key/lokey/hikey/pitch_keycenter(數字或音名)、lovel/hivel、locc64/hicc64、on_locc64/on_hicc64、trigger、seq_length/seq_position、
    lorand/hirand、volume、amp_veltrack、tune、transpose、offset、pan、ampeg_attack、ampeg_release、rt_decay、cutoff/fil_veltrack/resonance(低通)。
    音量:跟內建鋼琴同一套 sfz 力度曲線(amp_veltrack),整體音量用 C4 力度 100 的響度對齊內建鋼琴(USER_PIANO.refRms) */
-const USER_PIANO = { refRms: 0.081, budget: 1.0e9, conc: 6, raw: true, xfade: 6, xfadeExp: 0.75 };   // xfade:換層漸層的半寬(力度;使用者 2026-11:「音色不要突然切換,應該是漸層」);xfadeExp:兩層權重 (1−x)^e、x^e(同一個音不同力度的錄音一半相關,介於線性 1 與等功率 0.5 之間,實測 0.75 最平)   // raw(使用者 2026-11:「外部 sfz 讓我聽預設的音色,不要改掉」):照 .sfz 原廠設定播,見 userPianoVoice
+/* 記憶體上限(使用者 2026-11:「有沒有其他方法可以保留品質(放寬 1GB)」):設定裡可選 自動/1/2/3/4 GB(ss_userPianoMem);
+   自動 = 桌機(navigator.deviceMemory ≥ 8,Chrome 最高回報 8)2GB、其他 USER_PIANO.budget 1GB。太大可能讓分頁當掉,所以可以自己選 */
+function userPianoBudget(){
+  try { const v = +localStorage.getItem("ss_userPianoMem"); if (v > 0) return v * 1e9; } catch (e) {}
+  return USER_PIANO.budget * ((navigator.deviceMemory || 0) >= 8 && !isIOSDevice() ? 2 : 1);
+}
+const USER_PIANO = { refRms: 0.081, budget: 1.0e9, conc: 6, raw: true, xfade: 6, xfadeExp: 0.75,
+  vary: Object.assign({ cents: 1.2, db: 0.3, off: 0.001, xfadeJitter: 0.08 }, window.USER_PIANO_VARY_OVERRIDE || {}) };   // xfade:換層漸層的半寬(力度;使用者 2026-11:「音色不要突然切換,應該是漸層」);xfadeExp:兩層權重 (1−x)^e、x^e(同一個音不同力度的錄音一半相關,介於線性 1 與等功率 0.5 之間,實測 0.75 最平)   // raw(使用者 2026-11:「外部 sfz 讓我聽預設的音色,不要改掉」):照 .sfz 原廠設定播,見 userPianoVoice
 let userPiano = null;   // { name, sfzName, regions, buf: Map, needSec: Map, hasPedalSamples, gain, seq: {} }
 function userPianoActive(){ return !!(userPiano && userPiano.regions && userPiano.regions.length && userPiano.ready); }
 function proMode(){
@@ -11974,15 +11993,15 @@ function getUserPianoBus(){
   userPiano.bus = g; userPiano.busCtx = audioCtx;
   return g;
 }
-function userPianoPlayRegions(regs, when, vel, gainMul, tm, dest){
+function userPianoPlayRegions(regs, when, vel, gainMul, tm, dest, vr){
   const srcs = []; let bufEnd = when;
   for (const r of regs) {
     const b = userPiano.buf.get(r.path); if (!b) continue;
-    const rate = Math.pow(2, ((tm - r.center) * r.pitchTrack + r.transpose + r.tune / 100) / 12);
+    const rate = Math.pow(2, ((tm - r.center) * r.pitchTrack + r.transpose + (r.tune + (vr ? vr.cents : 0)) / 100) / 12);
     const src = audioCtx.createBufferSource(); src.buffer = b; src.playbackRate.value = rate;
     // 層內不再套音源的力度曲線(amp_veltrack/amp_velcurve):大小聲由 userGainFor 照內建曲線決定,這裡只用區域本身的 volume。
     // 以前層內照 (力度/127)² 起伏、跨層又被校正拉回 → 換層時音量鋸齒(p→mp 力度 39→40 反而小 3dB,使用者:「整首都不自然」)
-    const g = audioCtx.createGain(), amp = gainMul * r.amp * (USER_PIANO.raw ? sfzVelAmp(r, vel) : 1);
+    const g = audioCtx.createGain(), amp = gainMul * r.amp * (USER_PIANO.raw ? sfzVelAmp(r, vel) : 1) * (vr ? Math.pow(10, vr.db / 20) : 1);
     if (r.attack > 0.002) { g.gain.setValueAtTime(0, when); g.gain.linearRampToValueAtTime(amp, when + r.attack); } else g.gain.setValueAtTime(amp, when);
     let node = src;
     if (r.cutoff > 0) {
@@ -11992,7 +12011,7 @@ function userPianoPlayRegions(regs, when, vel, gainMul, tm, dest){
     }
     if (r.pan) { const p = audioCtx.createStereoPanner(); p.pan.value = Math.max(-1, Math.min(1, r.pan)); node.connect(p); node = p; }
     node.connect(g); g.connect(dest);
-    const off = Math.min(b.duration, r.offset / b.sampleRate);
+    const off = Math.min(b.duration, r.offset / b.sampleRate + (vr ? vr.off : 0));
     src.start(when, off); scheduled.push(src); srcs.push(src);
     bufEnd = Math.max(bufEnd, when + (b.duration - off) / rate);
   }
@@ -12010,12 +12029,21 @@ function userPianoVoice(m, tm, when, vel, keyUp, damperAt, halfPedal, pedalDown,
   pianoVoices = pianoVoices.filter(v => v.end > when);
   while (pianoVoices.length >= PIANO_MAX_VOICES) pianoKill(pianoVoices.shift(), when);
   const out = audioCtx.createGain(); out.gain.setValueAtTime(1, when); out.connect(getUserPianoBus());
-  // 按住時的衰減(ampeg_hold/decay/sustain,例如 The Experience 系列 decay 60 秒到 5%):hold 之後指數往 sustain 收(約 decay/5 時間常數)
-  { const r0 = regs[0]; if (r0 && r0.decay > 0 && r0.sustain < 1) out.gain.setTargetAtTime(Math.max(1e-4, r0.sustain), when + r0.attack + r0.hold, r0.decay / 5); }
+  // 按住時的衰減(ampeg_hold/decay/sustain,例如 The Experience 系列 decay 60 秒到 5%):hold 之後照 dB 線性在 decay 秒內收到 sustain
+  // (2026-11:以前 setTargetAtTime τ = decay/5,開頭收得比原廠快,按住 3 秒多掉約 1dB)。放在自己的 GainNode,跟制音器(out)分開排程
+  let env = out;
+  { const r0 = regs[0]; if (r0 && r0.decay > 0 && r0.sustain < 1) { env = audioCtx.createGain(); env.connect(out); const t0 = when + r0.attack + r0.hold;
+      env.gain.setValueAtTime(1, when); env.gain.setValueAtTime(1, t0); env.gain.exponentialRampToValueAtTime(Math.max(1e-4, r0.sustain), t0 + r0.decay); } }
   const raw = USER_PIANO.raw;
   // 原廠模式:整體只乘一個固定倍數(C4 力度 100 對齊內建鋼琴的音量,不改音色);沒踩踏板的音照譜上長度放開,不做和聲延長/半踏板
   if (raw && !pedalDown) { damperAt = keyUp; halfPedal = false; }
   const gain = raw ? U.gain : userGainFor(vel, vq);
+  // 每一下都不一樣(USER_PIANO.vary,使用者 2026-11:「觸鍵太像機器人了…或許你可以去研究 rotation」):
+  // The Experience 系列的 .sfz 沒有輪替錄音(沒有 seq_length / lorand),同一個鍵同樣力度每下都是同一段錄音。
+  // .sfz 本身沒有輪替時才加(有就照原廠):音高 ±cents、音量 ±db(常態分布的標準差)、起音位置 0~off 秒,換層漸層的比例 ±xfadeJitter;
+  // 亂數照(音高, 時間)固定,同樣的播放每次一樣
+  const V = USER_PIANO.vary, hasRR = regs.some(r => r.seqLen > 1 || r.lorand > 0 || r.hirand < 1);
+  const vr = V && !hasRR ? { cents: Math.max(-3, Math.min(3, V.cents * rv.n())), db: V.db * rv.n(), off: V.off * rv() } : null;
   // 換層漸層(USER_PIANO.xfade):力度在相鄰兩層交界 ±xfade 內時兩層一起播、照位置等功率混合,換層不再一下子換音色
   let xr = null, wMain = 1, wOther = 0;
   if (USER_PIANO.xfade > 0 && regs.length && regs.sel) {
@@ -12024,13 +12052,14 @@ function userPianoVoice(m, tm, when, vel, keyUp, damperAt, halfPedal, pedalDown,
     // 照離交界多近線性變(試過 smoothstep 讓另一層慢慢進來,相鄰力度跳動反而較大)
     if (vq - lo < H && lo > 1) { other = lo - 1; x = 0.5 * (1 - (vq - lo + 0.5) / H); }
     else if (hi - vq < H && hi < 127) { other = hi + 1; x = 0.5 * (1 - (hi - vq + 0.5) / H); }
+    if (vr && other != null) x = Math.max(0, Math.min(0.5, x + V.xfadeJitter * rv.n()));
     if (other != null && x > 0.01) {
       const o = userPianoMatch(m, other, pedalDown, "attack", regs.sel).filter(r => U.buf.has(r.path) && !regs.includes(r));
       if (o.length) { xr = o; const e = USER_PIANO.xfadeExp; wMain = Math.pow(1 - x, e); wOther = Math.pow(x, e); }
     }
   }
-  const { srcs, bufEnd } = userPianoPlayRegions(regs, when, vq, gain * wMain, tm, out);
-  if (xr) { const r2 = userPianoPlayRegions(xr, when, vq, gain * wOther, tm, out); srcs.push(...r2.srcs); }
+  const { srcs, bufEnd } = userPianoPlayRegions(regs, when, vq, gain * wMain, tm, env, vr);
+  if (xr) { const r2 = userPianoPlayRegions(xr, when, vq, gain * wOther, tm, env, vr); srcs.push(...r2.srcs); }
   // 制音器:用音源自己的 ampeg_release(SFZ 的放開時間 ≈ 5 個時間常數);半踏板(程式依和聲自動延長)照內建規則
   // 換踏板/放鍵收音(使用者 2026-11 選 B):取「音源設定的放開時間」與內建制音器模型(pianoDamperTau,低音 0.16 → 高音 0.045 秒)較快的那個,
   // 舊和弦不會拖進新和弦(很多音源 ampeg_release 設 1 秒以上,踩踏板的段落換踏板時聽起來糊);沒有制音器的高音(F#6 以上)照音源
@@ -12077,8 +12106,11 @@ function userPianoPedalPlay(down, when){
 }
 /* 這首曲子要載入的區域(照每個音的音高、力度 ±4、踏板狀態;每個音要響多久 → 記憶體不夠時截短) */
 function userPianoNeeds(U = userPiano){
-  const calib = useCalib(), need = new Map();
-  const add = (r, sec) => need.set(r.path, Math.max(need.get(r.path) || 0, sec));
+  const calib = useCalib(), need = new Map(), core = new Set();
+  // core:這首真的會彈到的(原本的力度、裝飾音力度、放鍵聲、踏板聲);其他是 ±4 / 換層漸層的相鄰層,記憶體不夠時先放棄它們(見 userPianoLoadNeeded)
+  let isCore = true;
+  const add = (r, sec) => { need.set(r.path, Math.max(need.get(r.path) || 0, sec)); if (isCore) core.add(r.path); };
+  need.core = core;
   for (const ev of events) {
     const t = posToSec(ev.tWhole, calib), hEnd = ev.harmonyEndWhole != null ? posToSec(ev.harmonyEndWhole, calib) : null;
     for (const n of ev.notes) {
@@ -12088,10 +12120,13 @@ function userPianoNeeds(U = userPiano){
       const pedal = !!(ev.pedalOn || n.autoPedal), v0 = n.pvel || 70;
       for (const dm of dms) {
         const m = Math.round(freqToMidi(n.freq) + dm);
-        for (const v of [v0 - 4 - USER_PIANO.xfade, v0 - 4, v0, v0 + 4, v0 + 4 + USER_PIANO.xfade, v0 * ORNAMENT.vel].map(x => userVelFor(x, U))) {   // ±xfade:換層漸層用到的相鄰層也要載
+        for (const [x, c] of [[v0, 1], [v0 * ORNAMENT.vel, 1], [v0 - 4 - USER_PIANO.xfade, 0], [v0 - 4, 0], [v0 + 4, 0], [v0 + 4 + USER_PIANO.xfade, 0]]) {   // ±xfade:換層漸層用到的相鄰層也要載
+          const v = userVelFor(x, U); isCore = !!c;
           for (const r of userPianoMatch(m, v, pedal, "attack", null, U)) add(r, dm ? 1.5 : sound);
           for (const r of userPianoMatch(m, v, false, "release", null, U)) add(r, 0);
+          for (const r of userPianoMatch(m, v, true, "release", null, U)) add(r, 0);
         }
+        isCore = true;
       }
     }
   }
@@ -12100,10 +12135,10 @@ function userPianoNeeds(U = userPiano){
 }
 /* alive():這次讀取還算數(換曲、換音源就停);U:要讀進哪一份音源(換 .sfz 時先在背景讀好新的,舊的照樣能播) */
 async function userPianoLoadNeeded(alive, quiet, U = userPiano){
-  const need = userPianoNeeds(U);
+  let need = userPianoNeeds(U);
   // 解碼好的取樣同一個資料夾共用(U.buf):換 .sfz 再換回來不用重讀;超過預算才丟掉這首用不到的
   { let tot = 0; for (const b of U.buf.values()) tot += b.length * b.numberOfChannels * 4;
-    if (tot > USER_PIANO.budget) for (const k of [...U.buf.keys()]) if (!need.has(k)) { const b = U.buf.get(k); tot -= b.length * b.numberOfChannels * 4; U.buf.delete(k); if (tot <= USER_PIANO.budget * 0.8) break; } }
+    if (tot > userPianoBudget()) for (const k of [...U.buf.keys()]) if (!need.has(k)) { const b = U.buf.get(k); tot -= b.length * b.numberOfChannels * 4; U.buf.delete(k); if (tot <= userPianoBudget() * 0.8) break; } }
   // 解碼後的大小(float32、播放取樣率):WAV 讀檔頭(位元數、聲道、取樣率),其他格式粗估壓縮率 3 倍
   if (!U.info) U.info = new Map();
   const sr = audioCtx.sampleRate;
@@ -12121,13 +12156,25 @@ async function userPianoLoadNeeded(alive, quiet, U = userPiano){
     if (!inf.full) inf = { bytesPerSec: sr * 2 * 4, full: f.size * 3 / (sr * 2 * 4) };
     U.info.set(p, inf);
   }), 16);
+  // 超過預算時先放棄「相鄰力度層」(只少了換層漸層,沒載到的那一下照單層播),盡量保留每個錄音完整的尾巴
+  // (使用者 2026-11 用 S6:「共鳴不夠厚實,感覺浮在上面」——以前直接把所有錄音截短/等比例縮,踩踏板錄音的共鳴尾巴被剪掉)
+  { const size = keys => keys.reduce((a, p) => { const inf = U.info.get(p); return a + (U.files.has(p) && inf ? inf.full * inf.bytesPerSec : 0); }, 0);
+    const all = size([...need.keys()]);
+    if (all > userPianoBudget() && need.core) {
+      const keep = new Map([...need].filter(([p]) => need.core.has(p) || U.buf.has(p)));
+      console.warn("自己的音源:記憶體不夠(" + Math.round(all / 1e6) + "MB > " + Math.round(userPianoBudget() / 1e6) + "MB),先不載換層漸層用的相鄰力度層:" + need.size + " → " + keep.size + " 個檔案");
+      keep.core = need.core; need = keep;
+    } }
   const jobs = []; let total = 0, totalTrim = 0;
   const trimSec = sec => Math.max(3, sec * 1.6 + 2);
   for (const [p, sec] of need) { const f = U.files.get(p); if (!f) continue; const inf = U.info.get(p); total += inf.full * inf.bytesPerSec; totalTrim += Math.min(inf.full, trimSec(sec)) * inf.bytesPerSec; if (!U.buf.has(p)) jobs.push([p, f, sec]); }
-  const trim = total > USER_PIANO.budget;
+  const BUDGET = userPianoBudget(), trim = total > BUDGET;
   // 截短了還放不下:照「用到的長度」再等比例縮,最短 2 秒(寧可長音提早淡出,也不要把瀏覽器記憶體用爆)
-  const shrink = trim && totalTrim > USER_PIANO.budget ? USER_PIANO.budget / totalTrim : 1;
-  console.log("自己的音源:這首要用 " + need.size + " 個檔案、還要讀 " + jobs.length + " 個,完整 " + Math.round(total / 1e6) + "MB" + (trim ? "(超過預算 " + Math.round(USER_PIANO.budget / 1e6) + "MB,截短到約 " + Math.round(Math.min(totalTrim, USER_PIANO.budget) / 1e6) + "MB)" : ""));
+  const shrink = trim && totalTrim > BUDGET ? BUDGET / totalTrim : 1;
+  U.trimmed = trim;
+  // 以前因為記憶體上限被截短的錄音,現在放得下了(調高上限、換了比較短的曲子)就重新完整解碼
+  if (!trim) for (const [p, sec] of need) { const b = U.buf.get(p), f = U.files.get(p); if (b && b.__trimmed && f && !jobs.some(j => j[0] === p)) jobs.push([p, f, sec]); }
+  (trim ? console.warn : console.log)("自己的音源:這首要用 " + need.size + " 個檔案、還要讀 " + jobs.length + " 個,完整 " + Math.round(total / 1e6) + "MB" + (trim ? "(超過預算 " + Math.round(BUDGET / 1e6) + "MB,錄音尾巴截短到約 " + Math.round(Math.min(totalTrim, BUDGET) / 1e6) + "MB" + (shrink < 1 ? ",再縮成 " + Math.round(shrink * 100) + "%" : "") + ")" : ""));
   let done = 0;
   const missing = [...need.keys()].filter(p => !U.files.has(p));
   if (missing.length) console.warn("自己的音源:找不到 " + missing.length + " 個檔案,例如", missing.slice(0, 3));
@@ -12137,14 +12184,15 @@ async function userPianoLoadNeeded(alive, quiet, U = userPiano){
       let b = await audioCtx.decodeAudioData(await f.arrayBuffer());
       if (trim) {
         const n = Math.min(b.length, Math.round(Math.max(2, trimSec(sec) * shrink) * b.sampleRate));
-        if (n < b.length) { const o = audioCtx.createBuffer(b.numberOfChannels, n, b.sampleRate), fade = Math.min(n >> 2, Math.round(0.8 * b.sampleRate)); for (let c = 0; c < o.numberOfChannels; c++) { const d = o.getChannelData(c); d.set(b.getChannelData(c).subarray(0, n)); for (let i = 0; i < fade; i++) d[n - fade + i] *= Math.pow(Math.cos(i / fade * Math.PI / 2), 2); } b = o; }
+        if (n < b.length) { const o = audioCtx.createBuffer(b.numberOfChannels, n, b.sampleRate); o.__trimmed = true; const fade = Math.min(n >> 2, Math.round(0.8 * b.sampleRate)); for (let c = 0; c < o.numberOfChannels; c++) { const d = o.getChannelData(c); d.set(b.getChannelData(c).subarray(0, n)); for (let i = 0; i < fade; i++) d[n - fade + i] *= Math.pow(Math.cos(i / fade * Math.PI / 2), 2); } b = o; }
       }
       if (alive()) U.buf.set(p, b);
     } catch (e) { console.warn("自己的音源:解碼失敗", p, e); }
     done++; if (!quiet && alive() && done % 4 === 0) setStatus(T("statusLoadingPiano", { pct: Math.round(done / jobs.length * 100) }));
     await new Promise(r => setTimeout(r, 0));   // 每解碼一個檔讓畫面更新一次(96kHz 的 FLAC 解碼很重,不然選單、播放都會卡)
-  }), USER_PIANO.conc);
+  }), total > 1e9 ? 2 : USER_PIANO.conc);   // 大音源:同時解碼的檔案少一點(壓縮檔 + 解碼中的暫存一起算,同時 6 個時記憶體尖峰很高)
   if (!alive()) return;
+  if (U === userPiano && typeof userPianoUiUpdate === "function") userPianoUiUpdate();
   // 音量對齊:C4 力度 100、不踩踏板,前 2 秒的 RMS 對齊內建鋼琴(只算一次;C4 不在這首就先載來量)
   if (!U.layerLoud) {
     // 每一層(C4、不踩踏板、各層中間的力度)實際響度,給 userGainFor 把大小聲換算成內建鋼琴的曲線
@@ -14635,9 +14683,12 @@ function stopAudioOnly(){
   pianoCloseResonance();
 }
 
-function stopPlayback(){
+/* ringOut:樂曲自然播完(使用者 2026-11:「結尾的音符有奇怪的聲音」)——以前播到最後一刻就把所有還在響的聲音 stop(),
+   最後一個和弦的放鍵/制音器餘音、放鍵聲、殘響尾巴被硬切。現在只停排程,已排好的聲音照自己的制音器時間響完;
+   下次按播放、跳轉或停止時 stopAudioOnly 照樣會停掉它們 */
+function stopPlayback(ringOut){
   if (countingIn) { countInCancelled = true; stopCountInClicks(); countingIn = false; setStatus(""); }
-  stopAudioOnly();
+  if (ringOut === true) { stopNoteScheduler(); pianoPedalQueue = []; } else stopAudioOnly();
   playing = false; pausedAtSec = 0;
   setPlayBtnState(false);
   cancelAnimationFrame(rafId);
@@ -14690,7 +14741,7 @@ function xAtWhole(w){
 
 function tick(){
   const sec = currentSec();
-  if (sec >= totalSec()) { stopPlayback(); return; }
+  if (sec >= totalSec()) { stopPlayback(true); return; }
   const x = xAtSec(sec);
   setScrollerX(x);
   $("progressfill").style.transform = "scaleX(" + (sec / totalSec()) + ")";
