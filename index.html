@@ -10438,7 +10438,8 @@ const SECTION_RISE = Object.assign({ liftBars: 4, maxLift: 1.15, maxCut: 0.12, e
 /* 往下一段變小聲的交界(使用者 2026-11:「每一段落的音量過渡可以平滑一點嗎」;〈甲乙丙丁〉副歌最後一拍 65~74 → 主歌第一拍 40,一拍掉 30):
    下一段開頭從兩段中間開始(share),landBars 小節內 smoothstep 落到這一段原本的大小;前一段最後一小節只輕收(cutShare、最多 maxCut,
    保留「副歌唱滿」);落差小於 minGap 不動;譜上寫了變小聲(_lvl 往下 markDrop)就照譜(subito p 等) */
-const SECTION_FALL = Object.assign({ landBars: 2, share: 0.5, maxLift: 1.4, cutShare: 0.2, maxCut: 0.12, minGap: 6, markDrop: 3 }, window.SECTION_FALL_OVERRIDE || {});
+// landBars 2 → 0.5(使用者:「29-32 小節不應該漸弱」——落地拉兩小節,新段落開頭兩小節聽起來是一路漸弱)
+const SECTION_FALL = Object.assign({ landBars: 0.5, share: 0.5, maxLift: 1.4, cutShare: 0.2, maxCut: 0.12, minGap: 6, markDrop: 3 }, window.SECTION_FALL_OVERRIDE || {});
 function popSectionJoin(){
   const X = SECTION_RISE;
   if (!X || classicalProbInfo().p >= 0.5 || !scoreSections.length) return;
@@ -10499,7 +10500,7 @@ function popSectionFall(G, i, A, mean, ss, clampV, inSeg){
   const c = Math.min(X.maxCut, X.cutShare * gap / P);
   if (c > 0) for (const x of A) if (x.t >= tB - bl - 1e-6 && x.t < tB - 1e-6 && inSeg(g0, x)) x.n.pvel = clampV(x.n.pvel * (1 - c * ss((x.t - (tB - bl)) / bl)));
   // ② 下一段開頭從中間開始:f(t) = 1 + a·(1 − ss((t − tB)/D)),第一拍 ≈ N + share×(收過之後的落差)
-  const P2 = P * (1 - c), D = Math.max(bl, Math.min(X.landBars * bl, (g1.end - tB) / 2));
+  const P2 = P * (1 - c), D = Math.max(bl * 0.25, Math.min(X.landBars * bl, (g1.end - tB) / 2));
   const a = N > 0 ? Math.min(X.maxLift - 1, X.share * Math.max(0, P2 - N) / N) : 0;
   if (a > 0) for (const x of A) if (x.t >= tB - 1e-6 && x.t < tB + D - 1e-6 && inSeg(g1, x)) x.n.pvel = clampV(x.n.pvel * (1 + a * (1 - ss((x.t - tB) / D))));
 }
@@ -10779,12 +10780,27 @@ function pianoHandDrift(multiStaff){
    ② 同一手和弦裡不是旋律的音再多 0~chordJit 9ms(每個音各自);旋律照舊最早
    ③ 不超過到這隻手下一個起音間隔的 cap 25%(快的段落自動變小),快速單音音型的那隻手不動(之前「十六分音符不平均」的修正保留)
    固定種子(事件序號 + 原調音高),重算結果一樣 */
+/* 右手比左手大聲(POP_HANDS,使用者 2026-11:「右手要比左手大聲,調整平衡」;只用在非古典、兩個譜表的鋼琴譜):
+   上譜表平均力度比下譜表大不到 gap 時,下譜表整體乘同一個倍數(最多降到 minMul),左手內部的起伏、旋律/伴奏關係都不變。
+   〈甲乙丙丁〉改前 右手 73.3 / 左手 67.6(差 5.7,能量只差 1dB) */
+const POP_HANDS = Object.assign({ on: true, gap: 10, minMul: 0.85 }, window.POP_HANDS_OVERRIDE || {});
+function popHandBalance(multiStaff){
+  const P = POP_HANDS; if (!P.on || !multiStaff) return;
+  const a = [], b = [];
+  for (const ev of events) for (const n of ev.notes) if (!n.drum && n.freq && n.pvel != null) ((n.staff || 1) === 1 ? a : b).push(n);
+  if (a.length < 8 || b.length < 8) return;
+  const m1 = a.reduce((s, n) => s + n.pvel, 0) / a.length, m2 = b.reduce((s, n) => s + n.pvel, 0) / b.length;
+  if (m1 - m2 >= P.gap) return;
+  const k = Math.max(P.minMul, Math.min(1, (m1 - P.gap) / m2));
+  for (const n of b) n.pvel = Math.max(8, Math.min(124, n.pvel * k));
+}
 /* 固定的律動感(POP_GROOVE,使用者 2026-11 選「第 2 點」:真人有固定的習慣,不是亂數;只用在非古典):
    以前時間變化只有平滑的速度起伏與每手的慢慢漂移,每個拍點都準。現在照拍子裡的位置固定往後放一點(laid-back):
    正拍不動;八分音符的反拍(拍子一半)晚 late8、十六分音符的第 2、4 個(拍子 1/4、3/4)晚 late16;
    6/8 這類附點四分音符一拍的,拍內第 2、3 個八分音符晚 late8 × compound。
    兩手同一個起音一起移(是整個人的律動,不是兩手錯開);不超過到下一個起音的 cap 20%;有搖擺記號的段落不動(搖擺已經照譜) */
-const POP_GROOVE = Object.assign({ on: true, late8: 0.008, late16: 0.004, compound: 0.7, cap: 0.2 }, window.POP_GROOVE_OVERRIDE || {});
+const POP_GROOVE = Object.assign({ on: true, late8: 0.008, late16: 0.002,   // late16 4 → 2ms(使用者:「十六分音符有一點不平均,改少一點」)
+ compound: 0.7, cap: 0.2 }, window.POP_GROOVE_OVERRIDE || {});
 function popGroove(){
   const G = POP_GROOVE; if (!G.on || !(G.late8 || G.late16)) return;
   const on = events.filter(ev => ev.notes.some(n => !n.drum && n.freq));
@@ -11267,6 +11283,7 @@ function computePianoDynamics(){
   popBeatProfile();         // 拍位置放在低音區平衡之後(平衡會動低音區的力度、連帶改變各拍位置的平均)
   popRunBeatHeads(multiStaff);   // 非古典:快速單音音型的拍點比同一拍裡其他音重(POP_RUN_HEAD;放在拍位置校正之後,不會被它抹平)
   if (pop) popTouchVariety();   // 非古典:每一下觸鍵的自然差異(POP_TOUCH;放在各項校正之後才不會被平均掉,旋律在伴奏之上的安全網在後面)
+  if (pop) popHandBalance(multiStaff);   // 非古典:右手(上譜表)比左手大聲(POP_HANDS)
   popMelodyOnTop();         // 安全網:旋律不要比同時彈的伴奏小聲
   popSectionJoin();         // 非古典:往下一段漸強時,下一段開頭不低於前一段結尾(SECTION_RISE;放在各項校正之後,結果才不會被後面的步驟改掉)
   popRepeatFloor();         // 非古典:後面的副歌不比前面的小聲(SECTION_REPEAT;放在 popSectionJoin 之後,跟它補過的副歌開頭比)
@@ -11722,7 +11739,8 @@ function pianoKill(v, at){
 const STACCATO = { staccato: [0.45, 0.12, 0.08], spiccato: [0.3, 0.11, 0.05], issimo: [0.25, 0.09, 0.04] };
 /* 踏板底下的斷音(STACC_PEDAL,只用在非古典):以前斷音踩著踏板就被踏板留到踏板放開(〈甲乙丙丁〉左手八度十六分音符斷音響約 1 秒,像 portato);
    流行彈法在斷音處會換/提一下踏板,讓斷音照斷音收(只影響這個音,其他音照踏板)。古典照舊(例如蕭邦低音斷音配踏板是要它響) */
-const STACC_PEDAL = Object.assign({ on: true }, window.STACC_PEDAL_OVERRIDE || {});
+// 2026-11 使用者:「26 小節的左手低音太短了」「41 小節左手也要長一些」——踏板底下的低音斷奏要照踏板響,這條關掉
+const STACC_PEDAL = Object.assign({ on: false }, window.STACC_PEDAL_OVERRIDE || {});
 function playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel, autoPedal, gn){
   if (!pianoMan) return false;
   const tm = freqToMidi(freq), m = Math.round(tm);
@@ -11788,7 +11806,7 @@ function playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel
   const breath = sigh || (!short && ((gn && gn.breath && !held) || (artic && artic.breath)));
   if (breath) { const B = sigh ? PHRASE_NUANCE.sigh : PHRASE_NUANCE.breath; keyUp = Math.max(keyUp * B.minKeep, keyUp - Math.min(B.max, B.frac * keyUp)); }
   // 旋律圓滑重疊(PHRASE_NUANCE.legato):下一個旋律音接著彈時,這個音晚一點點才放(真人約 15~45ms,音越長重疊越多)
-  let ov = legato && !pedal && !breath ? 0.03 : 0;
+  let ov = legato && !pedal && !breath && !short ? 0.03 : 0;   // 斷音不加圓滑重疊(圓滑線 + 斷音點,以前第一個斷音多 30ms,一串斷音長短不一)
   if (gn && gn.legatoNext && !pedal && !breath && !short) { const L = PHRASE_NUANCE.legato; ov = Math.max(ov, Math.max(L.min, Math.min(L.max, L.frac * dur))); }
   keyUp = when + Math.max(0.04, keyUp) + ov;
   // 斷音類(斷音/極斷音/跳弓/次斷音)沒踩踏板時不套和聲自動延長(半踏板):以前放鍵後還拖著尾巴響到原本的時值,斷音聽不出來
