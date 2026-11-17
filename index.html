@@ -9418,7 +9418,16 @@ function pianoLayerFor(vel){
 }
 /* 原廠(Accurate-Salamander V6.2)的力度曲線:各層錄音已校正成一樣大聲,大小聲完全由
    amp_veltrack 98.5 決定:音量 = 0.015 + 0.985 × (力度/127)²。輕重的「音色」則由 16 層錄音提供 */
-function pianoVelGain(vel){ const v = Math.max(1, Math.min(127, vel)) / 127; return 0.015 + 0.985 * v * v; }
+/* 小聲的音音量提高(PIANO_VEL_CURVE,使用者 2026-11:「小聲的地方太小聲了,力度層不需要換,但大聲一點」;鋼琴凍結的例外):
+   取樣層照原本的力度選(音色不變),只把力度 ref 以下的音量曲線放平:音量 = 基準 × (原本/基準)^k;ref 以上照原廠 amp_veltrack 98.5 */
+const PIANO_VEL_CURVE = Object.assign({ k: 1, ref: 96 }, window.PIANO_VEL_CURVE_OVERRIDE || {});
+function pianoVelGainRaw(vel){ const v = Math.max(1, Math.min(127, vel)) / 127; return 0.015 + 0.985 * v * v; }
+function pianoVelGain(vel){
+  const g = pianoVelGainRaw(vel), C = PIANO_VEL_CURVE;
+  if (!(C.k < 1) || vel >= C.ref) return g;
+  const gr = pianoVelGainRaw(C.ref);
+  return gr * Math.pow(g / gr, C.k);
+}
 /* 制音器落下後的衰減時間常數:低音弦粗重、制音器壓不太住,尾巴約 1 秒;高音 0.3 秒內就停 */
 function pianoDamperTau(m){ return m <= 48 ? 0.16 - (m - 21) / 27 * 0.06 : m <= 72 ? 0.10 - (m - 48) / 24 * 0.04 : Math.max(0.045, 0.06 - (m - 72) / 16 * 0.015); }
 /* 半踏板(制音器輕碰琴弦)時的衰減時間常數:低音弦重、比較壓不住 */
