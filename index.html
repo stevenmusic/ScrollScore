@@ -11804,7 +11804,7 @@ function userPianoBudget(){
   try { const v = +localStorage.getItem("ss_userPianoMem"); if (v > 0) return v * 1e9; } catch (e) {}
   return USER_PIANO.budget * ((navigator.deviceMemory || 0) >= 8 && !isIOSDevice() ? 2 : 1);
 }
-const USER_PIANO = { refRms: 0.081, budget: 1.0e9, conc: 6, raw: true, maxSrc: 192, xfade: 6, xfadeExp: 0.75,
+const USER_PIANO = { refRms: 0.081, budget: 1.0e9, conc: 6, raw: true, maxSrc: 192, xfade: 6, xfadeExp: 1, xfadeMinCorr: 0.85,
   vary: Object.assign({ cents: 1.2, db: 0.3, off: 0.001, xfadeJitter: 0.08 }, window.USER_PIANO_VARY_OVERRIDE || {}) };   // xfade:換層漸層的半寬(力度;使用者 2026-11:「音色不要突然切換,應該是漸層」);xfadeExp:兩層權重 (1−x)^e、x^e(同一個音不同力度的錄音一半相關,介於線性 1 與等功率 0.5 之間,實測 0.75 最平)   // raw(使用者 2026-11:「外部 sfz 讓我聽預設的音色,不要改掉」):照 .sfz 原廠設定播,見 userPianoVoice
 let userPiano = null;   // { name, sfzName, regions, buf: Map, needSec: Map, hasPedalSamples, gain, seq: {} }
 function userPianoActive(){ return !!(userPiano && userPiano.regions && userPiano.regions.length && userPiano.ready); }
@@ -12005,7 +12005,29 @@ function getUserPianoBus(){
   userPiano.bus = g; userPiano.busCtx = audioCtx;
   return g;
 }
-function userPianoPlayRegions(regs, when, vel, gainMul, tm, dest, vr){
+/* 換層漸層的起音對齊(2026-11,使用者用 S6:「感覺有什麼頻率被砍掉」):相鄰兩層是不同次的錄音,起音常差 1~5ms,
+   直接疊起來會互相抵消某些頻率(梳狀濾波;內建鋼琴量過:沒對齊時相關 −0.56、音量跳 4dB,所以內建有 xlag)。
+   第一次用到這一對錄音時,在起音附近 43ms 找最像的位移(±8ms),記住;對齊後還是不像(相關 < xfadeMinCorr)就不疊、只播主要那層 */
+function userPianoXLag(pa, pb, U = userPiano){
+  const k = pa + "|" + pb; if (!U.xlag) U.xlag = new Map(); if (U.xlag.has(k)) return U.xlag.get(k);
+  const A = U.buf.get(pa), B = U.buf.get(pb); let out = null;
+  if (A && B && A.sampleRate === B.sampleRate) {
+    const sr = A.sampleRate, mono = b => { const n = Math.min(b.length, Math.round(0.6 * sr)), o = new Float32Array(n); for (let c = 0; c < b.numberOfChannels; c++) { const d = b.getChannelData(c); for (let i = 0; i < n; i++) o[i] += d[i]; } return o; };
+    const a = mono(A), b = mono(B); let pk = 0; for (let i = 0; i < a.length; i++) pk = Math.max(pk, Math.abs(a[i]));
+    let on = 0; while (on < a.length && Math.abs(a[on]) < 0.1 * pk) on++;
+    const W = Math.round(0.043 * sr), R = Math.round(0.008 * sr), s0 = Math.max(0, on - Math.round(0.0015 * sr));
+    if (pk > 0 && s0 + W < a.length) {
+      let ea = 0; for (let i = 0; i < W; i++) ea += a[s0 + i] * a[s0 + i];
+      const corr = L => { let xy = 0, eb = 0; for (let i = 0; i < W; i++) { const j = s0 + i + L; const y = j >= 0 && j < b.length ? b[j] : 0; xy += a[s0 + i] * y; eb += y * y; } return eb > 0 ? xy / Math.sqrt(ea * eb) : -1; };
+      let best = -2, bl = 0;
+      for (let L = -R; L <= R; L += 4) { const c = corr(L); if (c > best) { best = c; bl = L; } }
+      for (let L = bl - 4; L <= bl + 4; L++) { const c = corr(L); if (c > best) { best = c; bl = L; } }
+      out = { c: best, shift: bl / sr };   // shift > 0:B 同樣的內容晚 shift 秒 → B 跳過開頭 shift 秒
+    }
+  }
+  U.xlag.set(k, out); return out;
+}
+function userPianoPlayRegions(regs, when, vel, gainMul, tm, dest, vr, shift = 0){
   const srcs = []; let bufEnd = when;
   for (const r of regs) {
     const b = userPiano.buf.get(r.path); if (!b) continue;
@@ -12024,7 +12046,9 @@ function userPianoPlayRegions(regs, when, vel, gainMul, tm, dest, vr){
     if (r.pan) { const p = audioCtx.createStereoPanner(); p.pan.value = Math.max(-1, Math.min(1, r.pan)); node.connect(p); node = p; }
     node.connect(g); g.connect(typeof dest === "function" ? dest(r) : dest);
     const off = Math.min(b.duration, r.offset / b.sampleRate + (vr ? vr.off : 0));
-    src.start(when, off); scheduled.push(src); srcs.push(src);
+    // shift(換層漸層對齊):正 = 跳過開頭、負 = 晚一點開始
+    let st = when, o2 = off; if (shift > 0) o2 = Math.min(b.duration, off + shift * rate); else if (shift < 0) st = when - shift;
+    src.start(st, o2); scheduled.push(src); srcs.push(src);
     bufEnd = Math.max(bufEnd, when + (b.duration - off) / rate);
   }
   return { srcs, bufEnd };
@@ -12057,7 +12081,7 @@ function userPianoVoice(m, tm, when, vel, keyUp, damperAt, halfPedal, pedalDown,
   const V = USER_PIANO.vary, hasRR = regs.some(r => r.seqLen > 1 || r.lorand > 0 || r.hirand < 1);
   const vr = V && !hasRR ? { cents: Math.max(-3, Math.min(3, V.cents * rv.n())), db: V.db * rv.n(), off: V.off * rv() } : null;
   // 換層漸層(USER_PIANO.xfade):力度在相鄰兩層交界 ±xfade 內時兩層一起播、照位置等功率混合,換層不再一下子換音色
-  let xr = null, wMain = 1, wOther = 0;
+  let xr = null, wMain = 1, wOther = 0, xShift = 0;
   if (USER_PIANO.xfade > 0 && regs.length && regs.sel) {
     const lo = Math.max(...regs.map(r => r.lovel)), hi = Math.min(...regs.map(r => r.hivel)), H = USER_PIANO.xfade;
     let other = null, x = 0;   // x = 0~1:往另一層的比例(交界上 0.5)
@@ -12067,7 +12091,8 @@ function userPianoVoice(m, tm, when, vel, keyUp, damperAt, halfPedal, pedalDown,
     if (vr && other != null) x = Math.max(0, Math.min(0.5, x + V.xfadeJitter * rv.n()));
     if (other != null && x > 0.01) {
       const o = userPianoMatch(m, other, pedalDown, "attack", regs.sel).filter(r => U.buf.has(r.path) && !regs.includes(r));
-      if (o.length) { xr = o; const e = USER_PIANO.xfadeExp; wMain = Math.pow(1 - x, e); wOther = Math.pow(x, e); }
+      const lg = o.length ? userPianoXLag(regs[0].path, o[0].path, U) : null;
+      if (lg && lg.c >= USER_PIANO.xfadeMinCorr) { xr = o; xShift = lg.shift; const e = USER_PIANO.xfadeExp; wMain = Math.pow(1 - x, e); wOther = Math.pow(x, e); }
     }
   }
   // 原廠模式:每一種包絡(ampeg_* / sustain_cc / releasecc64)各一個 GainNode,照 sforzando 的規則排好整段(見 userPianoEnv)
@@ -12076,7 +12101,7 @@ function userPianoVoice(m, tm, when, vel, keyUp, damperAt, halfPedal, pedalDown,
   const envFor = r => { const k = userPianoEnvSig(r); let e = envs.get(k); if (!e) { e = userPianoEnv(r, out, when, keyUp, damperAt, pedAtUp, U); envs.set(k, e); } return e.node; };
   const dst = raw ? envFor : env;
   const { srcs, bufEnd } = userPianoPlayRegions(regs, when, vq, gain * wMain, tm, dst, vr);
-  if (xr) { const r2 = userPianoPlayRegions(xr, when, vq, gain * wOther, tm, dst, vr); srcs.push(...r2.srcs); }
+  if (xr) { const r2 = userPianoPlayRegions(xr, when, vq, gain * wOther, tm, dst, vr, xShift); srcs.push(...r2.srcs); }
   // 制音器:用音源自己的 ampeg_release(SFZ 的放開時間 ≈ 5 個時間常數);半踏板(程式依和聲自動延長)照內建規則
   // 換踏板/放鍵收音(使用者 2026-11 選 B):取「音源設定的放開時間」與內建制音器模型(pianoDamperTau,低音 0.16 → 高音 0.045 秒)較快的那個,
   // 舊和弦不會拖進新和弦(很多音源 ampeg_release 設 1 秒以上,踩踏板的段落換踏板時聽起來糊);沒有制音器的高音(F#6 以上)照音源
