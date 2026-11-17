@@ -10806,7 +10806,7 @@ function popHandBalance(multiStaff){
    同一手連續 ≥ minLen 個斷音單音(起音間隔 ≤ 一拍、等距)= 一串斷奏。以前旋律走向規則讓往下走的斷奏一路變輕(79 → 75 → 71 → 67),
    律動/兩手錯開/亂數讓每個音時間差幾毫秒;斷音很短,這些不一致特別聽得出來。現在:
    ① 力度離這串平均的差距只留 keep 30%(第一個音是拍頭時照樣多 head 2)② 時間偏移(pdt)全部用這串的平均,彼此對齊 */
-const POP_STACC_RUN = Object.assign({ on: true, minLen: 3, keep: 0.3, head: 2 }, window.POP_STACC_RUN_OVERRIDE || {});
+const POP_STACC_RUN = Object.assign({ on: true, minLen: 3, keep: 0.3, head: 2, boost: 0 }, window.POP_STACC_RUN_OVERRIDE || {});
 function popStaccatoRun(multiStaff){
   const P = POP_STACC_RUN; if (!P.on) return;
   const isSt = (ev, n) => { const a = n.artic !== undefined ? n.artic : ev.artic; return !!(a && (a.staccato || a.staccatissimo || a.spiccato)); };
@@ -10822,7 +10822,7 @@ function popStaccatoRun(multiStaff){
     const mv = ns.reduce((a, n) => a + n.pvel, 0) / ns.length, mt = ns.reduce((a, n) => a + (n.pdt || 0), 0) / ns.length;
     ns.forEach((n, i) => {
       const ev = run[i].ev, L = ev.beatLen || 0.25, head = i === 0 && ev.barPos != null && Math.abs(ev.barPos / L - Math.round(ev.barPos / L)) < 1e-3;
-      n.pvel = Math.max(8, Math.min(124, mv + P.keep * (n.pvel - mv) + (head ? P.head : 0)));
+      n.pvel = Math.max(8, Math.min(124, mv + P.boost + P.keep * (n.pvel - mv) + (head ? P.head : 0)));
       n.pdt = mt;
     });
   };
