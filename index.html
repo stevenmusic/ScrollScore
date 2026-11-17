@@ -1056,6 +1056,9 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
       <select id="userPianoSfz" hidden data-i18n-attr="aria-label:userPianoSfzAria"></select>
       <button class="btn" type="button" id="userPianoOff" hidden data-i18n="userPianoOff">改回內建</button>
       <select id="userPianoMem" data-i18n-attr="aria-label:userPianoMemAria"></select>
+      <label class="switch-row" id="userPianoMasterRow" hidden data-i18n-attr="title:userPianoMasterTitle">
+        <span class="switch"><input type="checkbox" id="userPianoMasterOn" checked><span class="switch-track"></span></span><span class="switch-text"><span data-i18n="userPianoMaster">母帶處理</span></span>
+      </label>
       <span id="userPianoInfo" class="switch-sub"></span>
       <input type="file" id="userPianoDir" webkitdirectory directory multiple hidden>
     </div>
@@ -1589,7 +1592,7 @@ const I18N = {
     statusDrumKitReady: "鼓音色就緒",
     statusLoadingPiano: "載入鋼琴音色中…{pct}%",
     statusPianoReady: "鋼琴已就緒",
-    userPianoLabel: "自己的音源", userPianoPick: "選擇 SFZ 資料夾", userPianoOff: "改回內建", userPianoSfzAria: "選擇 SFZ 檔", userPianoMemAria: "自己的音源可以用多少記憶體", userPianoMemAuto: "記憶體:自動({gb} GB)", userPianoMemGB: "記憶體 {gb} GB", userPianoTrimmed: "。記憶體上限放不下完整錄音,部分長音的尾巴被截短,可以調高記憶體上限(太高可能讓分頁當掉)",
+    userPianoLabel: "自己的音源", userPianoMaster: "母帶處理", userPianoMasterTitle: "打開:後方/房間麥克風降一點(比較乾淨),再走跟內建鋼琴一樣的母帶(低音尖峰控制、響度、手機喇叭補償);關掉:照 .sfz 原廠聲音直接輸出", userPianoPick: "選擇 SFZ 資料夾", userPianoOff: "改回內建", userPianoSfzAria: "選擇 SFZ 檔", userPianoMemAria: "自己的音源可以用多少記憶體", userPianoMemAuto: "記憶體:自動({gb} GB)", userPianoMemGB: "記憶體 {gb} GB", userPianoTrimmed: "。記憶體上限放不下完整錄音,部分長音的尾巴被截短,可以調高記憶體上限(太高可能讓分頁當掉)",
     userPianoReady: "自己的音源已就緒({name})", userPianoNoSfz: "資料夾裡找不到 .sfz 檔", userPianoNoRegions: "這個 .sfz 裡沒有可用的取樣",
     userPianoLoading: "讀取音源中…", userPianoInfo: "{name}:{n} 個取樣區域{ped}(檔案只在這台電腦,不會上傳;重新整理後要再選一次)", userPianoPed: ",有踩踏板取樣", userPianoFail: "讀取失敗:{msg}", userPianoReselect: "上次用的是「{name}」。重新整理後要再選一次資料夾,現在是內建鋼琴。", expToneUser: "鋼琴音色:自己的音源({name})", expToneBuiltin: "鋼琴音色:內建",
     statusExportRangeInvalid: "匯出區間不正確,請確認開始/結束時間(結束需晚於開始至少0.5秒)",
@@ -1858,7 +1861,7 @@ const I18N = {
     statusDrumKitReady: "Drum sounds ready",
     statusLoadingPiano: "Loading piano sounds… {pct}%",
     statusPianoReady: "Piano ready",
-    userPianoLabel: "Own library", userPianoPick: "Choose SFZ folder", userPianoOff: "Use built-in", userPianoSfzAria: "Choose SFZ file", userPianoMemAria: "How much memory your library may use", userPianoMemAuto: "Memory: auto ({gb} GB)", userPianoMemGB: "Memory {gb} GB", userPianoTrimmed: ". The full recordings don't fit in the memory limit, so some long tails are shortened; raise the limit (too high may crash the tab)",
+    userPianoLabel: "Own library", userPianoMaster: "Mastering", userPianoMasterTitle: "On: lowers rear/room microphones a little (cleaner), then uses the same mastering as the built-in piano (bass peak control, loudness, phone speaker compensation). Off: plays the .sfz exactly as shipped", userPianoPick: "Choose SFZ folder", userPianoOff: "Use built-in", userPianoSfzAria: "Choose SFZ file", userPianoMemAria: "How much memory your library may use", userPianoMemAuto: "Memory: auto ({gb} GB)", userPianoMemGB: "Memory {gb} GB", userPianoTrimmed: ". The full recordings don't fit in the memory limit, so some long tails are shortened; raise the limit (too high may crash the tab)",
     userPianoReady: "Own piano ready ({name})", userPianoNoSfz: "No .sfz file in this folder", userPianoNoRegions: "No usable samples in this .sfz",
     userPianoLoading: "Reading library…", userPianoInfo: "{name}: {n} regions{ped} (files stay on this computer; choose again after reloading)", userPianoPed: ", with pedal-down samples", userPianoFail: "Could not read: {msg}", userPianoReselect: "Last time you used “{name}”. Choose the folder again after reloading; the built-in piano is playing now.", expToneUser: "Piano sound: own library ({name})", expToneBuiltin: "Piano sound: built-in",
     statusExportRangeInvalid: "Invalid export range — check start/end times (end must be at least 0.5s after start)",
@@ -9237,6 +9240,7 @@ function userPianoReload(){
 function userPianoUiUpdate(){
   const on = !!userPiano;
   $("userPianoOff").hidden = !on;
+  $("userPianoMasterRow").hidden = !on;
   const sel = $("userPianoSfz");
   sel.hidden = !(on && userPiano.sfzList.length > 1);
   if (on) {
@@ -9284,6 +9288,10 @@ function initUserPianoUi(){
     mem.value = cur;
   };
   fillMem(); window.__fillUserPianoMem = fillMem;
+  // 母帶處理開關(USER_PIANO_MASTER):記在 ss_userPianoMaster("0" = 關),之後彈的音照新的設定走
+  const mst = $("userPianoMasterOn");
+  try { mst.checked = localStorage.getItem("ss_userPianoMaster") !== "0"; } catch (e) {}
+  mst.addEventListener("change", () => { try { if (mst.checked) localStorage.removeItem("ss_userPianoMaster"); else localStorage.setItem("ss_userPianoMaster", "0"); } catch (e) {} });
   mem.addEventListener("change", () => { try { if (mem.value) localStorage.setItem("ss_userPianoMem", mem.value); else localStorage.removeItem("ss_userPianoMem"); } catch (e) {} if (userPiano) userPianoReload(); });
 }
 
@@ -10798,7 +10806,7 @@ function popHandBalance(multiStaff){
    同一手連續 ≥ minLen 個斷音單音(起音間隔 ≤ 一拍、等距)= 一串斷奏。以前旋律走向規則讓往下走的斷奏一路變輕(79 → 75 → 71 → 67),
    律動/兩手錯開/亂數讓每個音時間差幾毫秒;斷音很短,這些不一致特別聽得出來。現在:
    ① 力度離這串平均的差距只留 keep 30%(第一個音是拍頭時照樣多 head 2)② 時間偏移(pdt)全部用這串的平均,彼此對齊 */
-const POP_STACC_RUN = Object.assign({ on: true, minLen: 3, keep: 0.3, head: 2, boost: 0 }, window.POP_STACC_RUN_OVERRIDE || {});
+const POP_STACC_RUN = Object.assign({ on: true, minLen: 3, keep: 0.3, head: 2 }, window.POP_STACC_RUN_OVERRIDE || {});
 function popStaccatoRun(multiStaff){
   const P = POP_STACC_RUN; if (!P.on) return;
   const isSt = (ev, n) => { const a = n.artic !== undefined ? n.artic : ev.artic; return !!(a && (a.staccato || a.staccatissimo || a.spiccato)); };
@@ -10814,7 +10822,7 @@ function popStaccatoRun(multiStaff){
     const mv = ns.reduce((a, n) => a + n.pvel, 0) / ns.length, mt = ns.reduce((a, n) => a + (n.pdt || 0), 0) / ns.length;
     ns.forEach((n, i) => {
       const ev = run[i].ev, L = ev.beatLen || 0.25, head = i === 0 && ev.barPos != null && Math.abs(ev.barPos / L - Math.round(ev.barPos / L)) < 1e-3;
-      n.pvel = Math.max(8, Math.min(124, mv + P.boost + P.keep * (n.pvel - mv) + (head ? P.head : 0)));
+      n.pvel = Math.max(8, Math.min(124, mv + P.keep * (n.pvel - mv) + (head ? P.head : 0)));
       n.pdt = mt;
     });
   };
@@ -11935,6 +11943,26 @@ function userPianoBudget(){
 }
 const USER_PIANO = { refRms: 0.081, budget: 1.0e9, conc: 6, raw: true, maxSrc: 192, xfade: 6, xfadeExp: 1, xfadeMinCorr: 0.85,
   vary: Object.assign({ cents: 1.2, db: 0.3, off: 0.001, xfadeJitter: 0.08 }, window.USER_PIANO_VARY_OVERRIDE || {}) };   // xfade:換層漸層的半寬(力度;使用者 2026-11:「音色不要突然切換,應該是漸層」);xfadeExp:兩層權重 (1−x)^e、x^e(同一個音不同力度的錄音一半相關,介於線性 1 與等功率 0.5 之間,實測 0.75 最平)   // raw(使用者 2026-11:「外部 sfz 讓我聽預設的音色,不要改掉」):照 .sfz 原廠設定播,見 userPianoVoice
+/* 自己的音源的母帶處理(USER_PIANO_MASTER,使用者 2026-11:「原本的 S6 Omni 就已經很糊了,有辦法乾淨一點嗎?」「幫我跑 S6 母帶,改到你自己認為合理」):
+   原廠模式(USER_PIANO.raw)以前直接進 masterBus,只經過最後的限幅器——Omni 這種前後兩組麥克風同時響的音源,限幅前峰值 +4.8dBFS、
+   限幅器一直在壓(20ms 區塊 17% 被壓 > 0.5dB、最多 5.8dB),後面那組麥克風(房間聲多、晚幾 ms)讓 200~500Hz 堆起來、擊鍵不清楚。現在(設定「母帶處理」開關,預設開;關掉 = 跟以前逐位元一樣):
+   ① 麥克風平衡:同一個 .sfz 裡同時有「遠的」(路徑有 Rear/Room/Far/Ambient/Hall/Surround…)與「近的/其他」錄音時,遠的那組 × micDb;只有一組麥克風的音源不受影響
+   ② 走內建鋼琴同一條母帶:inDb → masterGain → PIANO_MASTER(30Hz 高通 + 低段/中低段只在堆積時才壓)→ loudnessComp → makeup → 手機喇叭補償 → 120Hz 以下單聲道 → masterBus;
+      不經過 PIANO_TONE/PIANO_EQ/PIANO_WIDTH/殘響/房間聲/共鳴(那些是給 Salamander 的音色效果),沒有靜態 EQ。全部原生節點(iPhone 可用)。
+   參數與量測見 CLAUDE.md「自己的音源:母帶處理」;window.USER_PIANO_MASTER_OVERRIDE 可覆寫({ on:false } 關掉) */
+const USER_PIANO_MASTER = Object.assign({ on: true, micDb: -6, inDb: -0.3 }, window.USER_PIANO_MASTER_OVERRIDE || {});
+function userPianoMasterOn(){
+  if (!USER_PIANO_MASTER.on) return false;
+  try { return localStorage.getItem("ss_userPianoMaster") !== "0"; } catch (e) { return true; }
+}
+const UP_MIC_NEAR = /(^|[^a-z])(front|close|near|hammers?|direct)([^a-z]|$)/, UP_MIC_FAR = /(^|[^a-z])(rear|room|far|ambient|ambience|amb|hall|surround|distant)([^a-z]|$)/;
+// 這個區域的麥克風倍率(母帶處理關掉、或只有一組麥克風時一律 1)
+function userPianoMicMul(r, U = userPiano){
+  if (!U || !userPianoMasterOn() || !USER_PIANO_MASTER.micDb) return 1;
+  const far = x => { if (x.micFar === undefined) { const p = String(x.path || ""); x.micFar = !UP_MIC_NEAR.test(p) && UP_MIC_FAR.test(p); } return x.micFar; };
+  if (U.micMulti === undefined) { let f = false, o = false; for (const x of U.regions) { if (far(x)) f = true; else o = true; if (f && o) break; } U.micMulti = f && o; }
+  return U.micMulti && far(r) ? Math.pow(10, USER_PIANO_MASTER.micDb / 20) : 1;
+}
 let userPiano = null;   // { name, sfzName, regions, buf: Map, needSec: Map, hasPedalSamples, gain, seq: {} }
 function userPianoActive(){ return !!(userPiano && userPiano.regions && userPiano.regions.length && userPiano.ready); }
 function proMode(){
@@ -12129,9 +12157,12 @@ function userPianoMatch(m, vel, pedalDown, trig, pick, U = userPiano){
   return out;
 }
 function getUserPianoBus(){
-  if (userPiano.bus && userPiano.busCtx === audioCtx) return userPiano.bus;
-  const g = audioCtx.createGain(); g.gain.value = 1; g.connect(masterBus);
-  userPiano.bus = g; userPiano.busCtx = audioCtx;
+  const on = userPianoMasterOn();   // 母帶處理(USER_PIANO_MASTER):開 = 走內建鋼琴同一條母帶(masterGain → PIANO_MASTER → loudnessComp → …);關 = 直接進 masterBus
+  if (userPiano.bus && userPiano.busCtx === audioCtx && userPiano.busOn === on) return userPiano.bus;
+  const g = audioCtx.createGain();
+  if (on) { g.gain.value = Math.pow(10, USER_PIANO_MASTER.inDb / 20); g.connect(masterGain); }
+  else { g.gain.value = 1; g.connect(masterBus); }
+  userPiano.bus = g; userPiano.busCtx = audioCtx; userPiano.busOn = on;
   return g;
 }
 /* 換層漸層的起音對齊(2026-11,使用者用 S6:「感覺有什麼頻率被砍掉」):相鄰兩層是不同次的錄音,起音常差 1~5ms,
@@ -12164,7 +12195,7 @@ function userPianoPlayRegions(regs, when, vel, gainMul, tm, dest, vr, shift = 0)
     const src = audioCtx.createBufferSource(); src.buffer = b; src.playbackRate.value = rate;
     // 層內不再套音源的力度曲線(amp_veltrack/amp_velcurve):大小聲由 userGainFor 照內建曲線決定,這裡只用區域本身的 volume。
     // 以前層內照 (力度/127)² 起伏、跨層又被校正拉回 → 換層時音量鋸齒(p→mp 力度 39→40 反而小 3dB,使用者:「整首都不自然」)
-    const g = audioCtx.createGain(), amp = gainMul * r.amp * (USER_PIANO.raw ? sfzVelAmp(r, vel) : 1) * (vr ? Math.pow(10, vr.db / 20) : 1);
+    const g = audioCtx.createGain(), amp = gainMul * r.amp * (USER_PIANO.raw ? sfzVelAmp(r, vel) : 1) * (vr ? Math.pow(10, vr.db / 20) : 1) * userPianoMicMul(r);
     if (r.attack > 0.002) { g.gain.setValueAtTime(0, when); g.gain.linearRampToValueAtTime(amp, when + r.attack); } else g.gain.setValueAtTime(amp, when);
     let node = src;
     if (r.cutoff > 0) {
