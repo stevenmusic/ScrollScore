@@ -10779,6 +10779,31 @@ function pianoHandDrift(multiStaff){
    ② 同一手和弦裡不是旋律的音再多 0~chordJit 9ms(每個音各自);旋律照舊最早
    ③ 不超過到這隻手下一個起音間隔的 cap 25%(快的段落自動變小),快速單音音型的那隻手不動(之前「十六分音符不平均」的修正保留)
    固定種子(事件序號 + 原調音高),重算結果一樣 */
+/* 固定的律動感(POP_GROOVE,使用者 2026-11 選「第 2 點」:真人有固定的習慣,不是亂數;只用在非古典):
+   以前時間變化只有平滑的速度起伏與每手的慢慢漂移,每個拍點都準。現在照拍子裡的位置固定往後放一點(laid-back):
+   正拍不動;八分音符的反拍(拍子一半)晚 late8、十六分音符的第 2、4 個(拍子 1/4、3/4)晚 late16;
+   6/8 這類附點四分音符一拍的,拍內第 2、3 個八分音符晚 late8 × compound。
+   兩手同一個起音一起移(是整個人的律動,不是兩手錯開);不超過到下一個起音的 cap 20%;有搖擺記號的段落不動(搖擺已經照譜) */
+const POP_GROOVE = Object.assign({ on: true, late8: 0.008, late16: 0.004, compound: 0.7, cap: 0.2 }, window.POP_GROOVE_OVERRIDE || {});
+function popGroove(){
+  const G = POP_GROOVE; if (!G.on || !(G.late8 || G.late16)) return;
+  const on = events.filter(ev => ev.notes.some(n => !n.drum && n.freq));
+  for (let i = 0; i < on.length; i++) {
+    const ev = on[i], L = ev.beatLen;
+    if (ev.barPos == null || !(L > 0)) continue;
+    if (typeof swingWarp === "function" && typeof swingSegs !== "undefined" && swingSegs && swingSegs.length) continue;
+    const pos = ((ev.barPos / L) % 1 + 1) % 1, near = x => Math.abs(pos - x) < 1e-3;
+    const comp = Math.abs(L - 0.375) < 1e-6;
+    let d = 0;
+    if (comp) { if (near(1 / 3) || near(2 / 3)) d = G.late8 * G.compound; }
+    else if (near(0.5)) d = G.late8;
+    else if (near(0.25) || near(0.75)) d = G.late16;
+    if (!d) continue;
+    const next = on[i + 1], gap = next ? wholeToSec(next.tWhole) - wholeToSec(ev.tWhole) : 1;
+    d = Math.min(d, Math.max(0, gap * G.cap));
+    for (const n of ev.notes) if (!n.drum && n.freq && n.pdt != null) n.pdt += d;
+  }
+}
 const POP_SPREAD = Object.assign({ on: true, lead: 0.006, handSd: 0.006, handMin: -0.006, handMax: 0.025, chordJit: 0.009, cap: 0.25 }, window.POP_SPREAD_OVERRIDE || {});
 function popChordSpread(multiStaff){
   const P = POP_SPREAD; if (!P.on) return;
@@ -11251,6 +11276,7 @@ function computePianoDynamics(){
   pianoWideChordRoll(multiStaff);
   if (pop) pianoHandDrift(multiStaff);
   if (pop) popChordSpread(multiStaff);
+  if (pop) popGroove();
   for (const x of pn) delete x.n._v0, delete x.n._accDb, delete x.n._momDb, delete x.n._role, delete x.n._secF, delete x.n._lvl;
 }
 
