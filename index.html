@@ -10414,6 +10414,10 @@ function popRepeatFloor(){
    ① 下一段開頭往上補到跟前一段結尾一樣大,補的量在 liftBars 小節內平滑退回 0(副歌進來那一下最大,之後回到原本的起伏);
    ② 補的倍率最多 maxLift,還不夠的部分才把前一段最後一小節收一點(最多 maxCut;導歌結尾的推力保留大部分)。旋律伴奏同比例 */
 const SECTION_RISE = Object.assign({ liftBars: 4, maxLift: 1.15, maxCut: 0.12, energyGap: 3, markDrop: 3 }, window.SECTION_RISE_OVERRIDE || {});
+/* 往下一段變小聲的交界(使用者 2026-11:「每一段落的音量過渡可以平滑一點嗎」;〈甲乙丙丁〉副歌最後一拍 65~74 → 主歌第一拍 40,一拍掉 30):
+   下一段開頭從兩段中間開始(share),landBars 小節內 smoothstep 落到這一段原本的大小;前一段最後一小節只輕收(cutShare、最多 maxCut,
+   保留「副歌唱滿」);落差小於 minGap 不動;譜上寫了變小聲(_lvl 往下 markDrop)就照譜(subito p 等) */
+const SECTION_FALL = Object.assign({ landBars: 2, share: 0.5, maxLift: 1.4, cutShare: 0.2, maxCut: 0.12, minGap: 6, markDrop: 3 }, window.SECTION_FALL_OVERRIDE || {});
 function popSectionJoin(){
   const X = SECTION_RISE;
   if (!X || classicalProbInfo().p >= 0.5 || !scoreSections.length) return;
@@ -10432,7 +10436,7 @@ function popSectionJoin(){
     let up;
     if (mulOn && (g0.kind || g1.kind)) up = sectionMulVal(G, i + 1, tB, PIANO_SECTION_MUL) > sectionMulVal(G, i, tB - 1e-6, PIANO_SECTION_MUL) + 1e-3;
     else { const a0 = mean(A.filter(x => inSeg(g0, x)).map(x => x.n.pvel)), a1 = mean(A.filter(x => inSeg(g1, x)).map(x => x.n.pvel)); up = a0 != null && a1 != null && a1 > a0 + X.energyGap; }
-    if (!up) continue;
+    if (!up) { popSectionFall(G, i, A, mean, ss, clampV, inSeg); continue; }
     const bl = (A.find(x => x.t >= tB - 1e-6) || A[A.length - 1]).bl;
     const w0 = A.filter(x => x.t >= Math.max(g0.t, tB - bl) - 1e-6 && x.t < tB - 1e-6), w1 = A.filter(x => x.t >= tB - 1e-6 && x.t < Math.min(g1.end, tB + bl) - 1e-6);
     // 譜上寫了變小聲(前後一小節的力度記號那一份往下)就照譜
@@ -10454,6 +10458,29 @@ function popSectionJoin(){
     if (a > 0) for (const x of A) if (x.t >= tB - 1e-6 && x.t < tB + D - 1e-6 && inSeg(g1, x)) x.n.pvel = clampV(x.n.pvel * (1 + a * (1 - ss((x.t - tB) / D))));
     if (c > 0) for (const x of A) if (x.t >= tB - bl - 1e-6 && x.t < tB - 1e-6 && inSeg(g0, x)) x.n.pvel = clampV(x.n.pvel * (1 - c * ss((x.t - (tB - bl)) / bl)));
   }
+}
+function popSectionFall(G, i, A, mean, ss, clampV, inSeg){
+  const X = SECTION_FALL; if (!X) return;
+  const g0 = G[i], g1 = G[i + 1], tB = g1.t;
+  const bl = (A.find(x => x.t >= tB - 1e-6) || A[A.length - 1]).bl;
+  const w0 = A.filter(x => x.t >= Math.max(g0.t, tB - bl) - 1e-6 && x.t < tB - 1e-6 && inSeg(g0, x)), w1 = A.filter(x => x.t >= tB - 1e-6 && x.t < Math.min(g1.end, tB + bl) - 1e-6);
+  const l0 = mean(w0.map(x => x.n._lvl || 0)), l1 = mean(w1.map(x => x.n._lvl || 0));
+  if (l0 != null && l1 != null && l1 < l0 - X.markDrop) return;   // 譜上寫了變小聲:照譜
+  const m0 = w0.filter(x => x.n.pmel), m1 = w1.filter(x => x.n.pmel);
+  const useMel = m0.length >= 2 && m1.length >= 2, s0 = useMel ? m0 : w0, s1 = useMel ? m1 : w1;
+  if (s0.length < 2 || s1.length < 2) return;
+  // 比的是交界兩邊各一拍(最後一拍 vs 第一拍才是聽到的那一下),不夠就用一小節
+  const bt = bl / 4, e0 = s0.filter(x => x.t >= tB - bt - 1e-6), e1 = s1.filter(x => x.t < tB + bt - 1e-6);
+  const P = mean((e0.length ? e0 : s0).map(x => x.n.pvel)), N = mean((e1.length ? e1 : s1).map(x => x.n.pvel));
+  if (!(P > N + X.minGap)) return;
+  const gap = P - N;
+  // ① 前一段最後一小節輕收:最後一拍收 cutShare×落差(最多 maxCut)
+  const c = Math.min(X.maxCut, X.cutShare * gap / P);
+  if (c > 0) for (const x of A) if (x.t >= tB - bl - 1e-6 && x.t < tB - 1e-6 && inSeg(g0, x)) x.n.pvel = clampV(x.n.pvel * (1 - c * ss((x.t - (tB - bl)) / bl)));
+  // ② 下一段開頭從中間開始:f(t) = 1 + a·(1 − ss((t − tB)/D)),第一拍 ≈ N + share×(收過之後的落差)
+  const P2 = P * (1 - c), D = Math.max(bl, Math.min(X.landBars * bl, (g1.end - tB) / 2));
+  const a = N > 0 ? Math.min(X.maxLift - 1, X.share * Math.max(0, P2 - N) / N) : 0;
+  if (a > 0) for (const x of A) if (x.t >= tB - 1e-6 && x.t < tB + D - 1e-6 && inSeg(g1, x)) x.n.pvel = clampV(x.n.pvel * (1 + a * (1 - ss((x.t - tB) / D))));
 }
 /* 露在最上面的伴奏音拉近旋律 + 旋律與其他的差距收到真人範圍(見 POP_EXPOSE) */
 function popExposeAccomp(){
@@ -11351,6 +11378,11 @@ function pianoSampleFor(m, L){
    ② 琴槌亮度:pres(2kHz)±presDb、air(6.5kHz)±airDb、起音亮度 ±attack(標準差,常態分布,平均 0 → 整體音色/響度不變)
    ③ 音量 ±gainDb ④ 制音器收音快慢 ±damper。同音連彈換相鄰層(pianoRRFlip)照舊。
    亂數由(音高, 時間)決定:同一份樂譜同樣的播放每次一樣(測試可重現),不同的音一定不同 */
+/* 換層漸層(使用者 2026-11:「音色不要突然切換,應該是漸層」):內建鋼琴 16 層、每層 5~8 個力度寬,以前每個音只用一層,
+   力度掃過交界時亮度一下跳 2~6.7dB(37→38、64→65)。現在離交界 half 以內兩層一起播,照位置混合(交界上各一半),
+   權重 (1−x)^exp、x^exp:起音對齊後相鄰兩層幾乎同相(相關 0.98~1.00),用線性 exp 1(力度掃描 C4:亮度相鄰最大跳 6.7 → 1.9dB、音量 0.5dB 不變;沒對齊時 0.75 最好但音量會跳 0.9~4dB);比例每下 ±jitter 隨機。
+   多一個 BufferSource,濾波器共用。on:false 回到舊做法(PIANO_VARY.layerZone 交界附近整層隨機換) */
+const PIANO_XFADE = Object.assign({ on: true, half: 3, exp: 1, jitter: 0.08 }, window.PIANO_XFADE_OVERRIDE || {});
 const PIANO_VARY = Object.assign({ layerZone: 4, presDb: 0.8, airDb: 1.0, attack: 0.2, gainDb: 0.35, damper: 0.1 }, window.PIANO_VARY_OVERRIDE || {});
 function pianoVaryRand(m, when){
   let x = (Math.imul(m + 1, 0x9E3779B1) ^ Math.imul(Math.round(when * 48000) | 0, 0x85EBCA6B)) >>> 0;
@@ -11607,8 +11639,20 @@ function playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel
   // 每一下的觸鍵都不一樣(PIANO_VARY,使用者要求 2026-10:「人彈一個音不會再出現完全一模一樣的一次」):
   // 力度在兩層錄音交界附近時隨機用相鄰那一層、琴槌亮度/起音/音量/放鍵各有一點起伏;組合起來同一個音每下都不同
   const rv = pianoVaryRand(m, when), V = PIANO_VARY;
-  let L0 = pianoLayerFor(vel);
-  {
+  let L0 = pianoLayerFor(vel), xf = null;
+  if (PIANO_XFADE.on) {
+    // 換層漸層(PIANO_XFADE,使用者 2026-11:「音色不要突然切換,應該是漸層」):離交界 half 以內時跟相鄰那層一起播、照位置混合
+    // (交界上各一半);混合比例每一下有一點隨機(jitter),保留「每一下都不一樣」(取代以前交界附近整層隨機換)
+    const r = pianoMan.velRanges, z = r && r[L0 - 1], X = PIANO_XFADE;
+    if (z) {
+      const up = z[1] + 0.5 - vel, dn = vel - (z[0] - 0.5);
+      let Lo = 0, x = 0;
+      if (up < X.half && L0 < r.length) { Lo = L0 + 1; x = 0.5 * (1 - up / X.half); }
+      else if (dn < X.half && L0 > 1) { Lo = L0 - 1; x = 0.5 * (1 - dn / X.half); }
+      x = Math.max(0, Math.min(0.5, x + X.jitter * rv.n()));
+      if (Lo && x > 0.02) xf = { L: Lo, x };
+    }
+  } else {
     const r = pianoMan.velRanges, z = r && r[L0 - 1];
     if (z) {
       const up = z[1] + 0.5 - vel, dn = vel - (z[0] - 0.5);   // 離上/下交界多遠
@@ -11626,9 +11670,12 @@ function playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel
     const flip = (pianoRRFlip[m] = !pianoRRFlip[m]);
     for (const l of flip ? [s.L + 1, s.L - 1] : [s.L - 1, s.L + 1]) {
       const alt = l >= 1 && l <= 16 && pianoBuf[pianoNoteName(s.c) + "-v" + l];
-      if (alt) { s = alt; break; }
+      if (alt) { s = alt; xf = null; break; }   // 同音連彈已經換層,不再混合
     }
   }
+  // 混合的另一層要是同一個取樣音、而且已經載入(記憶體不夠時相鄰層最先省掉,那就只播一層)
+  let s2 = null;
+  if (!user && xf && s.L === L0) { const b = pianoBuf[pianoNoteName(s.c) + "-v" + xf.L]; if (b && b.buf && b.c === s.c) s2 = b; }
   const rate = user ? 1 : Math.pow(2, (tm - s.c + ((pianoMan.tune[m] || 0) / 100)) / 12);
   const gain = PIANO_GAIN * pianoSongGain * pianoVelGain(vel) * Math.pow(10, V.gainDb * rv.n() / 20);
   let keyUp = Math.max(dur, 0.05);
@@ -11681,7 +11728,20 @@ function playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel
   // 不然一串級進的旋律(C D E F…)全部疊在一起響到小節結束,就是聽起來「糊」的主因。譜上真的有踏板才完全延音
   if (!pedal && !noDamper && damperAt > keyUp + 0.02) g.gain.setTargetAtTime(0, keyUp, pianoHalfPedalTau(m));
   if (damperAt < end) g.gain.setTargetAtTime(0, damperAt, tau);
-  src.connect(pres); pres.connect(air); air.connect(g);
+  let src2 = null;
+  if (s2) {   // 兩層一起進同一組音色濾波器;權重 (1−x)^e、x^e(e 介於線性與等功率,見 PIANO_XFADE.exp)
+    const ga = audioCtx.createGain(), gb = audioCtx.createGain();
+    ga.gain.value = Math.pow(1 - xf.x, PIANO_XFADE.exp); gb.gain.value = Math.pow(xf.x, PIANO_XFADE.exp);
+    src2 = audioCtx.createBufferSource(); src2.buffer = s2.buf; src2.playbackRate.value = rate;
+    src.connect(ga); ga.connect(pres); src2.connect(gb); gb.connect(pres);
+    // 起音對齊(manifest xlag,piano/build/xlag.py):相鄰兩層錄音波形幾乎一樣(對齊後相關 0.98~1.00),但有的差約 1~3ms,
+    // 直接疊會互相抵消(相關 −0.56、音量忽大忽小 4dB);另一層照時間差晚一點開始或跳過開頭幾個取樣
+    const lags = pianoMan.xlag && pianoMan.xlag[pianoNoteName(s.c)], lo = Math.min(s.L, xf.L);
+    let k = lags ? (lags[lo - 1] || 0) : 0;   // 第 lo 層[t + k] ≈ 第 lo+1 層[t]
+    if (xf.L < s.L) k = -k;                    // 換算成「另一層要晚 k 個取樣」
+    xf.delay = k > 0 ? k / s2.buf.sampleRate / rate : 0; xf.off = k < 0 ? -k / s2.buf.sampleRate : 0;
+  } else src.connect(pres);
+  pres.connect(air); air.connect(g);
   pianoConnect(g, PIANO_VERB_SEND);   // harmonyEndSec 一定有值(至少是同時最長音的結尾),不能拿來判斷踏板
   if (PIANO_TAIL_WIDTH.amount > 0 && end > when + PIANO_TAIL_WIDTH.start) {   // 尾巴變寬(PIANO_TAIL_WIDTH):擊鍵那一下不動
     const tw = audioCtx.createGain(), T = PIANO_TAIL_WIDTH;
@@ -11691,7 +11751,8 @@ function playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel
   if (pedal || autoPedal) { const res = getPianoResonance(); if (res) { const rs = audioCtx.createGain(); rs.gain.value = PIANO_SYMPA.send; g.connect(rs); rs.connect(res); } }
   src.start(when); src.stop(end + 0.05);
   scheduled.push(src);
-  const v = { src, g, end, rel: [], L: s.L, c: s.c, when };
+  if (src2) { src2.start(when + xf.delay, xf.off); src2.stop(Math.min(end, when + s2.buf.duration / rate) + 0.05); scheduled.push(src2); }
+  const v = { src: src2 ? { stop: t => { try { src.stop(t); } catch (e) {} try { src2.stop(t); } catch (e) {} } } : src, g, end, rel: [], L: s.L, c: s.c, when };
   // 制音器落下:弦共鳴(harm)+ 放鍵機械聲(rel),原廠音量是相對原版錄音,用 d 換算到這套校正後的音量;
   // 按得越久共鳴越小(rt_decay dB/秒)。音已經自然消失或沒有制音器的高音就不加
   if (!noDamper && damperAt < bufEnd - 0.05) {
@@ -11716,7 +11777,7 @@ function playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel
    key/lokey/hikey/pitch_keycenter(數字或音名)、lovel/hivel、locc64/hicc64、on_locc64/on_hicc64、trigger、seq_length/seq_position、
    lorand/hirand、volume、amp_veltrack、tune、transpose、offset、pan、ampeg_attack、ampeg_release、rt_decay、cutoff/fil_veltrack/resonance(低通)。
    音量:跟內建鋼琴同一套 sfz 力度曲線(amp_veltrack),整體音量用 C4 力度 100 的響度對齊內建鋼琴(USER_PIANO.refRms) */
-const USER_PIANO = { refRms: 0.081, budget: 1.0e9, conc: 6, raw: true };   // raw(使用者 2026-11:「外部 sfz 讓我聽預設的音色,不要改掉」):照 .sfz 原廠設定播,見 userPianoVoice
+const USER_PIANO = { refRms: 0.081, budget: 1.0e9, conc: 6, raw: true, xfade: 6, xfadeExp: 0.75 };   // xfade:換層漸層的半寬(力度;使用者 2026-11:「音色不要突然切換,應該是漸層」);xfadeExp:兩層權重 (1−x)^e、x^e(同一個音不同力度的錄音一半相關,介於線性 1 與等功率 0.5 之間,實測 0.75 最平)   // raw(使用者 2026-11:「外部 sfz 讓我聽預設的音色,不要改掉」):照 .sfz 原廠設定播,見 userPianoVoice
 let userPiano = null;   // { name, sfzName, regions, buf: Map, needSec: Map, hasPedalSamples, gain, seq: {} }
 function userPianoActive(){ return !!(userPiano && userPiano.regions && userPiano.regions.length && userPiano.ready); }
 function proMode(){
@@ -11890,8 +11951,10 @@ function userPianoMatch(m, vel, pedalDown, trig, pick, U = userPiano){
   const ccOk = r => { for (const n in r.cc) { const x = U.ccDefault[n] || 0; if (x < r.cc[n][0] || x > r.cc[n][1]) return false; } return true; };   // 其他 CC(柔音踏板 cc67 等)照 set_ccN,沒寫就是 0
   let out = (U.byKey[m] || []).filter(r => r.trig === trig && v >= r.lovel && v <= r.hivel && cc >= r.locc64 && cc <= r.hicc64 && ccOk(r));
   if (pick) {
-    const n = (U.seq[m + trig] = (U.seq[m + trig] || 0) + 1), rnd = pick();
-    out = out.filter(r => ((n - 1) % r.seqLen) + 1 === r.seqPos && rnd >= r.lorand && rnd < r.hirand);
+    // pick 可以是亂數函式(真的要彈:輪替往前一格),或 {n, rnd}(換層漸層的另一層:用同一個輪替位置,不再往前)
+    const sel = typeof pick === "function" ? { n: (U.seq[m + trig] = (U.seq[m + trig] || 0) + 1), rnd: pick() } : pick;
+    out = out.filter(r => ((sel.n - 1) % r.seqLen) + 1 === r.seqPos && sel.rnd >= r.lorand && sel.rnd < r.hirand);
+    out.sel = sel;
   }
   return out;
 }
@@ -11941,7 +12004,21 @@ function userPianoVoice(m, tm, when, vel, keyUp, damperAt, halfPedal, pedalDown,
   // 原廠模式:整體只乘一個固定倍數(C4 力度 100 對齊內建鋼琴的音量,不改音色);沒踩踏板的音照譜上長度放開,不做和聲延長/半踏板
   if (raw && !pedalDown) { damperAt = keyUp; halfPedal = false; }
   const gain = raw ? U.gain : userGainFor(vel, vq);
-  const { srcs, bufEnd } = userPianoPlayRegions(regs, when, vq, gain, tm, out);
+  // 換層漸層(USER_PIANO.xfade):力度在相鄰兩層交界 ±xfade 內時兩層一起播、照位置等功率混合,換層不再一下子換音色
+  let xr = null, wMain = 1, wOther = 0;
+  if (USER_PIANO.xfade > 0 && regs.length && regs.sel) {
+    const lo = Math.max(...regs.map(r => r.lovel)), hi = Math.min(...regs.map(r => r.hivel)), H = USER_PIANO.xfade;
+    let other = null, x = 0;   // x = 0~1:往另一層的比例(交界上 0.5)
+    // 照離交界多近線性變(試過 smoothstep 讓另一層慢慢進來,相鄰力度跳動反而較大)
+    if (vq - lo < H && lo > 1) { other = lo - 1; x = 0.5 * (1 - (vq - lo + 0.5) / H); }
+    else if (hi - vq < H && hi < 127) { other = hi + 1; x = 0.5 * (1 - (hi - vq + 0.5) / H); }
+    if (other != null && x > 0.01) {
+      const o = userPianoMatch(m, other, pedalDown, "attack", regs.sel).filter(r => U.buf.has(r.path) && !regs.includes(r));
+      if (o.length) { xr = o; const e = USER_PIANO.xfadeExp; wMain = Math.pow(1 - x, e); wOther = Math.pow(x, e); }
+    }
+  }
+  const { srcs, bufEnd } = userPianoPlayRegions(regs, when, vq, gain * wMain, tm, out);
+  if (xr) { const r2 = userPianoPlayRegions(xr, when, vq, gain * wOther, tm, out); srcs.push(...r2.srcs); }
   // 制音器:用音源自己的 ampeg_release(SFZ 的放開時間 ≈ 5 個時間常數);半踏板(程式依和聲自動延長)照內建規則
   // 換踏板/放鍵收音(使用者 2026-11 選 B):取「音源設定的放開時間」與內建制音器模型(pianoDamperTau,低音 0.16 → 高音 0.045 秒)較快的那個,
   // 舊和弦不會拖進新和弦(很多音源 ampeg_release 設 1 秒以上,踩踏板的段落換踏板時聽起來糊);沒有制音器的高音(F#6 以上)照音源
@@ -11996,7 +12073,7 @@ function userPianoNeeds(U = userPiano){
       const pedal = !!(ev.pedalOn || n.autoPedal), v0 = n.pvel || 70;
       for (const dm of dms) {
         const m = Math.round(freqToMidi(n.freq) + dm);
-        for (const v of [v0 - 4, v0, v0 + 4, v0 * ORNAMENT.vel].map(x => userVelFor(x, U))) {
+        for (const v of [v0 - 4 - USER_PIANO.xfade, v0 - 4, v0, v0 + 4, v0 + 4 + USER_PIANO.xfade, v0 * ORNAMENT.vel].map(x => userVelFor(x, U))) {   // ±xfade:換層漸層用到的相鄰層也要載
           for (const r of userPianoMatch(m, v, pedal, "attack", null, U)) add(r, dm ? 1.5 : sound);
           for (const r of userPianoMatch(m, v, false, "release", null, U)) add(r, 0);
         }
