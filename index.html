@@ -11853,7 +11853,7 @@ async function sfzLoadText(file, dir, files, depth = 0){
 }
 function sfzParse(text, sfzDir){
   text = text.replace(/\/\*[\s\S]*?\*\//g, "").split("\n").map(l => l.replace(/(^|\s)\/\/.*$/, "")).join("\n");
-  const ctl = {}, regions = [];
+  const ctl = {}, regions = [], curves = [];
   let level = null, glob = {}, master = {}, group = {}, cur = null;
   // key= 同時設定 lokey/hikey/pitch_keycenter:後面層級(例如 region)的 key 要蓋過前面層級(group)的 lokey/hikey
   const merge = (...lv) => { const o = {}; for (const x of lv) { if (x.key !== undefined) { delete o.lokey; delete o.hikey; delete o.pitch_keycenter; } Object.assign(o, x); } return o; };
@@ -11871,7 +11871,8 @@ function sfzParse(text, sfzDir){
       else if (h === "master") { master = {}; group = {}; cur = master; }
       else if (h === "group") { group = {}; cur = group; }
       else if (h === "region") cur = {};
-      else cur = null;   // <curve> <effect> <midi> 等不支援
+      else if (h === "curve") { cur = {}; curves.push(cur); }   // <curve>curve_index=N vNNN=…(The Experience 系列用來把踏板值換成放鍵長度)
+      else cur = null;   // <effect> <midi> 等不支援
       if (h === "global" || h === "master" || h === "group" || h === "control" || h === "region") {}
     } else { last = m[2].toLowerCase(); lastEnd = re.lastIndex; }
   }
@@ -11914,10 +11915,21 @@ function sfzParse(text, sfzDir){
       hold: num(first("ampeg_hold"), 0), decay: num(first("ampeg_decay"), 0), sustain: Math.max(0, Math.min(100, num(first("ampeg_sustain"), 100))) / 100,
       rtDecay: num(first("rt_decay"), 0),
       notePoly: num(first("note_polyphony"), 0),
+      // 包絡曲線與踏板(ARIA/sforzando):decay/release 預設形狀 −10.3616(= 指數收到 −90dB);sustain_cc 改掉時 CC64 不再留住音,
+      // 改用 ampeg_releasecc64 × 曲線(CC64) 拉長放鍵時間(The Experience 系列:踩著 15.8 秒、放開 0.8 秒),ampeg_dynamic 時踏板一放就照新的時間收
+      decShape: num(first("ampeg_decay_shape"), -10.3616), relShape: num(first("ampeg_release_shape"), -10.3616),
+      susCC: num(first("sustain_cc"), 64), relCC64: num(first("ampeg_releasecc64"), 0), relCurve: num(first("ampeg_release_curvecc64"), -1),
+      dynamic: num(first("ampeg_dynamic"), 0) > 0,
       cutoff: num(first("cutoff"), 0), filVel: num(first("fil_veltrack"), 0), reso: num(first("resonance"), 0),
       pitchTrack: num(first("pitch_keytrack"), 100) / 100,
     });
   }
+  res.curves = {};
+  for (const c of curves) { const idx = num(String(c.curve_index ?? "").trim(), -1); if (idx < 0) continue;
+    const pts = Object.keys(c).map(k => /^v(\d+)$/.exec(k)).filter(Boolean).map(mm => [Math.min(127, +mm[1]), num(String(c[mm[0]]).trim(), 0)]).sort((a, b) => a[0] - b[0]);
+    if (!pts.length) continue; if (pts[0][0] > 0) pts.unshift([0, 0]); if (pts[pts.length - 1][0] < 127) pts.push([127, 1]);
+    const arr = new Float32Array(128); for (let v = 0, i = 1; v < 128; v++) { while (i < pts.length - 1 && v > pts[i][0]) i++; const [a, ga] = pts[i - 1], [b, gb] = pts[i]; arr[v] = v <= a ? ga : v >= b ? gb : ga + (gb - ga) * (v - a) / (b - a); }
+    res.curves[idx] = arr; }
   res.ccDefault = {}; for (const k of Object.keys(ctl)) { const mm = /^set_(hd)?cc(\d+)$/.exec(k); if (mm) res.ccDefault[+mm[2]] = num(String(ctl[k]).trim().split(/\s+/)[0], 0) * (mm[1] ? 127 : 1); }   // set_hdccN 是 0~1
   return res;
 }
@@ -12010,7 +12022,7 @@ function userPianoPlayRegions(regs, when, vel, gainMul, tm, dest, vr){
       node.connect(f); node = f;
     }
     if (r.pan) { const p = audioCtx.createStereoPanner(); p.pan.value = Math.max(-1, Math.min(1, r.pan)); node.connect(p); node = p; }
-    node.connect(g); g.connect(dest);
+    node.connect(g); g.connect(typeof dest === "function" ? dest(r) : dest);
     const off = Math.min(b.duration, r.offset / b.sampleRate + (vr ? vr.off : 0));
     src.start(when, off); scheduled.push(src); srcs.push(src);
     bufEnd = Math.max(bufEnd, when + (b.duration - off) / rate);
@@ -12031,10 +12043,10 @@ function userPianoVoice(m, tm, when, vel, keyUp, damperAt, halfPedal, pedalDown,
   const out = audioCtx.createGain(); out.gain.setValueAtTime(1, when); out.connect(getUserPianoBus());
   // 按住時的衰減(ampeg_hold/decay/sustain,例如 The Experience 系列 decay 60 秒到 5%):hold 之後照 dB 線性在 decay 秒內收到 sustain
   // (2026-11:以前 setTargetAtTime τ = decay/5,開頭收得比原廠快,按住 3 秒多掉約 1dB)。放在自己的 GainNode,跟制音器(out)分開排程
-  let env = out;
-  { const r0 = regs[0]; if (r0 && r0.decay > 0 && r0.sustain < 1) { env = audioCtx.createGain(); env.connect(out); const t0 = when + r0.attack + r0.hold;
-      env.gain.setValueAtTime(1, when); env.gain.setValueAtTime(1, t0); env.gain.exponentialRampToValueAtTime(Math.max(1e-4, r0.sustain), t0 + r0.decay); } }
   const raw = USER_PIANO.raw;
+  let env = out;
+  if (!raw) { const r0 = regs[0]; if (r0 && r0.decay > 0 && r0.sustain < 1) { env = audioCtx.createGain(); env.connect(out); const t0 = when + r0.attack + r0.hold;
+      env.gain.setValueAtTime(1, when); env.gain.setValueAtTime(1, t0); env.gain.exponentialRampToValueAtTime(Math.max(1e-4, r0.sustain), t0 + r0.decay); } }
   // 原廠模式:整體只乘一個固定倍數(C4 力度 100 對齊內建鋼琴的音量,不改音色);沒踩踏板的音照譜上長度放開,不做和聲延長/半踏板
   if (raw && !pedalDown) { damperAt = keyUp; halfPedal = false; }
   const gain = raw ? U.gain : userGainFor(vel, vq);
@@ -12058,22 +12070,31 @@ function userPianoVoice(m, tm, when, vel, keyUp, damperAt, halfPedal, pedalDown,
       if (o.length) { xr = o; const e = USER_PIANO.xfadeExp; wMain = Math.pow(1 - x, e); wOther = Math.pow(x, e); }
     }
   }
-  const { srcs, bufEnd } = userPianoPlayRegions(regs, when, vq, gain * wMain, tm, env, vr);
-  if (xr) { const r2 = userPianoPlayRegions(xr, when, vq, gain * wOther, tm, env, vr); srcs.push(...r2.srcs); }
+  // 原廠模式:每一種包絡(ampeg_* / sustain_cc / releasecc64)各一個 GainNode,照 sforzando 的規則排好整段(見 userPianoEnv)
+  const pedAtUp = raw && pedalDown && damperAt > keyUp + 0.01;
+  const envs = new Map();
+  const envFor = r => { const k = userPianoEnvSig(r); let e = envs.get(k); if (!e) { e = userPianoEnv(r, out, when, keyUp, damperAt, pedAtUp, U); envs.set(k, e); } return e.node; };
+  const dst = raw ? envFor : env;
+  const { srcs, bufEnd } = userPianoPlayRegions(regs, when, vq, gain * wMain, tm, dst, vr);
+  if (xr) { const r2 = userPianoPlayRegions(xr, when, vq, gain * wOther, tm, dst, vr); srcs.push(...r2.srcs); }
   // 制音器:用音源自己的 ampeg_release(SFZ 的放開時間 ≈ 5 個時間常數);半踏板(程式依和聲自動延長)照內建規則
   // 換踏板/放鍵收音(使用者 2026-11 選 B):取「音源設定的放開時間」與內建制音器模型(pianoDamperTau,低音 0.16 → 高音 0.045 秒)較快的那個,
   // 舊和弦不會拖進新和弦(很多音源 ampeg_release 設 1 秒以上,踩踏板的段落換踏板時聽起來糊);沒有制音器的高音(F#6 以上)照音源
   const rel = Math.max(...regs.map(r => r.release));
   const tau = (raw || m >= 89) ? Math.max(0.02, rel / 5) : Math.max(0.02, Math.min(rel / 5, pianoDamperTau(m)));   // 原廠模式照 ampeg_release
-  if (halfPedal) out.gain.setTargetAtTime(0, keyUp, pianoHalfPedalTau(m));
-  if (damperAt < bufEnd) out.gain.setTargetAtTime(0, damperAt, tau);
-  const end = Math.min(bufEnd, damperAt + tau * 7);
+  let end;
+  if (raw) end = Math.min(bufEnd, Math.max(...[...envs.values()].map(e => e.end)));
+  else {
+    if (halfPedal) out.gain.setTargetAtTime(0, keyUp, pianoHalfPedalTau(m));
+    if (damperAt < bufEnd) out.gain.setTargetAtTime(0, damperAt, tau);
+    end = Math.min(bufEnd, damperAt + tau * 7);
+  }
   for (const s of srcs) s.stop(end + 0.05);
   const v = { src: { stop: t => { for (const s of srcs) try { s.stop(t); } catch (e) {} } }, g: out, end, rel: [], L: 0, c: m, when };
   // 放鍵聲(trigger=release):制音器落下時、聲音還在才放;rt_decay 依按住時間衰減
   // 原廠模式照 .sfz:放鍵聲在「放開琴鍵」那一刻觸發,區域的 locc64/hicc64 看那時踏板(踩著時 The Experience 系列的放鍵聲區域 0~64 對不上 → 不放);
   // 以前踏板放開時每個被踏板留住的音各放一次,換踏板時多一整團制音器聲
-  const relAt = raw ? keyUp : damperAt, pedAtUp = raw && pedalDown && damperAt > keyUp + 0.01;
+  const relAt = raw ? keyUp : damperAt;
   if (relAt < bufEnd - 0.02) {
     const held = relAt - when;
     const rr = userPianoMatch(m, vq, pedAtUp, "release", rv);
@@ -12092,6 +12113,46 @@ function userPianoVoice(m, tm, when, vel, keyUp, damperAt, halfPedal, pedalDown,
   }
   pianoLastByKey[m] = v; pianoVoices.push(v);
   return true;
+}
+/* 原廠模式的包絡(照 ARIA/sforzando,2026-11 S6:「共鳴不夠厚實,感覺浮在上面」對照原廠 .sfz 找到):
+   ① decay/release 的形狀:預設 −10.3616 = 指數收到 −90dB(以前 decay 照 dB 線性,60 秒到 5% 時開頭 6 秒只掉 2.6dB,原廠掉 8dB);
+      形狀 s ≤ −1 用 setTargetAtTime τ = 時間/|s|,−1~0 與正值(少見)用線性
+   ② sustain_cc 改掉(The Experience 系列 sustain_cc=90):CC64 不留住音,放開琴鍵就進入放鍵,
+      放鍵時間 = ampeg_release + ampeg_releasecc64 × 曲線(那時的 CC64)(踩著 0.8 + 15 = 15.8 秒、放開 0.8 秒),
+      ampeg_dynamic 時踏板一放開就從當下音量照新的時間收(= 制音器落下)
+   ③ 沒改 sustain_cc 的照舊:踏板留住,制音器落下(damperAt)才放鍵
+   ④ 放鍵開始時 decay 停在當下的音量(sforzando 從當下音量開始放) */
+function userPianoEnvSig(r){ return [r.attack, r.hold, r.decay, r.sustain, r.decShape, r.release, r.relShape, r.susCC, r.relCC64, r.relCurve, r.dynamic].join("|"); }
+function userPianoEnv(r, out, when, keyUp, damperAt, pedAtUp, U){
+  const g = audioCtx.createGain(); g.connect(out);
+  const p = g.gain; p.setValueAtTime(1, when);
+  const t0 = when + r.attack + r.hold, sus = r.sustain, dec = r.decay > 0 && sus < 1 ? r.decay : 0, ds = r.decShape;
+  const decLevel = t => { if (!dec || t <= t0) return 1; const x = Math.min(1, (t - t0) / dec);
+    return sus + (1 - sus) * (ds <= -1 ? Math.max(0, (Math.exp(ds * x) - Math.exp(ds)) / (1 - Math.exp(ds))) : 1 - x); };
+  const ccVal = cc => r.relCurve >= 0 && U.curves && U.curves[r.relCurve] ? U.curves[r.relCurve][cc] : cc / 127;
+  const relTime = cc => Math.max(0.001, r.release + r.relCC64 * ccVal(cc));
+  const pedalHolds = r.susCC === 64;
+  const relStart = pedalHolds ? damperAt : keyUp;
+  // decay(到放鍵為止)
+  if (dec && relStart > t0) {
+    p.setValueAtTime(1, t0);
+    if (ds <= -1) p.setTargetAtTime(sus, t0, dec / -ds); else p.linearRampToValueAtTime(decLevel(Math.min(relStart, t0 + dec)), Math.min(relStart, t0 + dec));
+  }
+  // 放鍵:從當下音量照形狀收到 0;結尾 20ms 線性補到 0
+  const rs = r.relShape;
+  const relLevel = (L, T, x) => rs <= -1 ? L * Math.max(0, (Math.exp(rs * x) - Math.exp(rs)) / (1 - Math.exp(rs))) : L * Math.max(0, 1 - x);
+  const release = (L, start, T) => {
+    p.setValueAtTime(L, start);
+    if (rs <= -1) p.setTargetAtTime(0, start, T / -rs); else p.linearRampToValueAtTime(0, start + T);
+  };
+  let L = decLevel(relStart), T = relTime(pedalHolds ? 0 : (pedAtUp ? 127 : 0)), st = relStart, end = relStart + T;
+  release(L, relStart, T);
+  if (!pedalHolds && r.dynamic && pedAtUp && damperAt < end) {   // 踩著放鍵 → 之後踏板放開:照放開的時間重新收
+    const T2 = relTime(0), L2 = relLevel(L, T, (damperAt - relStart) / T);
+    release(L2, damperAt, T2); L = L2; T = T2; st = damperAt; end = Math.min(end, damperAt + T2);
+  }
+  if (rs <= -1 && end - 0.02 > st) { p.setValueAtTime(relLevel(L, T, Math.max(0, (end - 0.02 - st) / T)), end - 0.02); p.linearRampToValueAtTime(0, end); }
+  return { node: g, end };
 }
 /* 踏板機械聲:音源有 on_locc64 區域(踩下 = 127、放開 = 0 落在範圍內)才放,沒有就不放(不用 Salamander 的) */
 function userPianoPedalRegions(down, U = userPiano){
@@ -12245,7 +12306,7 @@ async function userPianoFromFiles(fileList, sfzPick, prev){
   for (const r of regions) if (!r.onCC && !r.onOther) for (let k = Math.max(0, r.lokey); k <= Math.min(127, r.hikey); k++) (byKey[k] = byKey[k] || []).push(r);
   const setKey = fileList.length + "|" + [...files.keys()].slice(0, 3).join("|");   // 同一個資料夾(換 .sfz):共用已經解碼好的取樣
   const same = prev && prev.setKey === setKey;
-  return { name, setKey, sfzName: pick, sfzList: sfzs, files, regions, byKey, ccDefault: regions.ccDefault || {}, buf: same ? prev.buf : new Map(), info: same ? prev.info : null, seq: {}, gain: 0, gainPending: true, ready: false,
+  return { name, setKey, sfzName: pick, sfzList: sfzs, files, regions, byKey, ccDefault: regions.ccDefault || {}, curves: regions.curves || {}, buf: same ? prev.buf : new Map(), info: same ? prev.info : null, seq: {}, gain: 0, gainPending: true, ready: false,
     hasPedalSamples: regions.some(r => r.locc64 > 0 || r.hicc64 < 127) };
 }
 /* 踏板機械聲:踩下(pedalD)、放開(pedalU),只有譜上真的寫了踏板才加 */
