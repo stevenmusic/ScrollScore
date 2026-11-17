@@ -11894,6 +11894,7 @@ function sfzParse(text, sfzDir){
       attack: num(first("ampeg_attack"), 0), release: num(first("ampeg_release"), 0.001),
       hold: num(first("ampeg_hold"), 0), decay: num(first("ampeg_decay"), 0), sustain: Math.max(0, Math.min(100, num(first("ampeg_sustain"), 100))) / 100,
       rtDecay: num(first("rt_decay"), 0),
+      notePoly: num(first("note_polyphony"), 0),
       cutoff: num(first("cutoff"), 0), filVel: num(first("fil_veltrack"), 0), reso: num(first("resonance"), 0),
       pitchTrack: num(first("pitch_keytrack"), 100) / 100,
     });
@@ -12003,7 +12004,9 @@ function userPianoVoice(m, tm, when, vel, keyUp, damperAt, halfPedal, pedalDown,
   const regs = userPianoMatch(m, vq, pedalDown, "attack", rv);
   if (!regs.some(r => U.buf.has(r.path))) return false;
   const prev = pianoLastByKey[m];
-  if (prev && prev.end > when) pianoKill(prev, when);
+  // 同一個鍵再彈:原廠模式照 .sfz——有寫 note_polyphony 才收掉前一個;沒寫(例如 The Experience 系列只有 polyphony=128)前一個照樣響、跟新的疊著
+  // (使用者 2026-11:「單一個音沒問題,整體共鳴很不自然」——以前一律 0.04 秒收掉,踩著踏板反覆彈同一個音時累積的共鳴每下都被重置)
+  if (prev && prev.end > when && (!USER_PIANO.raw || regs.some(r => r.notePoly > 0))) pianoKill(prev, when);
   pianoVoices = pianoVoices.filter(v => v.end > when);
   while (pianoVoices.length >= PIANO_MAX_VOICES) pianoKill(pianoVoices.shift(), when);
   const out = audioCtx.createGain(); out.gain.setValueAtTime(1, when); out.connect(getUserPianoBus());
@@ -12039,15 +12042,18 @@ function userPianoVoice(m, tm, when, vel, keyUp, damperAt, halfPedal, pedalDown,
   for (const s of srcs) s.stop(end + 0.05);
   const v = { src: { stop: t => { for (const s of srcs) try { s.stop(t); } catch (e) {} } }, g: out, end, rel: [], L: 0, c: m, when };
   // 放鍵聲(trigger=release):制音器落下時、聲音還在才放;rt_decay 依按住時間衰減
-  if (damperAt < bufEnd - 0.02) {
-    const held = damperAt - when;
-    const rr = userPianoMatch(m, vq, false, "release", rv);
+  // 原廠模式照 .sfz:放鍵聲在「放開琴鍵」那一刻觸發,區域的 locc64/hicc64 看那時踏板(踩著時 The Experience 系列的放鍵聲區域 0~64 對不上 → 不放);
+  // 以前踏板放開時每個被踏板留住的音各放一次,換踏板時多一整團制音器聲
+  const relAt = raw ? keyUp : damperAt, pedAtUp = raw && pedalDown && damperAt > keyUp + 0.01;
+  if (relAt < bufEnd - 0.02) {
+    const held = relAt - when;
+    const rr = userPianoMatch(m, vq, pedAtUp, "release", rv);
     if (rr.length) {
       const rg = audioCtx.createGain(); rg.connect(getUserPianoBus());
       const groups = new Map(); for (const r of rr) { const k = r.rtDecay; (groups.get(k) || groups.set(k, []).get(k)).push(r); }
       // 放鍵聲(制音器、機械聲)是固定音量錄的,不能用琴音的倍數(輕的層要放大很多 → 輕彈的音放鍵聲被放得太大,音色怪):
       // 用力度 100 那一層的倍數,再照原廠力度曲線(amp_veltrack/amp_velcurve 的平方近似)變小聲
-      if (raw) { for (const [dec, list] of groups) userPianoPlayRegions(list, damperAt, vq, gain * Math.pow(10, -dec * held / 20), tm, rg); }
+      if (raw) { for (const [dec, list] of groups) userPianoPlayRegions(list, relAt, vq, gain * Math.pow(10, -dec * held / 20), tm, rg); }
       else {
         const relBase = userGainFor(100, userVelFor(100));
         for (const [dec, list] of groups) for (const r of list) userPianoPlayRegions([r], damperAt, vq, relBase * sfzVelGain(r.veltrack, vq) / sfzVelGain(r.veltrack, userVelFor(100)) * Math.pow(10, -dec * held / 20), tm, rg);
