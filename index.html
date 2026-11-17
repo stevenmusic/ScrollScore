@@ -9207,7 +9207,7 @@ function scheduleEventNotes(ev, t, base, calib, isGuitar, live, st){
             last ? n : { autoPedal: n.autoPedal });
         });
       }
-      else scheduleNote(n.freq, Math.max(now, base + t + rollT + ((isGuitar ? n.gdt : n.pdt) || 0)), durSec, ev.legato, ev.pedalOn, chordAnchors, noteHarmonyEndSec, n.artic !== undefined ? n.artic : ev.artic, noteTech, n.staff, isGuitar ? n.gvel : n.pvel, n);
+      else { if (!isGuitar) n._pedChange = !!ev.pedalChange; scheduleNote(n.freq, Math.max(now, base + t + rollT + ((isGuitar ? n.gdt : n.pdt) || 0)), durSec, ev.legato, ev.pedalOn, chordAnchors, noteHarmonyEndSec, n.artic !== undefined ? n.artic : ev.artic, noteTech, n.staff, isGuitar ? n.gvel : n.pvel, n); }
     } catch (e) {
       st.errCount++; st.lastErr = e;
       console.error("排程音符失敗:", e);
@@ -11724,7 +11724,8 @@ function playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel
   // 斷音類(斷音/極斷音/跳弓/次斷音)沒踩踏板時不套和聲自動延長(半踏板):以前放鍵後還拖著尾巴響到原本的時值,斷音聽不出來
   const damperAt = harmonyEndSec != null && !(short && !pedal) ? Math.max(harmonyEndSec, keyUp) : keyUp;
   const noDamper = m >= 89;
-  if (user) return userPianoVoice(m, tm, when, vel, keyUp, damperAt, !pedal && !noDamper && damperAt > keyUp + 0.02, !!(pedal || autoPedal), rv);
+  if (user) return userPianoVoice(m, tm, when, vel, keyUp, damperAt, !pedal && !noDamper && damperAt > keyUp + 0.02, !!(pedal || autoPedal), rv,
+    { crisp: !!short, pedChange: !!(gn && gn._pedChange) });
   const tau = noDamper ? 3.0 : pianoDamperTau(m) * (1 + V.damper * rv.n());   // 制音器落下的快慢每次也略有不同   // 沒有制音器的高音:放開也繼續自然衰減(原廠 ampeg_release=3)
   const bufEnd = when + s.buf.duration / rate;
   const end = Math.min(bufEnd, damperAt + tau * 7);
@@ -12054,7 +12055,7 @@ function userPianoPlayRegions(regs, when, vel, gainMul, tm, dest, vr, shift = 0)
   return { srcs, bufEnd };
 }
 /* 由 playPianoNote 呼叫:放鍵/制音器時間照內建鋼琴算好的(keyUp、damperAt、半踏板),聲音全部來自使用者的音源 */
-function userPianoVoice(m, tm, when, vel, keyUp, damperAt, halfPedal, pedalDown, rv){
+function userPianoVoice(m, tm, when, vel, keyUp, damperAt, halfPedal, pedalDown, rv, opt = {}){
   const U = userPiano, vq = userVelFor(vel);   // vq:對應到這套音源的力度(選層、濾波、原廠力度曲線);音量照原本的力度(userGainFor)
   const regs = userPianoMatch(m, vq, pedalDown, "attack", rv);
   if (!regs.some(r => U.buf.has(r.path))) return false;
@@ -12097,8 +12098,9 @@ function userPianoVoice(m, tm, when, vel, keyUp, damperAt, halfPedal, pedalDown,
   }
   // 原廠模式:每一種包絡(ampeg_* / sustain_cc / releasecc64)各一個 GainNode,照 sforzando 的規則排好整段(見 userPianoEnv)
   const pedAtUp = raw && pedalDown && damperAt > keyUp + 0.01;
+  const ped = raw ? userPianoPedalPlan(m, when, keyUp, damperAt, pedAtUp, opt, U) : null;
   const envs = new Map();
-  const envFor = r => { const k = userPianoEnvSig(r); let e = envs.get(k); if (!e) { e = userPianoEnv(r, out, when, keyUp, damperAt, pedAtUp, U); envs.set(k, e); } return e.node; };
+  const envFor = r => { const k = userPianoEnvSig(r); let e = envs.get(k); if (!e) { e = userPianoEnv(r, out, when, keyUp, damperAt, pedAtUp, U, ped); envs.set(k, e); } return e.node; };
   const dst = raw ? envFor : env;
   const { srcs, bufEnd } = userPianoPlayRegions(regs, when, vq, gain * wMain, tm, dst, vr);
   if (xr) { const r2 = userPianoPlayRegions(xr, when, vq, gain * wOther, tm, dst, vr, xShift); srcs.push(...r2.srcs); }
@@ -12153,8 +12155,27 @@ function userPianoVoice(m, tm, when, vel, keyUp, damperAt, halfPedal, pedalDown,
       ampeg_dynamic 時踏板一放開就從當下音量照新的時間收(= 制音器落下)
    ③ 沒改 sustain_cc 的照舊:踏板留住,制音器落下(damperAt)才放鍵
    ④ 放鍵開始時 decay 停在當下的音量(sforzando 從當下音量開始放) */
+function m0Damper(m){ return m < 89; }   // F#6 以上沒有制音器
 function userPianoEnvSig(r){ return [r.attack, r.hold, r.decay, r.sustain, r.decShape, r.release, r.relShape, r.susCC, r.relCC64, r.relCurve, r.dynamic].join("|"); }
-function userPianoEnv(r, out, when, keyUp, damperAt, pedAtUp, U){
+/* 踏板深淺與換踏板(USER_PIANO_PEDAL,使用者 2026-11 選 A:「讓音色更有人味」;斷奏:「斷奏不夠俐落」):
+   S6 這類 .sfz 用 CC64 決定放鍵多久(ampeg_releasecc64 × 曲線,ampeg_dynamic 時踏板一動就重算),網站以前只送全踩 127 / 全放 0。
+   ① 踩多深:真人在音很密的地方踩淺一點(不然糊),長和弦踩到底。照前 1.5 秒的起音數:≤ dense[0] 個/秒 → 127,≥ dense[1] → shallow(S6 曲線 64 = 放鍵約 5 秒),中間照曲線值內插
+   ② 換踏板(踏板放開馬上再踩):腳不是一下子全放又全踩,制音器碰到弦一小段時間 lift 秒就再踩下去,舊和弦被壓小 drop dB 左右、留一點尾巴接進新和弦
+      (以前 = 踏板放開就照 0.8 秒放鍵全部收掉);再踩下去後照新的深度繼續放
+   ③ 斷音(沒踩踏板):放鍵照內建鋼琴的制音器(pianoDamperTau 低音 0.16 → 高音 0.045 秒)跟原廠 ampeg_release 取較快的(S6 放開踏板是 0.8 秒 = τ 0.13,斷音拖尾巴) */
+const USER_PIANO_PEDAL = Object.assign({ on: true, dense: [4, 10], shallow: 64, drop: 15 }, window.USER_PIANO_PEDAL_OVERRIDE || {});
+function userPianoPedalPlan(m, when, keyUp, damperAt, pedAtUp, opt, U){
+  const P = USER_PIANO_PEDAL; if (!P.on) return { depth: 127 };
+  // 前 1.5 秒(含這一下)的起音數 → 這段踩多深
+  const on = U.onsets || (U.onsets = []); if (on.length && on[on.length - 1] > when + 0.5) on.length = 0;   // 重新播放/跳轉:時間倒回去
+  if (!on.length || Math.abs(on[on.length - 1] - when) > 0.02) on.push(when);
+  while (on.length && on[0] < when - 1.5) on.shift();
+  const rate = on.filter(t => t <= when + 1e-6).length / 1.5;
+  const x = Math.max(0, Math.min(1, (rate - P.dense[0]) / (P.dense[1] - P.dense[0])));
+  const depth = Math.round(127 + (P.shallow - 127) * x);
+  return { depth, change: !!opt.pedChange && pedAtUp, crisp: !!opt.crisp && !pedAtUp, m };
+}
+function userPianoEnv(r, out, when, keyUp, damperAt, pedAtUp, U, ped){
   const g = audioCtx.createGain(); g.connect(out);
   const p = g.gain; p.setValueAtTime(1, when);
   const t0 = when + r.attack + r.hold, sus = r.sustain, dec = r.decay > 0 && sus < 1 ? r.decay : 0, ds = r.decShape;
@@ -12178,11 +12199,19 @@ function userPianoEnv(r, out, when, keyUp, damperAt, pedAtUp, U){
     p.setValueAtTime(L, start);
     if (rs <= -1) p.setTargetAtTime(0, start, T / -rs); else p.linearRampToValueAtTime(0, start + T);
   };
-  let L = decLevel(relStart), T = relTime(pedalHolds ? 0 : (pedAtUp ? 127 : 0)), st = relStart, end = relStart + T;
+  const depth = ped ? ped.depth : 127;
+  let L = decLevel(relStart), T = relTime(pedalHolds ? 0 : (pedAtUp ? depth : 0)), st = relStart, end = relStart + T;
+  // 斷音:放鍵用制音器的速度(不比原廠慢)
+  if (ped && ped.crisp && m0Damper(ped.m)) T = Math.min(T, -rs * pianoDamperTau(ped.m)), end = relStart + T;
   release(L, relStart, T);
   if (!pedalHolds && r.dynamic && pedAtUp && damperAt < end) {   // 踩著放鍵 → 之後踏板放開:照放開的時間重新收
     const T2 = relTime(0), L2 = relLevel(L, T, (damperAt - relStart) / T);
     release(L2, damperAt, T2); L = L2; T = T2; st = damperAt; end = Math.min(end, damperAt + T2);
+    if (ped && ped.change && rs <= -1) {   // 換踏板:制音器只碰一下(壓小約 drop dB)就再踩下去,照新的深度繼續放
+      const lift = Math.min(0.4, USER_PIANO_PEDAL.drop / 8.686 * T2 / -rs), t3 = damperAt + lift;
+      const T3 = relTime(depth), L3 = relLevel(L2, T2, lift / T2);
+      if (L3 > 1e-4) { release(L3, t3, T3); L = L3; T = T3; st = t3; end = t3 + T3; }
+    }
   }
   if (rs <= -1 && end - 0.05 > st) { p.setValueAtTime(relLevel(L, T, Math.max(0, (end - 0.05 - st) / T)), end - 0.05); p.linearRampToValueAtTime(0, end); }
   return { node: g, end };
