@@ -11814,7 +11814,8 @@ function sfzParse(text, sfzDir){
       trig: trig === "release" || trig === "release_key" ? "release" : "attack",
       seqLen: Math.max(1, num(first("seq_length"), 1)), seqPos: Math.max(1, num(first("seq_position"), 1)),
       lorand: num(first("lorand"), 0), hirand: num(first("hirand"), 1),
-      amp: Math.pow(10, num(first("volume"), 0) / 20) * Math.pow(10, num(first("amplitude"), 100) / 100 === 1 ? 0 : 20 * Math.log10(Math.max(1e-4, num(first("amplitude"), 100) / 100)) / 20),
+      // volume 與 group_volume/master_volume/global_volume 都要加(SFZ v2;很多音源用 group_volume 平衡各層錄音,例如 Piano in 162 pp +10、f −8dB,漏掉時跨層會突然大聲)
+      amp: Math.pow(10, (num(first("volume"), 0) + num(first("group_volume"), 0) + num(first("master_volume"), 0) + num(first("global_volume"), 0)) / 20) * Math.pow(10, num(first("amplitude"), 100) / 100 === 1 ? 0 : 20 * Math.log10(Math.max(1e-4, num(first("amplitude"), 100) / 100)) / 20),
       veltrack: num(first("amp_veltrack"), 100) / 100,
       velcurve: (() => { const pts = Object.keys(r).map(k => /^amp_velcurve_(\d+)$/.exec(k)).filter(Boolean).map(mm => [Math.min(127, +mm[1]), num(first(mm[0]), 0)]); if (!pts.length) return null;
         pts.sort((a, b) => a[0] - b[0]); if (pts[0][0] > 0) pts.unshift([0, 0]); if (pts[pts.length - 1][0] < 127) pts.push([127, 1]); return pts; })(),
@@ -11827,7 +11828,7 @@ function sfzParse(text, sfzDir){
       pitchTrack: num(first("pitch_keytrack"), 100) / 100,
     });
   }
-  res.ccDefault = {}; for (const k of Object.keys(ctl)) { const mm = /^set_cc(\d+)$/.exec(k); if (mm) res.ccDefault[+mm[1]] = num(String(ctl[k]).trim().split(/\s+/)[0], 0); }
+  res.ccDefault = {}; for (const k of Object.keys(ctl)) { const mm = /^set_(hd)?cc(\d+)$/.exec(k); if (mm) res.ccDefault[+mm[2]] = num(String(ctl[k]).trim().split(/\s+/)[0], 0) * (mm[1] ? 127 : 1); }   // set_hdccN 是 0~1
   return res;
 }
 /* 力度對應(使用者 2026-11 選 A:「自己的音源」只沿用演奏,力度數字照這套音源重新對應):
