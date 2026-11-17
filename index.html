@@ -9420,7 +9420,7 @@ function pianoLayerFor(vel){
    amp_veltrack 98.5 決定:音量 = 0.015 + 0.985 × (力度/127)²。輕重的「音色」則由 16 層錄音提供 */
 /* 小聲的音音量提高(PIANO_VEL_CURVE,使用者 2026-11:「小聲的地方太小聲了,力度層不需要換,但大聲一點」;鋼琴凍結的例外):
    取樣層照原本的力度選(音色不變),只把力度 ref 以下的音量曲線放平:音量 = 基準 × (原本/基準)^k;ref 以上照原廠 amp_veltrack 98.5 */
-const PIANO_VEL_CURVE = Object.assign({ k: 1, ref: 96 }, window.PIANO_VEL_CURVE_OVERRIDE || {});
+const PIANO_VEL_CURVE = Object.assign({ k: 0.7, ref: 96 }, window.PIANO_VEL_CURVE_OVERRIDE || {});
 function pianoVelGainRaw(vel){ const v = Math.max(1, Math.min(127, vel)) / 127; return 0.015 + 0.985 * v * v; }
 function pianoVelGain(vel){
   const g = pianoVelGainRaw(vel), C = PIANO_VEL_CURVE;
