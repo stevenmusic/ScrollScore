@@ -12234,7 +12234,9 @@ function userPianoEnvSig(r){ return [r.attack, r.hold, r.decay, r.sustain, r.dec
    ② 換踏板(踏板放開馬上再踩):腳不是一下子全放又全踩,制音器碰到弦一小段時間 lift 秒就再踩下去,舊和弦被壓小 drop dB 左右、留一點尾巴接進新和弦
       (以前 = 踏板放開就照 0.8 秒放鍵全部收掉);再踩下去後照新的深度繼續放
    ③ 斷音(沒踩踏板):放鍵照內建鋼琴的制音器(pianoDamperTau 低音 0.16 → 高音 0.045 秒)跟原廠 ampeg_release 取較快的(S6 放開踏板是 0.8 秒 = τ 0.13,斷音拖尾巴) */
-const USER_PIANO_PEDAL = Object.assign({ on: true, dense: [4, 10], shallow: 64, drop: 15 }, window.USER_PIANO_PEDAL_OVERRIDE || {});
+// carry:換踏板留尾巴。2026-11 使用者:「感覺有什麼頻率被砍掉…改好了你又改回去了」——舊和弦的尾巴跟新和弦裡同一個音(不同次的錄音)疊在一起,
+// 互相抵消某些頻率(梳狀濾波,跟換層漸層沒對齊同一個問題)→ 預設關掉,換踏板照原廠 0.8 秒收掉
+const USER_PIANO_PEDAL = Object.assign({ on: true, dense: [4, 10], shallow: 64, drop: 15, carry: false }, window.USER_PIANO_PEDAL_OVERRIDE || {});
 function userPianoPedalPlan(m, when, keyUp, damperAt, pedAtUp, opt, U){
   const P = USER_PIANO_PEDAL; if (!P.on) return { depth: 127 };
   // 前 1.5 秒(含這一下)的起音數 → 這段踩多深
@@ -12244,7 +12246,7 @@ function userPianoPedalPlan(m, when, keyUp, damperAt, pedAtUp, opt, U){
   const rate = on.filter(t => t <= when + 1e-6).length / 1.5;
   const x = Math.max(0, Math.min(1, (rate - P.dense[0]) / (P.dense[1] - P.dense[0])));
   const depth = Math.round(127 + (P.shallow - 127) * x);
-  return { depth, change: !!opt.pedChange && pedAtUp, crisp: !!opt.crisp && !pedAtUp, m };
+  return { depth, change: P.carry && !!opt.pedChange && pedAtUp, crisp: !!opt.crisp && !pedAtUp, m };
 }
 function userPianoEnv(r, out, when, keyUp, damperAt, pedAtUp, U, ped){
   const g = audioCtx.createGain(); g.connect(out);
