@@ -11718,7 +11718,11 @@ function pianoKill(v, at){
 }
 /* 斷音長度 [音長比例上限, 固定秒數, 再加音長的幾成]:60 BPM 四分音符(1 秒)斷音 0.5 → 0.25 秒、160 BPM(0.375 秒)維持約 0.19 秒、
    十六分音符照舊約一半;極斷音 0.25 → 0.13 秒 */
-const STACCATO = { staccato: [0.5, 0.16, 0.09], spiccato: [0.3, 0.11, 0.05], issimo: [0.25, 0.09, 0.04] };
+// 2026-11 使用者:「斷奏聽起來像 portato,太長了」:斷音 [0.5, 0.16, 0.09] → [0.45, 0.12, 0.08](66 BPM 四分音符 0.24 → 0.19 秒、十六分音符 0.11 → 0.10 秒)
+const STACCATO = { staccato: [0.45, 0.12, 0.08], spiccato: [0.3, 0.11, 0.05], issimo: [0.25, 0.09, 0.04] };
+/* 踏板底下的斷音(STACC_PEDAL,只用在非古典):以前斷音踩著踏板就被踏板留到踏板放開(〈甲乙丙丁〉左手八度十六分音符斷音響約 1 秒,像 portato);
+   流行彈法在斷音處會換/提一下踏板,讓斷音照斷音收(只影響這個音,其他音照踏板)。古典照舊(例如蕭邦低音斷音配踏板是要它響) */
+const STACC_PEDAL = Object.assign({ on: true }, window.STACC_PEDAL_OVERRIDE || {});
 function playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel, autoPedal, gn){
   if (!pianoMan) return false;
   const tm = freqToMidi(freq), m = Math.round(tm);
@@ -11788,7 +11792,8 @@ function playPianoNote(freq, when, dur, legato, pedal, harmonyEndSec, artic, vel
   if (gn && gn.legatoNext && !pedal && !breath && !short) { const L = PHRASE_NUANCE.legato; ov = Math.max(ov, Math.max(L.min, Math.min(L.max, L.frac * dur))); }
   keyUp = when + Math.max(0.04, keyUp) + ov;
   // 斷音類(斷音/極斷音/跳弓/次斷音)沒踩踏板時不套和聲自動延長(半踏板):以前放鍵後還拖著尾巴響到原本的時值,斷音聽不出來
-  const damperAt = harmonyEndSec != null && !(short && !pedal) ? Math.max(harmonyEndSec, keyUp) : keyUp;
+  const staccLift = short && pedal && STACC_PEDAL.on && artic && (artic.staccato || artic.staccatissimo || artic.spiccato) && classicalProbInfo().p < 0.5;
+  const damperAt = harmonyEndSec != null && !(short && !pedal) && !staccLift ? Math.max(harmonyEndSec, keyUp) : keyUp;
   const noDamper = m >= 89;
   if (user) return userPianoVoice(m, tm, when, vel, keyUp, damperAt, !pedal && !noDamper && damperAt > keyUp + 0.02, !!(pedal || autoPedal), rv,
     { crisp: !!short, pedChange: !!(gn && gn._pedChange) });
