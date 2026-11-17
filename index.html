@@ -10773,6 +10773,45 @@ function pianoHandDrift(multiStaff){
     for (const n of ev.notes) if (!n.drum && n.freq) n.pdt = (n.pdt || 0) + drift(sec, multiStaff ? (n.staff || 1) : 1);
   }
 }
+/* 和弦與兩手不要同時落下(POP_SPREAD,使用者 2026-11:「每個音落下的拍點好像太整齊了」→ 選「和弦/兩手同時落下」;只用在非古典):
+   以前同一手和弦只照力度差晚 0~30ms + 0~3ms 亂數(力度接近的音幾乎同時),兩手之間只有平滑的手部偏移(相鄰和弦一起移)。
+   ① 兩手同時彈(都不是快速單音音型)時,沒有旋律那隻手(伴奏)比旋律晚 lead 6ms ± handSd 6ms(每個和弦各自不同,−6~+25ms)
+   ② 同一手和弦裡不是旋律的音再多 0~chordJit 9ms(每個音各自);旋律照舊最早
+   ③ 不超過到這隻手下一個起音間隔的 cap 25%(快的段落自動變小),快速單音音型的那隻手不動(之前「十六分音符不平均」的修正保留)
+   固定種子(事件序號 + 原調音高),重算結果一樣 */
+const POP_SPREAD = Object.assign({ on: true, lead: 0.006, handSd: 0.006, handMin: -0.006, handMax: 0.025, chordJit: 0.009, cap: 0.25 }, window.POP_SPREAD_OVERRIDE || {});
+function popChordSpread(multiStaff){
+  const P = POP_SPREAD; if (!P.on) return;
+  const runHand = pianoRunHands(multiStaff), hand = n => multiStaff ? (n.staff || 1) : 1, tr = transposeSemitones || 0;
+  // 每隻手下一個起音的間隔(秒)
+  const nextGap = new Map(), lastBy = {};
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ev = events[i], sec = wholeToSec(ev.tWhole), hs = new Set(ev.notes.filter(n => !n.drum && n.freq).map(hand));
+    for (const h of hs) { nextGap.set(ev.notes, Object.assign(nextGap.get(ev.notes) || {}, { [h]: lastBy[h] != null ? lastBy[h] - sec : 1 })); lastBy[h] = sec; }
+  }
+  const gauss = k => (seededRand01(k * 1.37 + 0.11) + seededRand01(k * 2.71 + 0.53) + seededRand01(k * 3.97 + 0.29) - 1.5) * 2;   // ≈ 標準常態
+  let k = 0;
+  for (const ev of events) {
+    k++;
+    const ns = ev.notes.filter(n => !n.drum && n.freq && n.pdt != null && n.rollIndex == null);
+    if (!ns.length) continue;
+    const gaps = nextGap.get(ev.notes) || {}, run = runHand.get(ev);
+    const byH = {}; for (const n of ns) (byH[hand(n)] = byH[hand(n)] || []).push(n);
+    const hs = Object.keys(byH).map(Number);
+    const melH = hs.find(h => byH[h].some(n => n.pmel));
+    for (const h of hs) {
+      if (run && run.has(h)) continue;
+      const capS = Math.max(0, (gaps[h] ?? 1) * P.cap);
+      let off = 0;
+      if (hs.length > 1 && melH != null && h !== melH && !(run && run.has(melH))) off = Math.max(P.handMin, Math.min(P.handMax, P.lead + P.handSd * gauss(k * 3.1 + h)));
+      for (const n of byH[h]) {
+        const m = freqToMidi(n.freq) - tr;
+        const j = byH[h].length > 1 && !n.pmel ? P.chordJit * seededRand01(k * 0.731 + m * 0.173 + 0.5) : 0;
+        n.pdt += Math.max(-capS, Math.min(capS, off + j));
+      }
+    }
+  }
+}
 function pianoVelocityAsync(multiStaff){
   // 非古典(2026-10,使用者:「連續的十六分音符聽起來不平均」):一隻手正在彈等距的快速單音音型(前後兩個起音等距、間隔 ≤ 半拍)時,
   // 這隻手的音不因為「另一隻手同時有比較大聲的音」而晚(以前那一下會晚 3~30ms,同一串十六分音符裡忽早忽晚);
@@ -11211,6 +11250,7 @@ function computePianoDynamics(){
   pianoVelocityAsync(multiStaff);
   pianoWideChordRoll(multiStaff);
   if (pop) pianoHandDrift(multiStaff);
+  if (pop) popChordSpread(multiStaff);
   for (const x of pn) delete x.n._v0, delete x.n._accDb, delete x.n._momDb, delete x.n._role, delete x.n._secF, delete x.n._lvl;
 }
 
