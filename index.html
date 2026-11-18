@@ -12011,10 +12011,14 @@ async function sfzLoadText(file, dir, files, depth = 0){
 function sfzParse(text, sfzDir){
   text = text.replace(/\/\*[\s\S]*?\*\//g, "").split("\n").map(l => l.replace(/(^|\s)\/\/.*$/, "")).join("\n");
   const ctl = {}, regions = [], curves = [];
-  let level = null, glob = {}, master = {}, group = {}, cur = null;
+  let level = null, glob = {}, master = {}, group = {}, cur = null, gSeq = 0, mSeq = 0;
   // key= 同時設定 lokey/hikey/pitch_keycenter:後面層級(例如 region)的 key 要蓋過前面層級(group)的 lokey/hikey
   const merge = (...lv) => { const o = {}; for (const x of lv) { if (x.key !== undefined) { delete o.lokey; delete o.hikey; delete o.pitch_keycenter; } Object.assign(o, x); } return o; };
-  const flush = () => { if (cur && level === "region") regions.push(merge(glob, master, group, cur)); };
+  // polyphony 照寫的層級(sforzando):<global>/<control> = 整台的上限;<master>/<group>/<region> = 只限那一組自己的發聲數。
+  // 以前一律當整台上限,音源在 group 寫 polyphony=32 這類時,整首同時發聲一超過就把最早的音(小節第一個低音)收掉
+  const flush = () => { if (cur && level === "region") { const o = merge(glob, master, group, cur);
+    const pl = cur.polyphony !== undefined ? ["r" + regions.length, cur.polyphony] : group.polyphony !== undefined ? ["g" + gSeq, group.polyphony] : master.polyphony !== undefined ? ["m" + mSeq, master.polyphony] : null;
+    o.__polyG = pl ? pl[0] : null; o.__polyL = pl ? pl[1] : null; o.__polyGlob = glob.polyphony !== undefined ? glob.polyphony : ctl.polyphony; regions.push(o); } };
   const re = /<(\w+)>|([A-Za-z0-9_]+)=/g;
   let m, last = null, lastEnd = 0;
   const setOp = (k, v) => { if (cur) cur[k] = v.trim(); };
@@ -12025,8 +12029,8 @@ function sfzParse(text, sfzDir){
       flush(); const h = m[1].toLowerCase(); level = h;
       if (h === "control") cur = ctl;
       else if (h === "global") { glob = {}; master = {}; group = {}; cur = glob; }
-      else if (h === "master") { master = {}; group = {}; cur = master; }
-      else if (h === "group") { group = {}; cur = group; }
+      else if (h === "master") { master = {}; group = {}; cur = master; mSeq++; }
+      else if (h === "group") { group = {}; cur = group; gSeq++; }
       else if (h === "region") cur = {};
       else if (h === "curve") { cur = {}; curves.push(cur); }   // <curve>curve_index=N vNNN=…(The Experience 系列用來把踏板值換成放鍵長度)
       else cur = null;   // <effect> <midi> 等不支援
@@ -12071,7 +12075,7 @@ function sfzParse(text, sfzDir){
       attack: num(first("ampeg_attack"), 0), release: num(first("ampeg_release"), 0.001),
       hold: num(first("ampeg_hold"), 0), decay: num(first("ampeg_decay"), 0), sustain: Math.max(0, Math.min(100, num(first("ampeg_sustain"), 100))) / 100,
       rtDecay: num(first("rt_decay"), 0),
-      notePoly: num(first("note_polyphony"), 0), poly: num(first("polyphony"), 0),
+      notePoly: num(first("note_polyphony"), 0), poly: num(r.__polyGlob, 0), polyG: r.__polyG, polyL: num(r.__polyL, 0),
       // 包絡曲線與踏板(ARIA/sforzando):decay/release 預設形狀 −10.3616(= 指數收到 −90dB);sustain_cc 改掉時 CC64 不再留住音,
       // 改用 ampeg_releasecc64 × 曲線(CC64) 拉長放鍵時間(The Experience 系列:踩著 15.8 秒、放開 0.8 秒),ampeg_dynamic 時踏板一放就照新的時間收
       decShape: num(first("ampeg_decay_shape"), -10.3616), relShape: num(first("ampeg_release_shape"), -10.3616),
@@ -12208,7 +12212,7 @@ function userPianoPlayRegions(regs, when, vel, gainMul, tm, dest, vr, shift = 0)
     const off = Math.min(b.duration, r.offset / b.sampleRate + (vr ? vr.off : 0));
     // shift(換層漸層對齊):正 = 跳過開頭、負 = 晚一點開始
     let st = when, o2 = off; if (shift > 0) o2 = Math.min(b.duration, off + shift * rate); else if (shift < 0) st = when - shift;
-    src.start(st, o2); scheduled.push(src); srcs.push(src);
+    src.start(st, o2); scheduled.push(src); srcs.push(src); if (r.polyG && r.polyL > 0) src.__pg = r.polyG, src.__pl = r.polyL, src.__g = g;
     bufEnd = Math.max(bufEnd, when + (b.duration - off) / rate);
   }
   return { srcs, bufEnd };
@@ -12311,6 +12315,16 @@ function userPianoVoice(m, tm, when, vel, keyUp, damperAt, halfPedal, pedalDown,
   // 2026-11 使用者 Windows 用 S6 Omni 播到一半卡住:以前只限 128 個「音」,〈甲乙丙丁〉同時最多約 300 個錄音在播;sforzando 照 polyphony=128 收最舊的
   { const lim = raw ? (U.poly || USER_PIANO.maxSrc) : Infinity; let tot = v.n; for (const o of pianoVoices) tot += o.n || 1;
     while (tot > lim && pianoVoices.length) { const o = pianoVoices.shift(); tot -= o.n || 1; pianoKill(o, when); } }
+  // 組內上限(<group>/<master>/<region> 的 polyphony):只數同一組、還在響的錄音,超過收那一組最舊的錄音(不動其他組)
+  if (raw) {
+    const mine = new Map(); for (const s of srcs) if (s.__pg) mine.set(s.__pg, s.__pl);
+    for (const [pg, pl] of mine) {
+      const live = []; for (const o of pianoVoices) if (o.end > when && o.pgSrc) for (const s of o.pgSrc) if (s.__pg === pg && !s.__killed) live.push([o, s]);
+      let n = live.length + srcs.filter(s => s.__pg === pg).length;
+      for (let i = 0; n > pl && i < live.length; i++, n--) { const s = live[i][1]; s.__killed = true; try { s.__g.gain.cancelScheduledValues(when); s.__g.gain.setTargetAtTime(0, when, 0.02); s.stop(when + 0.15); } catch (e) {} }
+    }
+  }
+  v.pgSrc = srcs.filter(s => s.__pg);
   pianoLastByKey[m] = v; pianoVoices.push(v);
   return true;
 }
