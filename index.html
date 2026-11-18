@@ -12287,10 +12287,18 @@ function userPianoVoice(m, tm, when, vel, keyUp, damperAt, halfPedal, pedalDown,
     const rr = userPianoMatch(m, vq, pedAtUp, "release", rv);
     if (rr.length) {
       const rg = audioCtx.createGain(); rg.connect(getUserPianoBus());
+      // 斷音的放鍵聲(USER_PIANO_STACC,2026-11 使用者:S6 第 44 小節斷奏「不俐落、像 portato」,內建鋼琴沒問題):
+      // S6 這類音源每次放鍵都放一段「制音器落下」錄音(trigger=release,有音高、帶著琴弦被壓住前的尾音,沒有 rt_decay、播完整段),
+      // 琴音本身已經照制音器收掉,這段錄音還在響 → 斷音聽起來拖長。斷音(沒踩踏板)時放鍵聲只留開頭 hold 秒,之後照制音器速度收
+      let relStop = Infinity;
+      if (raw && ped && ped.crisp && m0Damper(m) && USER_PIANO_STACC.on) {
+        const h = relAt + USER_PIANO_STACC.hold, tq = pianoDamperTau(m) * USER_PIANO_STACC.tauMul;
+        rg.gain.setValueAtTime(1, h); rg.gain.setTargetAtTime(0, h, tq); relStop = h + tq * 8;
+      }
       const groups = new Map(); for (const r of rr) { const k = r.rtDecay; (groups.get(k) || groups.set(k, []).get(k)).push(r); }
       // 放鍵聲(制音器、機械聲)是固定音量錄的,不能用琴音的倍數(輕的層要放大很多 → 輕彈的音放鍵聲被放得太大,音色怪):
       // 用力度 100 那一層的倍數,再照原廠力度曲線(amp_veltrack/amp_velcurve 的平方近似)變小聲
-      const add = o => { for (const s of o.srcs) { relSrcs.push(s); v.n++; } };
+      const add = o => { for (const s of o.srcs) { relSrcs.push(s); v.n++; if (relStop < Infinity) try { s.stop(relStop); } catch (e) {} } };
       if (raw) { for (const [dec, list] of groups) add(userPianoPlayRegions(list, relAt, vq, gain * Math.pow(10, -dec * held / 20), tm, rg)); }
       else {
         const relBase = userGainFor(100, userVelFor(100));
@@ -12324,6 +12332,7 @@ function userPianoEnvSig(r){ return [r.attack, r.hold, r.decay, r.sustain, r.dec
    ③ 斷音(沒踩踏板):放鍵照內建鋼琴的制音器(pianoDamperTau 低音 0.16 → 高音 0.045 秒)跟原廠 ampeg_release 取較快的(S6 放開踏板是 0.8 秒 = τ 0.13,斷音拖尾巴) */
 // carry:換踏板留尾巴。2026-11 使用者:「感覺有什麼頻率被砍掉…改好了你又改回去了」——舊和弦的尾巴跟新和弦裡同一個音(不同次的錄音)疊在一起,
 // 互相抵消某些頻率(梳狀濾波,跟換層漸層沒對齊同一個問題)→ 預設關掉,換踏板照原廠 0.8 秒收掉
+const USER_PIANO_STACC = Object.assign({ on: true, hold: 0.03, tauMul: 1 }, window.USER_PIANO_STACC_OVERRIDE || {});
 const USER_PIANO_PEDAL = Object.assign({ on: true, dense: [4, 10], shallow: 64, drop: 15, carry: false }, window.USER_PIANO_PEDAL_OVERRIDE || {});
 function userPianoPedalPlan(m, when, keyUp, damperAt, pedAtUp, opt, U){
   const P = USER_PIANO_PEDAL; if (!P.on) return { depth: 127 };
