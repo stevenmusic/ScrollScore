@@ -12063,6 +12063,8 @@ function sfzParse(text, sfzDir){
       onCC: onLo !== undefined || onHi !== undefined ? [num(onLo, 0), num(onHi, 127)] : null,
       onOther: Object.keys(r).some(k => /^on_(lo|hi)cc\d+$/.test(k) && !/cc64$/.test(k)),
       trig: trig === "release" || trig === "release_key" ? "release" : "attack", relKey: trig === "release_key",
+      // sw_down:只有那個鍵「正按著」時這個區域才會響(300 Grand 的共鳴:低音鍵按著、放開高八度的鍵才放共鳴);off_by 照那個鍵放開時收
+      swDown: nn("sw_down"), offBy: first("off_by"),
       // loop_mode=one_shot(v1 寫法 loopmode):不理放鍵,整段錄音播完(300 Grand 的 G#5 以上沒有制音器那組、放鍵機械聲)
       oneShot: /^one_shot$/i.test(first("loop_mode") || first("loopmode") || ""),
       offTime: /^time$/i.test(first("off_mode") || "") ? num(first("off_time"), 0.006) : /^normal$/i.test(first("off_mode") || "") ? -1 : 0.006,
@@ -12209,6 +12211,15 @@ function userBufEnv(b){
     for (let k = 0; k < n; k++) { let m = env[k]; const e = Math.min(d.length, (k + 1) * blk); for (let i = k * blk; i < e; i++) { const x = d[i] < 0 ? -d[i] : d[i]; if (x > m) m = x; } env[k] = m; } }
   b.__env = env; b.__blk = blk; return b;
 }
+/* 換層漸層的寬度:力度層 ≥ 10 層(每層很窄,例如 300 Grand 12 層、每層約 10)時不做,跟 sforzando 一樣只播一層——
+   層這麼窄時 ±6 的漸層幾乎每個音都在播兩層,CPU 與記憶體翻倍(2026-11 使用者:300 Grand「播的時候卡」);相鄰兩層本來就很接近,換層聽不出跳 */
+function userXfade(U = userPiano){
+  if (U.__xf === undefined) {
+    let n = 0; for (const k of [60, 64, 57, 72, 48]) { const rs = (U.byKey && U.byKey[k] || []).filter(r => r.trig === "attack"); if (rs.length) { n = new Set(rs.map(r => r.lovel)).size; break; } }
+    U.__xf = n >= 10 ? 0 : USER_PIANO.xfade;
+  }
+  return U.__xf;
+}
 function userPianoPlayRegions(regs, when, vel, gainMul, tm, dest, vr, shift = 0){
   const srcs = []; let bufEnd = when;
   for (const r of regs) {
@@ -12280,8 +12291,8 @@ function userPianoVoice(m, tm, when, vel, keyUp, damperAt, halfPedal, pedalDown,
   const vr = V && !hasRR ? { cents: Math.max(-3, Math.min(3, V.cents * rv.n())), db: V.db * rv.n(), off: V.off * rv() } : null;
   // 換層漸層(USER_PIANO.xfade):力度在相鄰兩層交界 ±xfade 內時兩層一起播、照位置等功率混合,換層不再一下子換音色
   let xr = null, wMain = 1, wOther = 0, xShift = 0;
-  if (USER_PIANO.xfade > 0 && regs.length && regs.sel) {
-    const lo = Math.max(...regs.map(r => r.lovel)), hi = Math.min(...regs.map(r => r.hivel)), H = USER_PIANO.xfade;
+  if (userXfade(U) > 0 && regs.length && regs.sel) {
+    const lo = Math.max(...regs.map(r => r.lovel)), hi = Math.min(...regs.map(r => r.hivel)), H = userXfade(U);
     let other = null, x = 0;   // x = 0~1:往另一層的比例(交界上 0.5)
     // 照離交界多近線性變(試過 smoothstep 讓另一層慢慢進來,相鄰力度跳動反而較大)
     if (vq - lo < H && lo > 1) { other = lo - 1; x = 0.5 * (1 - (vq - lo + 0.5) / H); }
@@ -12323,6 +12334,12 @@ function userPianoVoice(m, tm, when, vel, keyUp, damperAt, halfPedal, pedalDown,
   // 要等踏板放開(制音器落下 damperAt)才放這個放鍵聲,比對那時的踏板(放開);The Experience 這類 sustain_cc=90 的照舊在放開琴鍵時放。
   // 2026-11 使用者用 300 Grand Compact:「換踏板的時候,聲音突然斷掉了」——以前一律在放開琴鍵時放(還踩著踏板,弦沒被壓),
   // 換踏板制音器落下時琴音照 ampeg_release 收掉、卻沒有放鍵錄音接著,聽起來一下子斷掉
+  // 記下每個鍵什麼時候按著(給 sw_down 用);時間倒回去(跳轉/重播)就重來
+  const HK = U.held || (U.held = new Map());
+  if (U.heldLast !== undefined && when < U.heldLast - 0.5) HK.clear();
+  U.heldLast = when;
+  { const a = HK.get(m) || []; a.push({ on: when, up: keyUp }); HK.set(m, a.filter(x => x.up > when - 1)); }
+  const heldAt = (k, t) => { const a = HK.get(k); if (!a) return null; for (const x of a) if (x.on <= t + 1e-6 && x.up > t) return x; return null; };
   const relPlans = [];
   if (raw) {
     // trigger=release_key(放鍵機械聲)一律在放開琴鍵時、照那時的踏板;trigger=release 照上面的規則
@@ -12331,7 +12348,18 @@ function userPianoVoice(m, tm, when, vel, keyUp, damperAt, halfPedal, pedalDown,
     if (atKey.length) relPlans.push([keyUp, atKey, true]);
     if (atDmp.length) relPlans.push([damperAt, atDmp, !pedAtUp]);
   } else relPlans.push([damperAt, userPianoMatch(m, vq, pedAtUp, "release", rv), true]);
-  for (const [relAt, rr, keyTime] of relPlans) {
+  for (let [relAt, rr, keyTime] of relPlans) {
+    // sw_down:那個鍵這時沒按著就不放;有按著的另外接一個音量,照那個鍵放開的時間收(off_by,用區域自己的 ampeg_release)
+    const swList = rr.filter(r => r.swDown != null && heldAt(r.swDown, relAt));
+    rr = rr.filter(r => r.swDown == null);
+    for (const r of swList) {
+      const h = heldAt(r.swDown, relAt), sg = audioCtx.createGain(); sg.connect(getUserPianoBus());
+      const o = userPianoPlayRegions([r], relAt, vq, gain, tm, sg);
+      if (r.offBy != null && h.up < o.bufEnd) { const rel = Math.max(0.02, r.release); sg.gain.setValueAtTime(1, Math.max(relAt, h.up)); sg.gain.setTargetAtTime(0, Math.max(relAt, h.up), rel / 5);
+        for (const s2 of o.srcs) try { s2.stop(Math.max(relAt, h.up) + rel); } catch (e) {} }
+      for (const s2 of o.srcs) { relSrcs.push(s2); v.n++; }
+      v.rel.push(sg);
+    }
     if (!(relAt < bufEnd - 0.02) || !rr.length) continue;
     const held = relAt - when;
     {
@@ -12473,7 +12501,7 @@ function userPianoNeeds(U = userPiano){
       const pedal = !!(ev.pedalOn || n.autoPedal), v0 = n.pvel || 70;
       for (const dm of dms) {
         const m = Math.round(freqToMidi(n.freq) + dm);
-        for (const [x, c] of [[v0, 1], [v0 * ORNAMENT.vel, 1], [v0 - 4 - USER_PIANO.xfade, 0], [v0 - 4, 0], [v0 + 4, 0], [v0 + 4 + USER_PIANO.xfade, 0]]) {   // ±xfade:換層漸層用到的相鄰層也要載
+        for (const [x, c] of [[v0, 1], [v0 * ORNAMENT.vel, 1], [v0 - 4 - userXfade(U), 0], [v0 - 4, 0], [v0 + 4, 0], [v0 + 4 + userXfade(U), 0]]) {   // ±xfade:換層漸層用到的相鄰層也要載
           const v = userVelFor(x, U); isCore = !!c;
           for (const r of userPianoMatch(m, v, pedal, "attack", null, U)) add(r, dm ? 1.5 : sound);
           for (const r of userPianoMatch(m, v, false, "release", null, U)) add(r, 0);
