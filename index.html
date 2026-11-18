@@ -11941,7 +11941,7 @@ function userPianoBudget(){
   try { const v = +localStorage.getItem("ss_userPianoMem"); if (v > 0) return v * 1e9; } catch (e) {}
   return USER_PIANO.budget * ((navigator.deviceMemory || 0) >= 8 && !isIOSDevice() ? 2 : 1);
 }
-const USER_PIANO = { refRms: 0.081, budget: 1.0e9, conc: 6, raw: true, maxSrc: 192, xfade: 6, xfadeExp: 1, xfadeMinCorr: 0.85,
+const USER_PIANO = { refRms: 0.081, budget: 1.0e9, conc: 6, raw: true, maxSrc: 192, cullDb: 90, xfade: 6, xfadeExp: 1, xfadeMinCorr: 0.85,
   vary: Object.assign({ cents: 1.2, db: 0.3, off: 0.001, xfadeJitter: 0.08 }, window.USER_PIANO_VARY_OVERRIDE || {}) };   // xfade:換層漸層的半寬(力度;使用者 2026-11:「音色不要突然切換,應該是漸層」);xfadeExp:兩層權重 (1−x)^e、x^e(同一個音不同力度的錄音一半相關,介於線性 1 與等功率 0.5 之間,實測 0.75 最平)   // raw(使用者 2026-11:「外部 sfz 讓我聽預設的音色,不要改掉」):照 .sfz 原廠設定播,見 userPianoVoice
 /* 自己的音源的母帶處理(USER_PIANO_MASTER,使用者 2026-11:「原本的 S6 Omni 就已經很糊了,有辦法乾淨一點嗎?」「幫我跑 S6 母帶,改到你自己認為合理」):
    原廠模式(USER_PIANO.raw)以前直接進 masterBus,只經過最後的限幅器——Omni 這種前後兩組麥克風同時響的音源,限幅前峰值 +4.8dBFS、
@@ -12202,6 +12202,13 @@ function userPianoXLag(pa, pb, U = userPiano){
   }
   U.xlag.set(k, out); return out;
 }
+/* 每 1024 個取樣的峰值(所有聲道),給「聽不到的尾巴不播」用 */
+function userBufEnv(b){
+  const blk = 1024, n = Math.ceil(b.length / blk), env = new Float32Array(n);
+  for (let c = 0; c < b.numberOfChannels; c++) { const d = b.getChannelData(c);
+    for (let k = 0; k < n; k++) { let m = env[k]; const e = Math.min(d.length, (k + 1) * blk); for (let i = k * blk; i < e; i++) { const x = d[i] < 0 ? -d[i] : d[i]; if (x > m) m = x; } env[k] = m; } }
+  b.__env = env; b.__blk = blk; return b;
+}
 function userPianoPlayRegions(regs, when, vel, gainMul, tm, dest, vr, shift = 0){
   const srcs = []; let bufEnd = when;
   for (const r of regs) {
@@ -12224,7 +12231,17 @@ function userPianoPlayRegions(regs, when, vel, gainMul, tm, dest, vr, shift = 0)
     // shift(換層漸層對齊):正 = 跳過開頭、負 = 晚一點開始
     let st = when, o2 = off; if (shift > 0) o2 = Math.min(b.duration, off + shift * rate); else if (shift < 0) st = when - shift;
     src.start(st, o2); scheduled.push(src); srcs.push(src); if (r.polyG && r.polyL > 0) src.__pg = r.polyG, src.__pl = r.polyL, src.__g = g;
-    bufEnd = Math.max(bufEnd, when + (b.duration - off) / rate);
+    // 聽不到的尾巴不播(USER_PIANO.cullDb,2026-11 使用者用 300 Grand:「播的時候卡」「確保改動不會犧牲音質」):
+    // 解碼時量好每 1024 個取樣的峰值(userBufEnv),這個錄音乘上這一下的音量後,從哪裡開始一直低於 −cullDb dBFS 就停在那裡。
+    // 包絡(decay/release)只會讓它更小,所以停的地方之後本來就聽不到;以前播到檔案結尾,長尾巴的錄音一直佔著 CPU
+    let cut = st + (b.duration - o2) / rate;
+    if (b.__env && USER_PIANO.cullDb > 0) {
+      const thr = Math.pow(10, -USER_PIANO.cullDb / 20) / Math.max(1e-12, amp), env = b.__env, blk = b.__blk;
+      let i = env.length - 1; while (i >= 0 && env[i] < thr) i--;
+      cut = Math.min(cut, st + Math.max(0.05, (i + 1) * blk / b.sampleRate - o2) / rate);
+      const stop0 = src.stop.bind(src), cutAt = cut; src.stop = t => stop0(Math.min(t === undefined ? cutAt : t, cutAt)); src.stop(cutAt);
+    }
+    bufEnd = Math.max(bufEnd, cut);
   }
   return { srcs, bufEnd };
 }
@@ -12527,9 +12544,10 @@ async function userPianoLoadNeeded(alive, quiet, U = userPiano){
     if (!alive()) return;
     try {
       let b = await audioCtx.decodeAudioData(await f.arrayBuffer());
+      userBufEnv(b);
       if (trim) {
         const n = Math.min(b.length, Math.round(Math.max(2, trimSec(sec) * shrink) * b.sampleRate));
-        if (n < b.length) { const o = audioCtx.createBuffer(b.numberOfChannels, n, b.sampleRate); o.__trimmed = true; const fade = Math.min(n >> 2, Math.round(0.8 * b.sampleRate)); for (let c = 0; c < o.numberOfChannels; c++) { const d = o.getChannelData(c); d.set(b.getChannelData(c).subarray(0, n)); for (let i = 0; i < fade; i++) d[n - fade + i] *= Math.pow(Math.cos(i / fade * Math.PI / 2), 2); } b = o; }
+        if (n < b.length) { const o = audioCtx.createBuffer(b.numberOfChannels, n, b.sampleRate); o.__trimmed = true; o.__blk = b.__blk; o.__env = b.__env && b.__env.slice(0, Math.ceil(n / b.__blk)); const fade = Math.min(n >> 2, Math.round(0.8 * b.sampleRate)); for (let c = 0; c < o.numberOfChannels; c++) { const d = o.getChannelData(c); d.set(b.getChannelData(c).subarray(0, n)); for (let i = 0; i < fade; i++) d[n - fade + i] *= Math.pow(Math.cos(i / fade * Math.PI / 2), 2); } b = o; }
       }
       if (alive()) U.buf.set(p, b);
     } catch (e) { console.warn("自己的音源:解碼失敗", p, e); }
