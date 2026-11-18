@@ -12173,8 +12173,10 @@ function getUserPianoBus(){
   const on = userPianoMasterOn();   // 母帶處理(USER_PIANO_MASTER):開 = 走內建鋼琴同一條母帶(masterGain → PIANO_MASTER → loudnessComp → …);關 = 直接進 masterBus
   if (userPiano.bus && userPiano.busCtx === audioCtx && userPiano.busOn === on) return userPiano.bus;
   const g = audioCtx.createGain();
-  if (on) { g.gain.value = Math.pow(10, USER_PIANO_MASTER.inDb / 20); g.connect(masterGain); }
-  else { g.gain.value = 1; g.connect(masterBus); }
+  // 整個音源都寫同一個 pan(300 Grand 在 global 寫 pan=16)時只在這裡擺一次,不要每個錄音各一個 StereoPanner(很吃 CPU;結果一樣,都是線性的)
+  let o = g; if (userPiano.commonPan) { const p = audioCtx.createStereoPanner(); p.pan.value = Math.max(-1, Math.min(1, userPiano.commonPan)); g.connect(p); o = p; }
+  if (on) { g.gain.value = Math.pow(10, USER_PIANO_MASTER.inDb / 20); o.connect(masterGain); }
+  else { g.gain.value = 1; o.connect(masterBus); }
   userPiano.bus = g; userPiano.busCtx = audioCtx; userPiano.busOn = on;
   return g;
 }
@@ -12216,7 +12218,7 @@ function userPianoPlayRegions(regs, when, vel, gainMul, tm, dest, vr, shift = 0)
       f.frequency.value = Math.min(20000, r.cutoff * Math.pow(2, r.filVel * vel / 127 / 1200)); f.Q.value = -3.0103 + r.reso;
       node.connect(f); node = f;
     }
-    if (r.pan) { const p = audioCtx.createStereoPanner(); p.pan.value = Math.max(-1, Math.min(1, r.pan)); node.connect(p); node = p; }
+    if (r.pan && r.pan !== (userPiano && userPiano.commonPan)) { const p = audioCtx.createStereoPanner(); p.pan.value = Math.max(-1, Math.min(1, r.pan)); node.connect(p); node = p; }
     node.connect(g); g.connect(typeof dest === "function" ? dest(r) : dest);
     const off = Math.min(b.duration, r.offset / b.sampleRate + (vr ? vr.off : 0));
     // shift(換層漸層對齊):正 = 跳過開頭、負 = 晚一點開始
@@ -12329,7 +12331,7 @@ function userPianoVoice(m, tm, when, vel, keyUp, damperAt, halfPedal, pedalDown,
       // 放鍵聲(制音器、機械聲)是固定音量錄的,不能用琴音的倍數(輕的層要放大很多 → 輕彈的音放鍵聲被放得太大,音色怪):
       // 用力度 100 那一層的倍數,再照原廠力度曲線(amp_veltrack/amp_velcurve 的平方近似)變小聲
       const add = o => { for (const s of o.srcs) { relSrcs.push(s); v.n++; if (relStop < Infinity) try { s.stop(relStop); } catch (e) {} } };
-      if (raw) { for (const [dec, list] of groups) add(userPianoPlayRegions(list, relAt, vq, gain * Math.pow(10, -dec * held / 20), tm, rg)); }
+      if (raw) { for (const [dec, list] of groups) if (dec * held < 60) add(userPianoPlayRegions(list, relAt, vq, gain * Math.pow(10, -dec * held / 20), tm, rg)); }   // rt_decay 已經小 60dB 以上的放鍵聲聽不到,不播(省 CPU)
       else {
         const relBase = userGainFor(100, userVelFor(100));
         for (const [dec, list] of groups) for (const r of list) add(userPianoPlayRegions([r], damperAt, vq, relBase * sfzVelGain(r.veltrack, vq) / sfzVelGain(r.veltrack, userVelFor(100)) * Math.pow(10, -dec * held / 20), tm, rg));
@@ -12485,6 +12487,15 @@ async function userPianoLoadNeeded(alive, quiet, U = userPiano){
         while (o + 8 <= h.byteLength) { const id = String.fromCharCode(h.getUint8(o), h.getUint8(o + 1), h.getUint8(o + 2), h.getUint8(o + 3)), len = h.getUint32(o + 4, true);
           if (id === "fmt ") { ch = h.getUint16(o + 10, true); rate = h.getUint32(o + 12, true); bits = h.getUint16(o + 22, true); break; } o += 8 + len + (len & 1); }
         const sec = f.size / (rate * ch * bits / 8); inf = { bytesPerSec: sr * ch * 4, full: sec };
+      } else if (/\.flac$/i.test(f.name) && f.slice) {
+        // FLAC 讀 STREAMINFO 算解碼後真正的長度(2026-11,使用者用 300 Grand:「記憶體快塞爆了」):以前用「檔案大小 × 3」估,
+        // 鋼琴錄音的長尾巴很安靜、FLAC 壓得很小(常 5~10 倍),解碼後實際大好幾倍,記憶體上限等於沒作用
+        const h = new Uint8Array(await f.slice(0, 64).arrayBuffer());
+        if (h[0] === 0x66 && h[1] === 0x4c && h[2] === 0x61 && h[3] === 0x43 && (h[4] & 0x7f) === 0) {
+          const rate = (h[18] << 12) | (h[19] << 4) | (h[20] >> 4), ch = ((h[20] >> 1) & 7) + 1;
+          const tot = (h[21] & 0x0f) * 4294967296 + (((h[22] << 24) | (h[23] << 16) | (h[24] << 8) | h[25]) >>> 0);
+          if (rate > 0 && tot > 0) inf = { bytesPerSec: sr * ch * 4, full: tot / rate };
+        }
       }
     } catch (e) {}
     if (!inf.full) inf = { bytesPerSec: sr * 2 * 4, full: f.size * 3 / (sr * 2 * 4) };
@@ -12587,7 +12598,8 @@ async function userPianoFromFiles(fileList, sfzPick, prev){
   const same = prev && prev.setKey === setKey;
   return { name, setKey, sfzName: pick, sfzList: sfzs, files, regions, byKey, ccDefault: regions.ccDefault || {}, curves: regions.curves || {}, buf: same ? prev.buf : new Map(), info: same ? prev.info : null, seq: {}, gain: 0, gainPending: true, ready: false,
     hasPedalSamples: regions.some(r => r.locc64 > 0 || r.hicc64 < 127),
-    poly: regions.reduce((a, r) => Math.max(a, r.poly || 0), 0) };
+    poly: regions.reduce((a, r) => Math.max(a, r.poly || 0), 0),
+    commonPan: (() => { const ps = new Set(regions.map(r => r.pan || 0)); return ps.size === 1 ? [...ps][0] : 0; })() };
 }
 /* 踏板機械聲:踩下(pedalD)、放開(pedalU),只有譜上真的寫了踏板才加 */
 function pianoSchedulePedalNoise(fromSec, toSec, timeToCtx){
