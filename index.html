@@ -12062,12 +12062,20 @@ function sfzParse(text, sfzDir){
       cc: Object.keys(r).filter(k => /^locc\d+$|^hicc\d+$/.test(k) && !/cc64$/.test(k)).reduce((o, k) => { const n = +k.slice(4); o[n] = o[n] || [0, 127]; o[n][k[0] === "l" ? 0 : 1] = num(first(k), 0); return o; }, {}),
       onCC: onLo !== undefined || onHi !== undefined ? [num(onLo, 0), num(onHi, 127)] : null,
       onOther: Object.keys(r).some(k => /^on_(lo|hi)cc\d+$/.test(k) && !/cc64$/.test(k)),
-      trig: trig === "release" || trig === "release_key" ? "release" : "attack",
+      trig: trig === "release" || trig === "release_key" ? "release" : "attack", relKey: trig === "release_key",
+      // loop_mode=one_shot(v1 寫法 loopmode):不理放鍵,整段錄音播完(300 Grand 的 G#5 以上沒有制音器那組、放鍵機械聲)
+      oneShot: /^one_shot$/i.test(first("loop_mode") || first("loopmode") || ""),
+      offTime: /^time$/i.test(first("off_mode") || "") ? num(first("off_time"), 0.006) : /^normal$/i.test(first("off_mode") || "") ? -1 : 0.006,
       seqLen: Math.max(1, num(first("seq_length"), 1)), seqPos: Math.max(1, num(first("seq_position"), 1)),
       lorand: num(first("lorand"), 0), hirand: num(first("hirand"), 1),
       // volume 與 group_volume/master_volume/global_volume 都要加(SFZ v2;很多音源用 group_volume 平衡各層錄音,例如 Piano in 162 pp +10、f −8dB,漏掉時跨層會突然大聲)
-      amp: Math.pow(10, (num(first("volume"), 0) + num(first("group_volume"), 0) + num(first("master_volume"), 0) + num(first("global_volume"), 0)) / 20) * Math.pow(10, num(first("amplitude"), 100) / 100 === 1 ? 0 : 20 * Math.log10(Math.max(1e-4, num(first("amplitude"), 100) / 100)) / 20),
-      veltrack: num(first("amp_veltrack"), 100) / 100,
+      amp: Math.pow(10, (num(first("volume"), 0) + num(first("group_volume"), 0) + num(first("master_volume"), 0) + num(first("global_volume"), 0)) / 20) * Math.pow(10, num(first("amplitude"), 100) / 100 === 1 ? 0 : 20 * Math.log10(Math.max(1e-4, num(first("amplitude"), 100) / 100)) / 20)
+        // amplitude_onccN(GUI 音量推桿):照 set_ccN 乘上 值% × CC/127(300 Grand:放鍵聲 oncc42=75、放鍵機械聲 oncc41/43 × 28/127、踏板聲 oncc40 × 50/127;
+        // 以前沒讀,機械聲大 13dB、踏板聲大 8dB);group_amplitude 一樣是 %
+        * Object.keys(r).reduce((a, k) => { const mm = /^amplitude_oncc(\d+)$/.exec(k); return mm ? a * Math.max(0, num(first(k), 100) / 100 * sfzCtlCC(ctl, +mm[1]) / 127) : a; }, 1)
+        * (r.group_amplitude !== undefined ? Math.max(0, num(first("group_amplitude"), 100) / 100) : 1),
+      // amp_veltrack_onccN:照 set_ccN 加上去(300 Grand:amp_veltrack=0 + oncc59=100、set_cc59=0 = 照錄音原本的大小聲)
+      veltrack: (num(first("amp_veltrack"), 100) + Object.keys(r).reduce((a, k) => { const mm = /^amp_veltrack_oncc(\d+)$/.exec(k); return mm ? a + num(first(k), 0) * sfzCtlCC(ctl, +mm[1]) / 127 : a; }, 0)) / 100,
       velcurve: (() => { const pts = Object.keys(r).map(k => /^amp_velcurve_(\d+)$/.exec(k)).filter(Boolean).map(mm => [Math.min(127, +mm[1]), num(first(mm[0]), 0)]); if (!pts.length) return null;
         pts.sort((a, b) => a[0] - b[0]); if (pts[0][0] > 0) pts.unshift([0, 0]); if (pts[pts.length - 1][0] < 127) pts.push([127, 1]); return pts; })(),
       tune: num(first("tune"), 0), transpose: num(first("transpose"), 0),
@@ -12146,6 +12154,7 @@ function sfzVelAmp(r, vel){
   for (let i = 1; i < c.length; i++) if (v <= c[i][0]) { const [a, ga] = c[i - 1], [b, gb] = c[i]; return b > a ? ga + (gb - ga) * (v - a) / (b - a) : gb; }
   return c[c.length - 1][1];
 }
+function sfzCtlCC(ctl, n){ const v = ctl["set_cc" + n] ?? (ctl["set_hdcc" + n] !== undefined ? parseFloat(ctl["set_hdcc" + n]) * 127 : undefined); const x = parseFloat(String(v ?? "0").trim()); return isFinite(x) ? Math.max(0, Math.min(127, x)) : 0; }
 function sfzVelGain(t, vel){ const v = Math.max(1, Math.min(127, vel)) / 127; return (1 - t) + t * v * v; }
 /* 這個音(key、力度、踏板)會用到的區域;pick = 真的要彈時才依 seq / rand 選一個 */
 function userPianoMatch(m, vel, pedalDown, trig, pick, U = userPiano){
@@ -12225,7 +12234,13 @@ function userPianoVoice(m, tm, when, vel, keyUp, damperAt, halfPedal, pedalDown,
   const prev = pianoLastByKey[m];
   // 同一個鍵再彈:原廠模式照 .sfz——有寫 note_polyphony 才收掉前一個;沒寫(例如 The Experience 系列只有 polyphony=128)前一個照樣響、跟新的疊著
   // (使用者 2026-11:「單一個音沒問題,整體共鳴很不自然」——以前一律 0.04 秒收掉,踩著踏板反覆彈同一個音時累積的共鳴每下都被重置)
-  if (prev && prev.end > when && (!USER_PIANO.raw || regs.some(r => r.notePoly > 0))) pianoKill(prev, when);
+  // note_polyphony=N:同一個鍵最多 N 個聲音,超過才收最舊的(300 Grand = 3;以前寫了就一律收掉前一個,踩著踏板連彈同一個音時前一下被切)。
+  // off_mode=time(300 Grand 踩踏板那組 off_time=6)照時間慢慢收
+  if (!USER_PIANO.raw) { if (prev && prev.end > when) pianoKill(prev, when); }
+  else { const np = Math.min(...regs.map(r => r.notePoly > 0 ? r.notePoly : Infinity));
+    if (isFinite(np)) { const same = pianoVoices.filter(o => o.c === m && o.end > when && !o.__killed);
+      const ot = Math.max(0.006, ...regs.map(r => r.offTime > 0 ? r.offTime : 0.006));
+      for (let i = 0; i <= same.length - np; i++) { const o = same[i]; o.__killed = true; if (ot > 0.05) { o.g.gain.cancelScheduledValues(when); o.g.gain.setTargetAtTime(0, when, ot / 5); o.end = when + ot; try { o.src.stop(when + ot + 0.05); } catch (e) {} } else pianoKill(o, when); } } }
   pianoVoices = pianoVoices.filter(v => v.end > when);
   while (pianoVoices.length >= PIANO_MAX_VOICES) pianoKill(pianoVoices.shift(), when);
   const out = audioCtx.createGain(); out.gain.setValueAtTime(1, when); out.connect(getUserPianoBus());
@@ -12285,17 +12300,28 @@ function userPianoVoice(m, tm, when, vel, keyUp, damperAt, halfPedal, pedalDown,
   // 原廠模式照 .sfz:放鍵聲在「放開琴鍵」那一刻觸發,區域的 locc64/hicc64 看那時踏板(踩著時 The Experience 系列的放鍵聲區域 0~64 對不上 → 不放);
   // 以前踏板放開時每個被踏板留住的音各放一次,換踏板時多一整團制音器聲
   const relSrcs = []; v.src = { stop: t => { for (const s of srcs.concat(relSrcs)) try { s.stop(t); } catch (e) {} } };   // 放鍵聲也算進同時發聲數、收音時一起停
-  const relAt = raw ? keyUp : damperAt;
-  if (relAt < bufEnd - 0.02) {
+  // 放鍵聲的時間:原廠模式照 sforzando——區域的 sustain_cc 是 64(踏板留住音,大多數音源)時,踩著踏板放開琴鍵不算 note-off,
+  // 要等踏板放開(制音器落下 damperAt)才放這個放鍵聲,比對那時的踏板(放開);The Experience 這類 sustain_cc=90 的照舊在放開琴鍵時放。
+  // 2026-11 使用者用 300 Grand Compact:「換踏板的時候,聲音突然斷掉了」——以前一律在放開琴鍵時放(還踩著踏板,弦沒被壓),
+  // 換踏板制音器落下時琴音照 ampeg_release 收掉、卻沒有放鍵錄音接著,聽起來一下子斷掉
+  const relPlans = [];
+  if (raw) {
+    // trigger=release_key(放鍵機械聲)一律在放開琴鍵時、照那時的踏板;trigger=release 照上面的規則
+    const atKey = userPianoMatch(m, vq, pedAtUp, "release", rv).filter(r => r.relKey || r.susCC !== 64);
+    const atDmp = (pedAtUp ? userPianoMatch(m, vq, false, "release", rv) : userPianoMatch(m, vq, pedAtUp, "release", rv)).filter(r => !r.relKey && r.susCC === 64);
+    if (atKey.length) relPlans.push([keyUp, atKey, true]);
+    if (atDmp.length) relPlans.push([damperAt, atDmp, !pedAtUp]);
+  } else relPlans.push([damperAt, userPianoMatch(m, vq, pedAtUp, "release", rv), true]);
+  for (const [relAt, rr, keyTime] of relPlans) {
+    if (!(relAt < bufEnd - 0.02) || !rr.length) continue;
     const held = relAt - when;
-    const rr = userPianoMatch(m, vq, pedAtUp, "release", rv);
-    if (rr.length) {
+    {
       const rg = audioCtx.createGain(); rg.connect(getUserPianoBus());
       // 斷音的放鍵聲(USER_PIANO_STACC,2026-11 使用者:S6 第 44 小節斷奏「不俐落、像 portato」,內建鋼琴沒問題):
       // S6 這類音源每次放鍵都放一段「制音器落下」錄音(trigger=release,有音高、帶著琴弦被壓住前的尾音,沒有 rt_decay、播完整段),
       // 琴音本身已經照制音器收掉,這段錄音還在響 → 斷音聽起來拖長。斷音(沒踩踏板)時放鍵聲只留開頭 hold 秒,之後照制音器速度收
       let relStop = Infinity;
-      if (raw && ped && ped.crisp && m0Damper(m) && USER_PIANO_STACC.on) {
+      if (raw && keyTime && ped && ped.crisp && m0Damper(m) && USER_PIANO_STACC.on) {
         const h = relAt + USER_PIANO_STACC.hold, tq = pianoDamperTau(m) * USER_PIANO_STACC.tauMul;
         rg.gain.setValueAtTime(1, h); rg.gain.setTargetAtTime(0, h, tq); relStop = h + tq * 8;
       }
@@ -12337,7 +12363,7 @@ function userPianoVoice(m, tm, when, vel, keyUp, damperAt, halfPedal, pedalDown,
    ③ 沒改 sustain_cc 的照舊:踏板留住,制音器落下(damperAt)才放鍵
    ④ 放鍵開始時 decay 停在當下的音量(sforzando 從當下音量開始放) */
 function m0Damper(m){ return m < 89; }   // F#6 以上沒有制音器
-function userPianoEnvSig(r){ return [r.attack, r.hold, r.decay, r.sustain, r.decShape, r.release, r.relShape, r.susCC, r.relCC64, r.relCurve, r.dynamic].join("|"); }
+function userPianoEnvSig(r){ return [r.oneShot ? 1 : 0, r.attack, r.hold, r.decay, r.sustain, r.decShape, r.release, r.relShape, r.susCC, r.relCC64, r.relCurve, r.dynamic].join("|"); }
 /* 踏板深淺與換踏板(USER_PIANO_PEDAL,使用者 2026-11 選 A:「讓音色更有人味」;斷奏:「斷奏不夠俐落」):
    S6 這類 .sfz 用 CC64 決定放鍵多久(ampeg_releasecc64 × 曲線,ampeg_dynamic 時踏板一動就重算),網站以前只送全踩 127 / 全放 0。
    ① 踩多深:真人在音很密的地方踩淺一點(不然糊),長和弦踩到底。照前 1.5 秒的起音數:≤ dense[0] 個/秒 → 127,≥ dense[1] → shallow(S6 曲線 64 = 放鍵約 5 秒),中間照曲線值內插
@@ -12383,6 +12409,7 @@ function userPianoEnv(r, out, when, keyUp, damperAt, pedAtUp, U, ped){
     p.setValueAtTime(L, start);
     if (rs <= -1) p.setTargetAtTime(0, start, T / -rs); else p.linearRampToValueAtTime(0, start + T);
   };
+  if (r.oneShot) return { node: g, end: Infinity };   // loop_mode=one_shot:不理放鍵,錄音播完
   const depth = ped ? ped.depth : 127;
   let L = decLevel(relStart), T = relTime(pedalHolds ? 0 : (pedAtUp ? depth : 0)), st = relStart, end = relStart + T;
   // 斷音:放鍵用制音器的速度(不比原廠慢)
@@ -12539,7 +12566,12 @@ async function userPianoLoadNeeded(alive, quiet, U = userPiano){
 async function userPianoFromFiles(fileList, sfzPick, prev){
   const files = new Map();
   for (const f of fileList) files.set(sfzNormPath(f.webkitRelativePath || f.name), f);
-  const sfzs = [...files.keys()].filter(k => k.endsWith(".sfz")).sort();
+  let sfzs = [...files.keys()].filter(k => k.endsWith(".sfz")).sort();
+  // 被別的 .sfz 用 #include 引用的(300 Grand 的 CFX_PU_04.sfz、CFX_SympRes… 這類片段)不是完整的音色,不列出來
+  { const inc = new Set();
+    for (const k of sfzs) { const dir = k.split("/").slice(0, -1).join("/"); const t = await files.get(k).text();
+      for (const mm of t.matchAll(/^\s*#include\s+"([^"]+)"/gm)) inc.add(sfzNormPath(dir + "/" + mm[1])); }
+    const top = sfzs.filter(k => !inc.has(k)); if (top.length) sfzs = top; }
   if (!sfzs.length) throw new Error(T("userPianoNoSfz"));
   // 預設挑近距離麥克風的(Close/Near/Direct),環境/房間/遠處麥克風(Ambient/Room/Far/Hall)最後:遠的麥克風殘響多,聽起來悶、糊
   const sfzScore = k => { const n = k.split("/").pop(); return (/close|near|direct|mic ?1|player/i.test(n) ? 2 : 0) - (/ambi|room|far|hall|amb\b|surround/i.test(n) ? 2 : 0) - k.split("/").length * 0.01; };
@@ -12549,7 +12581,8 @@ async function userPianoFromFiles(fileList, sfzPick, prev){
   if (!regions.length) throw new Error(T("userPianoNoRegions"));
   const name = (fileList[0] && (fileList[0].webkitRelativePath || "").split("/")[0]) || "SFZ";
   const byKey = {};
-  for (const r of regions) if (!r.onCC && !r.onOther) for (let k = Math.max(0, r.lokey); k <= Math.min(127, r.hikey); k++) (byKey[k] = byKey[k] || []).push(r);
+  // amplitude=0 的區域(300 Grand 用來「關掉共鳴」的觸發器,聽不到)不載入、不播
+  for (const r of regions) if (!r.onCC && !r.onOther && r.amp > 1e-3) for (let k = Math.max(0, r.lokey); k <= Math.min(127, r.hikey); k++) (byKey[k] = byKey[k] || []).push(r);
   const setKey = fileList.length + "|" + [...files.keys()].slice(0, 3).join("|");   // 同一個資料夾(換 .sfz):共用已經解碼好的取樣
   const same = prev && prev.setKey === setKey;
   return { name, setKey, sfzName: pick, sfzList: sfzs, files, regions, byKey, ccDefault: regions.ccDefault || {}, curves: regions.curves || {}, buf: same ? prev.buf : new Map(), info: same ? prev.info : null, seq: {}, gain: 0, gainPending: true, ready: false,
