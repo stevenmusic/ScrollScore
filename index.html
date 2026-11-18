@@ -11951,7 +11951,7 @@ function userPianoBudget(){
   try { const v = +localStorage.getItem("ss_userPianoMem"); if (v > 0) return v * 1e9; } catch (e) {}
   return USER_PIANO.budget * ((navigator.deviceMemory || 0) >= 8 && !isIOSDevice() ? 2 : 1);
 }
-const USER_PIANO = { refRms: 0.081, budget: 1.0e9, conc: 6, raw: true, maxSrc: 192, cullDb: 90, xfade: 6, xfadeExp: 1, xfadeMinCorr: 0.85,
+const USER_PIANO = { refRms: 0.081, budget: 1.0e9, conc: 6, raw: true, maxSrc: 192, cullDb: 90, layerSmooth: true, xfade: 6, xfadeExp: 1, xfadeMinCorr: 0.85,
   vary: Object.assign({ cents: 1.2, db: 0.3, off: 0.001, xfadeJitter: 0.08 }, window.USER_PIANO_VARY_OVERRIDE || {}) };   // xfade:換層漸層的半寬(力度;使用者 2026-11:「音色不要突然切換,應該是漸層」);xfadeExp:兩層權重 (1−x)^e、x^e(同一個音不同力度的錄音一半相關,介於線性 1 與等功率 0.5 之間,實測 0.75 最平)   // raw(使用者 2026-11:「外部 sfz 讓我聽預設的音色,不要改掉」):照 .sfz 原廠設定播,見 userPianoVoice
 /* 自己的音源的母帶處理(USER_PIANO_MASTER,使用者 2026-11:「原本的 S6 Omni 就已經很糊了,有辦法乾淨一點嗎?」「幫我跑 S6 母帶,改到你自己認為合理」):
    原廠模式(USER_PIANO.raw)以前直接進 masterBus,只經過最後的限幅器——Omni 這種前後兩組麥克風同時響的音源,限幅前峰值 +4.8dBFS、
@@ -12166,6 +12166,21 @@ function sfzVelAmp(r, vel){
   for (let i = 1; i < c.length; i++) if (v <= c[i][0]) { const [a, ga] = c[i - 1], [b, gb] = c[i]; return b > a ? ga + (gb - ga) * (v - a) / (b - a) : gb; }
   return c[c.length - 1][1];
 }
+/* 層內音量平滑(USER_PIANO.layerSmooth,2026-11 使用者:「左手比右手小聲有加上去嗎?所有通用規則都要加上」):
+   amp_veltrack=0(照錄音原本大小,300 Grand)的音源,力度只決定用哪一層,同一層裡音量完全一樣 → 演奏規則裡幾個力度的差(左右手平衡、重音、漸強、
+   每一下的觸鍵變化)常常落在同一層、聽不出來。照 C4 各層實際量到的響度(U.layerLoud,在各層中間的力度)線性內插,
+   這個力度的音量 ÷ 這一層的音量 = 倍數(最多 ±3dB);音色照樣用原本那層的錄音,只是音量跟著力度連續變。有 amp_velcurve / amp_veltrack 的音源不動 */
+function userLayerSmooth(r, vel, U = userPiano){
+  if (!USER_PIANO.layerSmooth || !U || r.trig !== "attack" || r.velcurve || r.veltrack > 0.05 || !U.layerLoud) return 1;
+  const vm = userPianoVelMap(U), pts = [];
+  U.layerLoud.forEach((e, i) => { if (e && e.rms > 0) pts.push([e.v, 20 * Math.log10(e.rms)]); });
+  if (pts.length < 3) return 1;
+  let i = vm.layers.findIndex(l => vel <= l.hi + 0.5); if (i < 0) i = vm.layers.length - 1;
+  const own = U.layerLoud[i]; if (!own || !(own.rms > 0)) return 1;
+  let k = 1; while (k < pts.length - 1 && vel > pts[k][0]) k++;
+  const [a, da] = pts[k - 1], [b, db] = pts[k], d = da + (db - da) * (vel - a) / (b - a);
+  return Math.pow(10, Math.max(-3, Math.min(3, d - 20 * Math.log10(own.rms))) / 20);
+}
 function sfzCtlCC(ctl, n){ const v = ctl["set_cc" + n] ?? (ctl["set_hdcc" + n] !== undefined ? parseFloat(ctl["set_hdcc" + n]) * 127 : undefined); const x = parseFloat(String(v ?? "0").trim()); return isFinite(x) ? Math.max(0, Math.min(127, x)) : 0; }
 function sfzVelGain(t, vel){ const v = Math.max(1, Math.min(127, vel)) / 127; return (1 - t) + t * v * v; }
 /* 這個音(key、力度、踏板)會用到的區域;pick = 真的要彈時才依 seq / rand 選一個 */
@@ -12266,7 +12281,7 @@ function userPianoPlayRegions(regs, when, vel, gainMul, tm, dest, vr, shift = 0)
     const src = audioCtx.createBufferSource(); src.buffer = b; src.playbackRate.value = rate;
     // 層內不再套音源的力度曲線(amp_veltrack/amp_velcurve):大小聲由 userGainFor 照內建曲線決定,這裡只用區域本身的 volume。
     // 以前層內照 (力度/127)² 起伏、跨層又被校正拉回 → 換層時音量鋸齒(p→mp 力度 39→40 反而小 3dB,使用者:「整首都不自然」)
-    const g = audioCtx.createGain(), amp = gainMul * r.amp * (USER_PIANO.raw ? sfzVelAmp(r, vel) : 1) * (vr ? Math.pow(10, vr.db / 20) : 1) * userPianoMicMul(r);
+    const g = audioCtx.createGain(), amp = gainMul * r.amp * (USER_PIANO.raw ? sfzVelAmp(r, vel) * userLayerSmooth(r, vel) : 1) * (vr ? Math.pow(10, vr.db / 20) : 1) * userPianoMicMul(r);
     if (r.attack > 0.002) { g.gain.setValueAtTime(0, when); g.gain.linearRampToValueAtTime(amp, when + r.attack); } else g.gain.setValueAtTime(amp, when);
     let node = src;
     if (r.cutoff > 0) {
