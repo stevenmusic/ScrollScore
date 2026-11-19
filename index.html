@@ -11960,7 +11960,14 @@ const USER_PIANO = { refRms: 0.081, budget: 1.0e9, conc: 6, raw: true, maxSrc: 1
    ② 走內建鋼琴同一條母帶:inDb → masterGain → PIANO_MASTER(30Hz 高通 + 低段/中低段只在堆積時才壓)→ loudnessComp → makeup → 手機喇叭補償 → 120Hz 以下單聲道 → masterBus;
       不經過 PIANO_TONE/PIANO_EQ/PIANO_WIDTH/殘響/房間聲/共鳴(那些是給 Salamander 的音色效果),沒有靜態 EQ。全部原生節點(iPhone 可用)。
    參數與量測見 CLAUDE.md「自己的音源:母帶處理」;window.USER_PIANO_MASTER_OVERRIDE 可覆寫({ on:false } 關掉) */
-const USER_PIANO_MASTER = Object.assign({ on: true, micDb: -6, inDb: -0.3 }, window.USER_PIANO_MASTER_OVERRIDE || {});
+/* 輕量母帶(USER_PIANO_MASTER.light,使用者 2026-11 用 300 Grand:「沒開母帶的聲音我比較喜歡」「確保聲音立體感,但不要讓聲音變硬」):
+   同一段母帶開/關的影片比:開的時候 250Hz 以下少 1~3dB(PIANO_MASTER 低段壓縮 + 30Hz 高通 + 頻譜對齊)、500~1k 與 4~8k 相對多約 1dB(硬)、
+   120Hz 以下收成單聲道後 20~250Hz 的左右差異從 −7~−9 變 −9~−21dB(低音的左右差異就是「被包住」的立體感)。
+   符合 light 的音源(只有 300 Grand,使用者指定)母帶開時改走:音量 trimDb → 一個慢起音、低比例的壓縮器(只在大聲處輕壓,讓最後的限幅器不用一直壓)
+   → masterBus;不經過 PIANO_MASTER/loudnessComp/頻譜對齊/120Hz 單聲道,音色與左右完全照原廠 */
+const USER_PIANO_MASTER = Object.assign({ on: true, micDb: -6, inDb: -0.3,
+  light: /300[ _-]?grand/i, lightTrimDb: -4.5, lightThr: -18, lightKnee: 10, lightRatio: 3, lightAtk: 0.03, lightRel: 0.3, lightMakeupDb: 0 }, window.USER_PIANO_MASTER_OVERRIDE || {});
+function userPianoLightMaster(U = userPiano){ const L = USER_PIANO_MASTER.light; return !!(L && U && L.test(String(U.sfzName || U.name || ""))); }
 function userPianoMasterOn(){
   if (!USER_PIANO_MASTER.on) return false;
   try { return localStorage.getItem("ss_userPianoMaster") !== "0"; } catch (e) { return true; }
@@ -12334,13 +12341,21 @@ function userPianoMatch(m, vel, pedalDown, trig, pick, U = userPiano){
 }
 function getUserPianoBus(){
   const on = userPianoMasterOn();   // 母帶處理(USER_PIANO_MASTER):開 = 走內建鋼琴同一條母帶(masterGain → PIANO_MASTER → loudnessComp → …);關 = 直接進 masterBus
-  if (userPiano.bus && userPiano.busCtx === audioCtx && userPiano.busOn === on && userPiano.busSpace === (userPianoSpace() > 0)) { if (userPiano.space) userPianoSpaceApply(); return userPiano.bus; }
+  const light = on && userPianoLightMaster();
+  if (userPiano.bus && userPiano.busCtx === audioCtx && userPiano.busOn === on && userPiano.busLight === light && userPiano.busSpace === (userPianoSpace() > 0)) { if (userPiano.space) userPianoSpaceApply(); return userPiano.bus; }
   const g = audioCtx.createGain();
   // 整個音源都寫同一個 pan(300 Grand 在 global 寫 pan=16)時只在這裡擺一次,不要每個錄音各一個 StereoPanner(很吃 CPU;結果一樣,都是線性的)
   let o = g; if (userPiano.commonPan) { const p = audioCtx.createStereoPanner(); p.pan.value = Math.max(-1, Math.min(1, userPiano.commonPan)); g.connect(p); o = p; }
-  const dest = on ? masterGain : masterBus;
+  let dest = on ? masterGain : masterBus;
+  if (light) {   // 輕量母帶:trim → 慢起音輕壓 → masterBus(見 USER_PIANO_MASTER 註解)
+    const M = USER_PIANO_MASTER, tr = audioCtx.createGain(), c = audioCtx.createDynamicsCompressor(), mk = audioCtx.createGain();
+    tr.gain.value = Math.pow(10, M.lightTrimDb / 20);
+    c.threshold.value = M.lightThr; c.knee.value = M.lightKnee; c.ratio.value = M.lightRatio; c.attack.value = M.lightAtk; c.release.value = M.lightRel;
+    mk.gain.value = Math.pow(10, M.lightMakeupDb / 20);
+    tr.connect(c); c.connect(mk); mk.connect(masterBus); dest = tr;
+  }
   // 頻譜對齊(USER_PIANO_TONE,母帶處理開著才接):圖形 EQ + 只動左右差的 side EQ(M/S,單聲道不變)
-  if (on && USER_PIANO_TONE.on && (!USER_PIANO_TONE.only || USER_PIANO_TONE.only.test(String(userPiano.sfzName || userPiano.name || "")))) {
+  if (on && !light && USER_PIANO_TONE.on && (!USER_PIANO_TONE.only || USER_PIANO_TONE.only.test(String(userPiano.sfzName || userPiano.name || "")))) {
     const N = userPianoToneNodes(); for (const n of N.eq) { o.connect(n); o = n; }
     const up = audioCtx.createGain(); up.channelCount = 2; up.channelCountMode = "explicit"; up.channelInterpretation = "speakers";
     const split = audioCtx.createChannelSplitter(2), merge = audioCtx.createChannelMerger(2);
@@ -12353,7 +12368,8 @@ function getUserPianoBus(){
     mid.connect(merge, 0, 0); mid.connect(merge, 0, 1); sx.connect(merge, 0, 0); sx.connect(neg); neg.connect(merge, 0, 1);
     o = merge; userPiano.toneNodes = Object.assign(N, { ctx: audioCtx });
   } else userPiano.toneNodes = null;
-  if (on) { g.gain.value = Math.pow(10, USER_PIANO_MASTER.inDb / 20); o.connect(dest); }
+  if (on && !light) { g.gain.value = Math.pow(10, USER_PIANO_MASTER.inDb / 20); o.connect(dest); }
+  else if (light) { g.gain.value = 1; o.connect(dest); }
   else { g.gain.value = 1; o.connect(dest); }
   // 空間感(USER_PIANO_SPACE,2026-11 使用者:「幫我加 300 grand 殘響」):內建鋼琴同一份真實音樂廳(hall.flac;非古典用短一點的版本)
   // + 房間聲(room.flac),並聯在乾聲旁邊,不碰音源本身的錄音;滑桿 0 = 不接(跟原廠一樣)
@@ -12367,7 +12383,7 @@ function getUserPianoBus(){
     userPiano.space = { hall, room, hw, rw, ctx: audioCtx };
     userPianoSpaceApply();
   } else userPiano.space = null;
-  userPiano.bus = g; userPiano.busCtx = audioCtx; userPiano.busOn = on; userPiano.busSpace = sp > 0;
+  userPiano.bus = g; userPiano.busCtx = audioCtx; userPiano.busOn = on; userPiano.busLight = light; userPiano.busSpace = sp > 0;
   userPianoToneApply();
   return g;
 }
@@ -12808,7 +12824,7 @@ async function userPianoLoadNeeded(alive, quiet, U = userPiano){
     console.log("自己的音源:力度層 " + vm.layers.map(l => l.lo + "-" + l.hi).join(" ") + (vm.map ? " · 這首力度 p5 " + vm.map.p5.toFixed(0) + " → " + vm.map.t5.toFixed(0) + "、p95 " + vm.map.p95.toFixed(0) + " → " + vm.map.t95.toFixed(0) : " · 不對應") + " · 各層響度 " + U.layerLoud.map(e => e ? (20 * Math.log10(e.rms)).toFixed(1) : "-").join(" / ") + " dB");
   }
   // 頻譜對齊用的音色表(只算一次;每首曲子照自己的音域/力度重新加權)
-  if (USER_PIANO_TONE.on && USER_PIANO_TONE.ref && !U.toneTab && (!USER_PIANO_TONE.only || USER_PIANO_TONE.only.test(String(U.sfzName || U.name || "")))) { try { await userPianoToneTable(U); } catch (e) { console.warn("自己的音源:頻譜量測失敗", e); } if (!alive()) return; }
+  if (USER_PIANO_TONE.on && USER_PIANO_TONE.ref && !U.toneTab && !userPianoLightMaster(U) && (!USER_PIANO_TONE.only || USER_PIANO_TONE.only.test(String(U.sfzName || U.name || "")))) { try { await userPianoToneTable(U); } catch (e) { console.warn("自己的音源:頻譜量測失敗", e); } if (!alive()) return; }
   if (U === userPiano) userPianoToneApply(U);
   if (!U.gain || U.gainPending) {
     const regs = userPianoMatch(60, 100, false, "attack", null, U).filter(r => U.files.has(r.path));
