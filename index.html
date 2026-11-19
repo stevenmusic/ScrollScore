@@ -822,6 +822,7 @@ body.exporting-active .empty-card{
 .cover-choice.busy .cover-thumb::after{content:"…";color:var(--muted)}
 #coverOverlay .btn{min-height:40px;justify-content:center}
 /* 專輯封面那一列(雜誌排版放在標題旁邊) */
+.cover-album[hidden]{display:none}
 .cover-album{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:8px;font-size:var(--fs-sm);color:var(--muted)}
 #coverOverlay .cover-album .btn{min-height:32px;height:32px;padding:0 12px;font-size:var(--fs-xs)}
 #coverOverlay.show{display:flex}
@@ -1177,7 +1178,7 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
     <div class="box">
       <div class="title" id="coverPickTitle" data-i18n="coverPickTitle">選擇封面樣式</div>
       <p class="share-sub" data-i18n="coverPickHint">點一下想要的那張就會存下來</p>
-      <div class="cover-album" id="coverAlbumRow">
+      <div class="cover-album" id="coverAlbumRow" hidden>   <!-- 專輯封面上傳先隱藏(使用者 2026-11:「先隱藏上傳圖片的功能」;程式保留,拿掉 hidden 即恢復) -->
         <span data-i18n="coverAlbumLabel">專輯封面</span>
         <button type="button" class="btn" id="coverAlbumBtn" data-i18n="coverAlbumPick">上傳圖片</button>
         <input type="file" id="coverAlbumFile" accept="image/*">
