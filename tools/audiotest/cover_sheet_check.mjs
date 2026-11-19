@@ -26,7 +26,10 @@ for (const [w, h] of SIZES) {
   for (const fmt of ["landscape", "portrait", "square"]) {
     await page.evaluate(fmt => { exportPrefs.format = fmt; openExportSheet(); }, fmt);
     await page.waitForTimeout(300);
+    if (process.env.TITLE) await page.evaluate(t => { $("exportTitleInput").value = t; }, process.env.TITLE);   // TITLE=測試用歌名
     await page.evaluate(fmt => { const b = document.querySelector(`#expFormatSeg [data-v="${fmt}"]`); if (b && b.getAttribute("aria-checked") !== "true") b.click(); $("coverBtn").click(); }, fmt);
+    // ALBUM=圖片路徑:上傳專輯封面(雜誌排版放在標題旁邊),等兩張重畫
+    if (process.env.ALBUM) { await page.waitForTimeout(300); await page.setInputFiles("#coverAlbumFile", path.resolve(process.env.ALBUM)); await page.waitForTimeout(500); }
     await page.waitForFunction(() => Array.from(document.querySelectorAll("#coverOverlay .cover-thumb img")).every(i => i.complete && i.naturalWidth > 0), null, { timeout: 30000 }).catch(() => {});
     await page.waitForTimeout(200);
     const r = await page.evaluate(() => {
@@ -47,6 +50,7 @@ for (const [w, h] of SIZES) {
     if (r.issues.length) bad++;
     console.log(`${w}x${h} ${fmt.padEnd(9)} box ${r.box.padEnd(9)} imgs ${r.imgs.padEnd(17)} 佔畫面 ${r.area}% ${r.issues.join(",")}`);
     if (shotDir) await page.screenshot({ path: path.join(shotDir, `cover-${w}x${h}-${fmt}.png`) });
+    if (shotDir && process.env.FULL) { const d = await page.evaluate(() => coverPick && coverPick.canvases.editorial ? coverPick.canvases.editorial.toDataURL("image/png") : null); if (d) fs.writeFileSync(path.join(shotDir, `editorial-${fmt}${process.env.TAG || ""}.png`), Buffer.from(d.split(",")[1], "base64")); }
     await page.evaluate(() => { $("coverCancel").click(); $("formatOverlay").classList.remove("show"); });
   }
   if (errs.length) { bad++; console.log("  錯誤:", errs.join(" | ")); }

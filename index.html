@@ -821,6 +821,9 @@ body.exporting-active .empty-card{
 .cover-thumb img:not([src]){visibility:hidden}
 .cover-choice.busy .cover-thumb::after{content:"…";color:var(--muted)}
 #coverOverlay .btn{min-height:40px;justify-content:center}
+/* 專輯封面那一列(雜誌排版放在標題旁邊) */
+.cover-album{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:8px;font-size:var(--fs-sm);color:var(--muted)}
+#coverOverlay .cover-album .btn{min-height:32px;height:32px;padding:0 12px;font-size:var(--fs-xs)}
 #coverOverlay.show{display:flex}
 #formatOverlay.show,#trackOverlay.show,#shareOverlay.show{display:flex}
 #formatOverlay .box,#trackOverlay .box,#shareOverlay .box,#coverOverlay .box{
@@ -1174,6 +1177,12 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
     <div class="box">
       <div class="title" id="coverPickTitle" data-i18n="coverPickTitle">選擇封面樣式</div>
       <p class="share-sub" data-i18n="coverPickHint">點一下想要的那張就會存下來</p>
+      <div class="cover-album" id="coverAlbumRow">
+        <span data-i18n="coverAlbumLabel">專輯封面</span>
+        <button type="button" class="btn" id="coverAlbumBtn" data-i18n="coverAlbumPick">上傳圖片</button>
+        <input type="file" id="coverAlbumFile" accept="image/*">
+        <button type="button" class="btn" id="coverAlbumClear" hidden data-i18n="removeBtn">移除</button>
+      </div>
       <div class="cover-choices">
         <button type="button" class="cover-choice" data-v="editorial"><span class="cover-thumb"><img alt=""></span><b data-i18n="coverStyleEditorial">雜誌排版</b></button>
         <button type="button" class="cover-choice" data-v="card"><span class="cover-thumb"><img alt=""></span><b data-i18n="coverStyleCard">置中卡片</b></button>
@@ -1436,6 +1445,9 @@ const I18N = {
     coverPickTitle: "選擇封面樣式",
     coverPickHint: "點一下想要的那張就會存下來",
     coverStyleCard: "置中卡片",
+    coverAlbumLabel: "專輯封面",
+    coverAlbumPick: "上傳圖片",
+    coverAlbumChange: "更換",
     coverStyleEditorial: "雜誌排版",
     coverBtnTitle: "用目前的設定做影片封面/縮圖,兩種樣式選一張(橫式 1280×720,YouTube 縮圖尺寸)",
     coverBusy: "產生中…",
@@ -1706,6 +1718,9 @@ const I18N = {
     coverPickTitle: "Choose a cover style",
     coverPickHint: "Tap the one you like to save it",
     coverStyleCard: "Centered card",
+    coverAlbumLabel: "Album art",
+    coverAlbumPick: "Upload",
+    coverAlbumChange: "Change",
     coverStyleEditorial: "Magazine",
     coverBtnTitle: "Make a cover / thumbnail from the current preview (landscape 1280×720, the YouTube thumbnail size)",
     coverBusy: "Working…",
@@ -2547,6 +2562,7 @@ async function loadScoreFile(file){
     $("exportTitleInput").value = parsed.scoreTitle || file.name.replace(SCORE_FILE_RE, "");
     // 副標題(使用者通常打演出者/作曲者):換一首就不能留著上一首的;樂譜有寫作曲者就先帶入,使用者照樣可以改
     $("exportSubtitleInput").value = scoreCreatorFromXml(xmlText);
+    coverAlbumImg = null;   // 專輯封面跟著曲子,換曲子就清掉
     arpMap = parsed.arpMap;
     articEntries = buildSortedEntries(articMap);
     arpEntries = buildSortedEntries(arpMap);
@@ -15899,7 +15915,10 @@ async function coverEditorial(cfg){
   ctx.fillStyle = paper; ctx.fillRect(0, 0, W, H);
   const ink = exportInkColor(hlCursorColor());
   // 樂譜區:從畫面裡切樂譜那一段(播放軸附近開始),放大填滿
-  const area = land ? { x: W * 0.46, y: 0, w: W * 0.54, h: H } : { x: 0, y: 0, w: W, h: H * 0.56 };
+  // 有專輯封面(coverAlbumImg,使用者 2026-11:「放上原專輯封面在標題旁邊,上傳自動套用模板」)時:橫式左邊 = 封面 + 標題並排、樂譜縮到右邊 40%;
+  // 直式/方形上面樂譜、下面 = 封面 + 標題並排
+  const alb = coverAlbumImg;
+  const area = land ? (alb ? { x: W * 0.64, y: 0, w: W * 0.36, h: H } : { x: W * 0.46, y: 0, w: W * 0.54, h: H }) : { x: 0, y: 0, w: W, h: H * 0.56 };
   const sh = Math.max(1, bot - top), sw = Math.min(W, sh * area.w / area.h);
   const sx = Math.max(0, Math.min(W - sw, cropX != null ? cropX : W * 0.2 - sw * 0.05));
   ctx.save(); ctx.beginPath(); ctx.rect(area.x, area.y, area.w, area.h); ctx.clip();
@@ -15917,11 +15936,18 @@ async function coverEditorial(cfg){
   ctx.fillStyle = fade;
   if (land) ctx.fillRect(area.x, 0, fw, H); else ctx.fillRect(0, area.h - H * 0.08, W, H * 0.08);
   // 文字區
-  const tx = land ? W * 0.07 : W * 0.08, tw = land ? W * 0.35 : W * 0.84;   // 橫式文字不要伸進樂譜的淡出區
+  let tx = land ? W * 0.07 : W * 0.08, tw = land ? W * 0.35 : W * 0.84;   // 橫式文字不要伸進樂譜的淡出區
+  let albBox = null;
+  if (alb) {
+    const s0 = land ? H * 0.46 : Math.min((H - area.h) * 0.74, W * 0.4), ax = W * (land ? 0.055 : 0.07);
+    albBox = { x: Math.round(ax), y: Math.round(land ? (H - s0) / 2 : area.h + (H - area.h - s0) / 2), s: Math.round(s0) };
+    tx = ax + s0 + W * (land ? 0.035 : 0.045);
+    tw = (land ? area.x - W * 0.03 : W * 0.93) - tx;
+  }
   // 盡量兩行(字可以縮到起始的六成),真的放不下才三行
   // 標題放大(2026-11):橫式 0.15 → 0.19、直式/方形 0.13 → 0.18;直式下半部以前留一大片空白
-  const start = Math.round(ref * (land ? 0.19 : 0.18));
-  let t = cfg.title ? fitCoverText(ctx, cfg.title, tw, 2, start, Math.round(start * 0.6), 700) : { size: Math.round(ref * 0.1), lines: [] };
+  const start = Math.round(ref * (alb ? (land ? 0.17 : 0.15) : (land ? 0.19 : 0.18)));
+  let t = cfg.title ? fitCoverText(ctx, cfg.title, tw, 2, start, Math.round(start * (alb ? (/^[^\sA-Za-z]+$/.test(cfg.title) ? 0.38 : 0.5) : 0.6)), 700) : { size: Math.round(ref * 0.1), lines: [] };   // 有封面時文字欄比較窄:字可以小一點,盡量一行不要把歌名拆開(使用者:「歌名換行很難看」);全中文、沒有空格的歌名(「我們的愛情故事」)中間沒有自然的斷點,縮到起始的 38% 都還放得下就一行
   if (cfg.title && !t.ok) t = fitCoverText(ctx, cfg.title, tw, 3, start, Math.round(ref * 0.06), 700);
   const barH = Math.max(4, Math.round(ref * 0.008)), barW = Math.round(ref * 0.09);
   const blockOf = t => { const sub = Math.round(Math.max(ref * 0.034, t.size * 0.34)); return barH + t.size * 0.55 + t.lines.length * Math.round(t.size * 1.14) + (cfg.subtitle ? t.size * 0.3 + sub : 0); };
@@ -15930,7 +15956,15 @@ async function coverEditorial(cfg){
   for (let st = t.size; cfg.title && blockOf(t) > availH && st > ref * 0.04; ) { st = Math.floor(st * 0.92); t = fitCoverText(ctx, cfg.title, tw, 3, st, st, 700); }
   const sub = Math.round(Math.max(ref * 0.034, t.size * 0.34)), lineH = Math.round(t.size * 1.14);
   const blockH = blockOf(t);
-  let y = land ? Math.round((H - blockH) / 2) : Math.round(area.h + (H - area.h - blockH) / 2);
+  let y = albBox ? Math.round(albBox.y + (albBox.s - blockH) / 2) : land ? Math.round((H - blockH) / 2) : Math.round(area.h + (H - area.h - blockH) / 2);   // 有封面:文字跟封面上下置中對齊
+  if (albBox) {
+    // 封面:裁成正方形(取中間)、小圓角、柔和的陰影
+    const { x: ax, y: ay, s: as } = albBox, r = Math.max(2, Math.round(ref * 0.012));
+    const iw = alb.width || alb.naturalWidth, ih = alb.height || alb.naturalHeight, c = Math.min(iw, ih);
+    const rr = () => { ctx.beginPath(); ctx.moveTo(ax + r, ay); ctx.arcTo(ax + as, ay, ax + as, ay + as, r); ctx.arcTo(ax + as, ay + as, ax, ay + as, r); ctx.arcTo(ax, ay + as, ax, ay, r); ctx.arcTo(ax, ay, ax + as, ay, r); ctx.closePath(); };
+    ctx.save(); ctx.shadowColor = "rgba(30,26,20,0.32)"; ctx.shadowBlur = ref * 0.035; ctx.shadowOffsetY = ref * 0.012; rr(); ctx.fillStyle = "#FFFFFF"; ctx.fill(); ctx.restore();
+    ctx.save(); rr(); ctx.clip(); ctx.imageSmoothingQuality = "high"; ctx.drawImage(alb, (iw - c) / 2, (ih - c) / 2, c, c, ax, ay, as, as); ctx.restore();
+  }
   ctx.fillStyle = ink; ctx.fillRect(tx, y, barW, barH); y += barH + Math.round(t.size * 0.55);
   ctx.textAlign = "left"; ctx.textBaseline = "top";
   ctx.font = coverFont(700, t.size); ctx.fillStyle = "#1E1A14";
@@ -15965,6 +15999,7 @@ async function renderCoverChoices(baseCfg){
   const cfg = baseCfg;
   const ov = $("coverOverlay"), token = {};
   coverPick = { token, cfg, canvases: {} };
+  coverAlbumUi();
   for (const b of ov.querySelectorAll(".cover-choice")) {
     b.classList.add("busy"); b.disabled = true;
     b.setAttribute("aria-checked", String(b.dataset.v === (COVER_STYLES[exportPrefs.cover] ? exportPrefs.cover : "editorial")));
@@ -15997,6 +16032,26 @@ for (const b of document.querySelectorAll("#coverOverlay .cover-choice")) b.addE
   coverPick = null;
 });
 $("coverCancel").addEventListener("click", () => { $("coverOverlay").classList.remove("show"); coverPick = null; });
+/* 專輯封面(只放在這個分頁的記憶體;換一首樂譜就清掉):上傳後兩種樣式自動重畫,雜誌排版放在標題旁邊 */
+var coverAlbumImg = null;   // var:載入樂譜時(可能比這行早執行)會清掉它
+function coverAlbumUi(){
+  $("coverAlbumBtn").textContent = T(coverAlbumImg ? "coverAlbumChange" : "coverAlbumPick");
+  $("coverAlbumClear").hidden = !coverAlbumImg;
+}
+$("coverAlbumBtn").addEventListener("click", () => $("coverAlbumFile").click());
+$("coverAlbumFile").addEventListener("change", async e => {
+  const f = e.target.files && e.target.files[0]; e.target.value = "";
+  if (!f) return;
+  try {
+    let img;
+    try { img = await createImageBitmap(f); }
+    catch (err) { img = await new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = URL.createObjectURL(f); }); }
+    coverAlbumImg = img; exportPrefs.cover = "editorial"; saveExportPrefs();   // 上傳就是要用雜誌排版
+  } catch (err) { setStatus(T("exportFailed", { msg: err.message || err })); return; }
+  coverAlbumUi();
+  if (coverPick) renderCoverChoices(coverPick.cfg);
+});
+$("coverAlbumClear").addEventListener("click", () => { coverAlbumImg = null; coverAlbumUi(); if (coverPick) renderCoverChoices(coverPick.cfg); });
 /* 封面選擇框的縮圖大小(使用者反映,2026-10:平板上看起來很小——以前框固定 640px 寬、兩張並排,iPad 橫放每張只有約 280px)。
    依畫面大小與封面比例,比較「並排」與「上下排」兩種排法,取縮圖較大的那種,縮圖盡量放大;
    標題、說明、樣式名稱、取消鈕都量實際高度扣掉,整個框不超過畫面的 94% 寬、90% 高,不用捲動 */
