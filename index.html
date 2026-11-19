@@ -12092,13 +12092,13 @@ function userPianoToneNodes(){
 // 讓整串 EQ 在各頻帶中心的實際響應對到目標(相鄰的峰形會互相疊加)
 function toneFitGains(nodes, target){
   const T = USER_PIANO_TONE, fr = new Float32Array(T.bands.map(f => Math.min(f, audioCtx.sampleRate * 0.45)));
-  const live = nodes.map((n, j) => n && target[j] != null ? n : null), g = target.map(x => x || 0);
+  const live = nodes.map((n, j) => n && target[j] != null ? n : null), g = target.map(x => isFinite(x) ? x : 0);   // 量不到的頻帶(0/0)當 0,不讓 NaN 進到濾波器把整條匯流排變成沒聲音
   const resp = () => { const tot = new Float64Array(fr.length); const mag = new Float32Array(fr.length), ph = new Float32Array(fr.length);
     for (const n of live) if (n) { n.getFrequencyResponse(fr, mag, ph); for (let i = 0; i < fr.length; i++) tot[i] += 20 * Math.log10(mag[i]); } return tot; };
   for (let it = 0; it < 6; it++) {
     live.forEach((n, j) => { if (n) n.gain.value = g[j]; });
     const r = resp();
-    live.forEach((n, j) => { if (n) g[j] = Math.max(-12, Math.min(12, g[j] + 0.8 * (target[j] - r[j]))); });
+    live.forEach((n, j) => { if (n) { const d = (isFinite(target[j]) ? target[j] : 0) - r[j]; g[j] = isFinite(d) ? Math.max(-12, Math.min(12, g[j] + 0.8 * d)) : 0; } });
   }
   live.forEach((n, j) => { if (n) n.gain.value = g[j]; });
 }
