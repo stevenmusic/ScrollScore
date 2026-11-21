@@ -11981,9 +11981,14 @@ const USER_PIANO = { refRms: 0.081, budget: 1.0e9, conc: 6, raw: true, maxSrc: 1
    同一段母帶開/關的影片比:開的時候 250Hz 以下少 1~3dB(PIANO_MASTER 低段壓縮 + 30Hz 高通 + 頻譜對齊)、500~1k 與 4~8k 相對多約 1dB(硬)、
    120Hz 以下收成單聲道後 20~250Hz 的左右差異從 −7~−9 變 −9~−21dB(低音的左右差異就是「被包住」的立體感)。
    符合 light 的音源(只有 300 Grand,使用者指定)母帶開時改走:音量 trimDb → 一個慢起音、低比例的壓縮器(只在大聲處輕壓,讓最後的限幅器不用一直壓)
-   → masterBus;不經過 PIANO_MASTER/loudnessComp/頻譜對齊/120Hz 單聲道,音色與左右完全照原廠 */
+   → masterBus;不經過 PIANO_MASTER/loudnessComp/頻譜對齊/120Hz 單聲道,音色與左右完全照原廠
+   第二版(使用者 2026-11 用〈欲落未落〉無母帶影片:「這個音色比打開母帶還好聽」「更立體、飽滿,但不要糊」,試聽 A/B/C 選 B):
+   壓縮器拿掉(lightComp false;它在大聲處壓 2~3dB,聲音變扁),改成 音量 trimDb → 140Hz 低頻架 +1.5dB(琴身)→ 350Hz −2dB Q1(會糊的那層)
+   → 只動左右差的加寬:side 的 300~3kHz 帶通 × 1.35(左右相關 0.34 → 0.10,單聲道完全不變)→ masterBus。2kHz 以上不補(會變硬)。
+   匯出照樣標準化到 −14 LUFS(那首無母帶時就是 −14.1,限幅器只碰到 3.6% 的時間) */
 const USER_PIANO_MASTER = Object.assign({ on: true, micDb: -6, inDb: -0.3,
-  light: /300[ _-]?grand/i, lightTrimDb: -4.5, lightThr: -18, lightKnee: 10, lightRatio: 3, lightAtk: 0.03, lightRel: 0.3, lightMakeupDb: 0 }, window.USER_PIANO_MASTER_OVERRIDE || {});
+  light: /300[ _-]?grand/i, lightTrimDb: 0, lightComp: false, lightThr: -18, lightKnee: 10, lightRatio: 3, lightAtk: 0.03, lightRel: 0.3, lightMakeupDb: 0,
+  lightLowF: 140, lightLowDb: 1.5, lightMudF: 350, lightMudDb: -2, lightMudQ: 1, lightWide: 1.35, lightWideLo: 300, lightWideHi: 3000 }, window.USER_PIANO_MASTER_OVERRIDE || {});
 function userPianoLightMaster(U = userPiano){ const L = USER_PIANO_MASTER.light; return !!(L && U && L.test(String(U.sfzName || U.name || ""))); }
 function userPianoMasterOn(){
   if (!USER_PIANO_MASTER.on) return false;
@@ -12365,11 +12370,31 @@ function getUserPianoBus(){
   let o = g; if (userPiano.commonPan) { const p = audioCtx.createStereoPanner(); p.pan.value = Math.max(-1, Math.min(1, userPiano.commonPan)); g.connect(p); o = p; }
   let dest = on ? masterGain : masterBus;
   if (light) {   // 輕量母帶:trim → 慢起音輕壓 → masterBus(見 USER_PIANO_MASTER 註解)
-    const M = USER_PIANO_MASTER, tr = audioCtx.createGain(), c = audioCtx.createDynamicsCompressor(), mk = audioCtx.createGain();
+    const M = USER_PIANO_MASTER, tr = audioCtx.createGain(), mk = audioCtx.createGain();
     tr.gain.value = Math.pow(10, M.lightTrimDb / 20);
-    c.threshold.value = M.lightThr; c.knee.value = M.lightKnee; c.ratio.value = M.lightRatio; c.attack.value = M.lightAtk; c.release.value = M.lightRel;
     mk.gain.value = Math.pow(10, M.lightMakeupDb / 20);
-    tr.connect(c); c.connect(mk); mk.connect(masterBus); dest = tr;
+    let x = tr;
+    if (M.lightComp) {
+      const c = audioCtx.createDynamicsCompressor();
+      c.threshold.value = M.lightThr; c.knee.value = M.lightKnee; c.ratio.value = M.lightRatio; c.attack.value = M.lightAtk; c.release.value = M.lightRel;
+      x.connect(c); x = c;
+    }
+    const bq = (type, f, gain, q) => { const b = audioCtx.createBiquadFilter(); b.type = type; b.frequency.value = f; if (gain !== undefined) b.gain.value = gain; if (q !== undefined) b.Q.value = q; return b; };
+    if (M.lightLowDb) { const b = bq("lowshelf", M.lightLowF, M.lightLowDb); x.connect(b); x = b; }
+    if (M.lightMudDb) { const b = bq("peaking", M.lightMudF, M.lightMudDb, M.lightMudQ); x.connect(b); x = b; }
+    if (M.lightWide && M.lightWide !== 1) {   // L += k·BP(S)、R −= k·BP(S),S = (L−R)/2:左+右完全不變
+      const up = audioCtx.createGain(); up.channelCount = 2; up.channelCountMode = "explicit"; up.channelInterpretation = "speakers";
+      const split = audioCtx.createChannelSplitter(2), merge = audioCtx.createChannelMerger(2);
+      const sL = audioCtx.createGain(), sR = audioCtx.createGain(), side = audioCtx.createGain(), neg = audioCtx.createGain();
+      side.channelCount = 1; side.channelCountMode = "explicit";
+      sL.gain.value = 0.5 * (M.lightWide - 1); sR.gain.value = -0.5 * (M.lightWide - 1); neg.gain.value = -1;
+      const hp = bq("highpass", M.lightWideLo, undefined, -3.0103), lp = bq("lowpass", M.lightWideHi, undefined, -3.0103);
+      x.connect(up); up.connect(split); split.connect(sL, 0); split.connect(sR, 1); sL.connect(side); sR.connect(side);
+      side.connect(hp); hp.connect(lp);
+      split.connect(merge, 0, 0); split.connect(merge, 1, 1); lp.connect(merge, 0, 0); lp.connect(neg); neg.connect(merge, 0, 1);
+      x = merge;
+    }
+    x.connect(mk); mk.connect(masterBus); dest = tr;
   }
   // 頻譜對齊(USER_PIANO_TONE,母帶處理開著才接):圖形 EQ + 只動左右差的 side EQ(M/S,單聲道不變)
   if (on && !light && USER_PIANO_TONE.on && (!USER_PIANO_TONE.only || USER_PIANO_TONE.only.test(String(userPiano.sfzName || userPiano.name || "")))) {

@@ -54,6 +54,7 @@ await page.addInitScript(([taps, fixedSec]) => {
 // 環境變數:SPEAKER=1/0/ext 強制手機喇叭補償開/關/外接耳機等的低音補回(window.SPEAKER_PROFILE_OVERRIDE);NOWK=1 模擬 iPhone 沒有 AudioWorklet
 if (process.env.SPEAKER) await page.addInitScript(v => { window.SPEAKER_PROFILE_OVERRIDE = v === "ext" ? "external" : (v === "1"); }, process.env.SPEAKER);
 if (process.env.NOWK) await page.addInitScript(() => { window.FORCE_NO_WORKLET = true; });
+if (process.env.UPM) await page.addInitScript(v => { window.USER_PIANO_MASTER_OVERRIDE = JSON.parse(v); }, process.env.UPM);
 await page.goto(`http://127.0.0.1:${port}/index.html${opt("sfzdir", null) ? "?pro" : ""}`);
 await page.waitForFunction(() => typeof loadScoreFile === "function");
 const inst = opt("inst", null);
