@@ -1068,6 +1068,8 @@ body.score-loaded.header-export-hidden #exportHdrBtn{display:none}
       </label>
       <label class="user-space" id="userPianoSpaceRow" hidden data-i18n-attr="title:userPianoSpaceTitle"><span data-i18n="userPianoSpace">空間感</span>
         <input type="range" id="userPianoSpace" min="0" max="100" step="5" value="0"><span id="userPianoSpaceVal">0</span></label>
+      <label class="user-space" id="userPianoAlignRow" hidden data-i18n-attr="title:userPianoAlignTitle"><span data-i18n="userPianoAlign">左右對齊</span>
+        <select id="userPianoAlign"><option value="0" data-i18n="userPianoAlignOff">原始</option><option value="0.65" data-i18n="userPianoAlignPart">部分</option><option value="1" data-i18n="userPianoAlignFull">完全</option></select></label>
       <span id="userPianoInfo" class="switch-sub"></span>
       <input type="file" id="userPianoDir" webkitdirectory directory multiple hidden>
     </div>
@@ -1610,7 +1612,7 @@ const I18N = {
     statusDrumKitReady: "鼓音色就緒",
     statusLoadingPiano: "載入鋼琴音色中…{pct}%",
     statusPianoReady: "鋼琴已就緒",
-    userPianoLabel: "自己的音源", userPianoMaster: "母帶處理", userPianoSpace: "空間感", userPianoSpaceTitle: "加上真實音樂廳與房間的殘響(跟內建鋼琴同一份錄音),不改音源本身的聲音;0 = 照原廠,50 = 跟內建鋼琴一樣", userPianoMasterTitle: "打開:後方/房間麥克風降一點(比較乾淨),再走跟內建鋼琴一樣的母帶(低音尖峰控制、響度、手機喇叭補償);關掉:照 .sfz 原廠聲音直接輸出", userPianoPick: "選擇 SFZ 資料夾", userPianoOff: "改回內建", userPianoSfzAria: "選擇 SFZ 檔", userPianoMemAria: "自己的音源可以用多少記憶體", userPianoMemAuto: "記憶體:自動({gb} GB)", userPianoMemGB: "記憶體 {gb} GB", userPianoTrimmed: "。記憶體上限放不下完整錄音,部分長音的尾巴被截短,可以調高記憶體上限(太高可能讓分頁當掉)",
+    userPianoLabel: "自己的音源", userPianoMaster: "母帶處理", userPianoAlign: "左右對齊", userPianoAlignOff: "原始", userPianoAlignPart: "部分", userPianoAlignFull: "完全", userPianoAlignTitle: "兩支分開擺的麥克風錄的音源,同一個音到左右的時間差會讓部分頻率互相抵消(手機上變薄、耳機上中間空空的)。對齊 = 每個錄音載入時把左右的時間差修掉;部分 = 修掉約三分之二,保留一點空間感", userPianoSpace: "空間感", userPianoSpaceTitle: "加上真實音樂廳與房間的殘響(跟內建鋼琴同一份錄音),不改音源本身的聲音;0 = 照原廠,50 = 跟內建鋼琴一樣", userPianoMasterTitle: "打開:後方/房間麥克風降一點(比較乾淨),再走跟內建鋼琴一樣的母帶(低音尖峰控制、響度、手機喇叭補償);關掉:照 .sfz 原廠聲音直接輸出", userPianoPick: "選擇 SFZ 資料夾", userPianoOff: "改回內建", userPianoSfzAria: "選擇 SFZ 檔", userPianoMemAria: "自己的音源可以用多少記憶體", userPianoMemAuto: "記憶體:自動({gb} GB)", userPianoMemGB: "記憶體 {gb} GB", userPianoTrimmed: "。記憶體上限放不下完整錄音,部分長音的尾巴被截短,可以調高記憶體上限(太高可能讓分頁當掉)",
     userPianoReady: "自己的音源已就緒({name})", userPianoNoSfz: "資料夾裡找不到 .sfz 檔", userPianoNoRegions: "這個 .sfz 裡沒有可用的取樣",
     userPianoLoading: "讀取音源中…", userPianoInfo: "{name}:{n} 個取樣區域{ped}(檔案只在這台電腦,不會上傳;重新整理後要再選一次)", userPianoPed: ",有踩踏板取樣", userPianoFail: "讀取失敗:{msg}", userPianoReselect: "上次用的是「{name}」。重新整理後要再選一次資料夾,現在是內建鋼琴。", expToneUser: "鋼琴音色:自己的音源({name})", expToneBuiltin: "鋼琴音色:內建",
     statusExportRangeInvalid: "匯出區間不正確,請確認開始/結束時間(結束需晚於開始至少0.5秒)",
@@ -1882,7 +1884,7 @@ const I18N = {
     statusDrumKitReady: "Drum sounds ready",
     statusLoadingPiano: "Loading piano sounds… {pct}%",
     statusPianoReady: "Piano ready",
-    userPianoLabel: "Own library", userPianoMaster: "Mastering", userPianoSpace: "Space", userPianoSpaceTitle: "Adds real concert-hall and room reverb (the same recordings as the built-in piano) without changing the library itself; 0 = as shipped, 50 = same as the built-in piano", userPianoMasterTitle: "On: lowers rear/room microphones a little (cleaner), then uses the same mastering as the built-in piano (bass peak control, loudness, phone speaker compensation). Off: plays the .sfz exactly as shipped", userPianoPick: "Choose SFZ folder", userPianoOff: "Use built-in", userPianoSfzAria: "Choose SFZ file", userPianoMemAria: "How much memory your library may use", userPianoMemAuto: "Memory: auto ({gb} GB)", userPianoMemGB: "Memory {gb} GB", userPianoTrimmed: ". The full recordings don't fit in the memory limit, so some long tails are shortened; raise the limit (too high may crash the tab)",
+    userPianoLabel: "Own library", userPianoMaster: "Mastering", userPianoAlign: "L/R align", userPianoAlignOff: "Original", userPianoAlignPart: "Partial", userPianoAlignFull: "Full", userPianoAlignTitle: "Libraries recorded with a spaced microphone pair reach left and right at slightly different times, which cancels some frequencies (thin on phones, hollow on headphones). Align removes that time difference from every recording as it loads; Partial removes about two thirds and keeps some spaciousness", userPianoSpace: "Space", userPianoSpaceTitle: "Adds real concert-hall and room reverb (the same recordings as the built-in piano) without changing the library itself; 0 = as shipped, 50 = same as the built-in piano", userPianoMasterTitle: "On: lowers rear/room microphones a little (cleaner), then uses the same mastering as the built-in piano (bass peak control, loudness, phone speaker compensation). Off: plays the .sfz exactly as shipped", userPianoPick: "Choose SFZ folder", userPianoOff: "Use built-in", userPianoSfzAria: "Choose SFZ file", userPianoMemAria: "How much memory your library may use", userPianoMemAuto: "Memory: auto ({gb} GB)", userPianoMemGB: "Memory {gb} GB", userPianoTrimmed: ". The full recordings don't fit in the memory limit, so some long tails are shortened; raise the limit (too high may crash the tab)",
     userPianoReady: "Own piano ready ({name})", userPianoNoSfz: "No .sfz file in this folder", userPianoNoRegions: "No usable samples in this .sfz",
     userPianoLoading: "Reading library…", userPianoInfo: "{name}: {n} regions{ped} (files stay on this computer; choose again after reloading)", userPianoPed: ", with pedal-down samples", userPianoFail: "Could not read: {msg}", userPianoReselect: "Last time you used “{name}”. Choose the folder again after reloading; the built-in piano is playing now.", expToneUser: "Piano sound: own library ({name})", expToneBuiltin: "Piano sound: built-in",
     statusExportRangeInvalid: "Invalid export range — check start/end times (end must be at least 0.5s after start)",
@@ -9264,6 +9266,7 @@ function userPianoUiUpdate(){
   $("userPianoOff").hidden = !on;
   $("userPianoMasterRow").hidden = !on;
   $("userPianoSpaceRow").hidden = !on;
+  $("userPianoAlignRow").hidden = !on;
   const sel = $("userPianoSfz");
   sel.hidden = !(on && userPiano.sfzList.length > 1);
   if (on) {
@@ -9319,6 +9322,10 @@ function initUserPianoUi(){
   const spc = $("userPianoSpace"), spv = $("userPianoSpaceVal");
   spc.value = userPianoSpace(); spv.textContent = spc.value;
   spc.addEventListener("input", () => { spv.textContent = spc.value; try { localStorage.setItem("ss_userPianoSpace", spc.value); } catch (e) {} if (userPiano) { if ((+spc.value > 0) === !!userPiano.busSpace) userPianoSpaceApply(); } });
+  // 左右對齊(USER_PIANO_ALIGN):記在 ss_userPianoAlign;改了就把已解碼的錄音丟掉、照新設定重讀
+  const aln = $("userPianoAlign");
+  aln.value = String(userPianoAlignAmt());
+  aln.addEventListener("change", () => { try { if (+aln.value > 0) localStorage.setItem("ss_userPianoAlign", aln.value); else localStorage.removeItem("ss_userPianoAlign"); } catch (e) {} if (userPiano) { userPiano.buf.clear(); userPiano.alignStats = null; userPianoReload(); } });
   mem.addEventListener("change", () => { try { if (mem.value) localStorage.setItem("ss_userPianoMem", mem.value); else localStorage.removeItem("ss_userPianoMem"); } catch (e) {} if (userPiano) userPianoReload(); });
 }
 
@@ -12474,6 +12481,55 @@ function userPianoXLag(pa, pb, U = userPiano){
   }
   U.xlag.set(k, out); return out;
 }
+/* 左右對齊(USER_PIANO_ALIGN,使用者 2026-11 用 300 Grand:「音聽起來裡面是空心的」「手機上轟」;設定「左右對齊」原始/部分/完全,預設原始):
+   300 Grand 是兩支分開擺的麥克風(琴外 AB),同一個音到左右差 1.5~3.3ms,某些頻率左右相反 → 單聲道(手機)抵消:
+   A2 250~500Hz −6.7dB、C4 500~1k −9.6dB、C6 基音 500~2k −13.2dB(左右相關 −0.66/−0.78/−0.91);耳機上是「中間空空的」。
+   每個錄音解碼時量左右的時間差(起音後 win 秒、60~2kHz、±maxMs 內找互相關最大),把早到的那邊延後 × 設定的比例(部分 0.65、完全 1)。
+   對齊後(使用者傳的真實錄音)C6 −13.2 → −0.1dB、C4 −9.6 → −0.9、A2 −6.7 → −1.0;同一種錄音不同力度量出來的時間差一致(放鍵聲 1.50~1.72ms),
+   琴音與放鍵聲方向相反(發聲位置不同),所以每個錄音各自量。太短(< minSec)、量不準(對齊後相關 < minCorr、比原本好不到 minGain)的照原樣 */
+const USER_PIANO_ALIGN = Object.assign({ maxMs: 4, win: 0.5, minSec: 0.2, minCorr: 0.3, minGain: 0.1, lo: 60, hi: 2000 }, window.USER_PIANO_ALIGN_OVERRIDE || {});
+function userPianoAlignAmt(){
+  if (USER_PIANO_ALIGN.amt != null) return USER_PIANO_ALIGN.amt;   // 測試用(window.USER_PIANO_ALIGN_OVERRIDE {amt})
+  try { const v = parseFloat(localStorage.getItem("ss_userPianoAlign") || "0"); return isFinite(v) ? Math.max(0, Math.min(1, v)) : 0; } catch (e) { return 0; }
+}
+function userBufAlign(b, amt, U){
+  const X = USER_PIANO_ALIGN;
+  if (!(amt > 0) || b.numberOfChannels < 2) return b;
+  const sr = b.sampleRate, len = b.length;
+  if (len < X.minSec * sr) return b;
+  const L0 = b.getChannelData(0), R0 = b.getChannelData(1);
+  let pk = 0; const scan = Math.min(len, Math.round(3 * sr));
+  for (let i = 0; i < scan; i++) { const a = Math.abs(L0[i]) + Math.abs(R0[i]); if (a > pk) pk = a; }
+  if (!(pk > 0)) return b;
+  let on = 0; while (on < scan && Math.abs(L0[on]) + Math.abs(R0[on]) < pk * 0.1) on++;
+  const M = Math.round(X.maxMs / 1000 * sr), n = Math.min(len - on, Math.round(X.win * sr));
+  if (n < 4 * M) return b;
+  // 60Hz 高通 + 2kHz 低通(二階 Butterworth,RBJ)
+  const biq = (x, type, f) => {
+    const w = 2 * Math.PI * f / sr, c = Math.cos(w), al = Math.sin(w) / (2 * Math.SQRT1_2);
+    const b0 = type === "hp" ? (1 + c) / 2 : (1 - c) / 2, b1 = type === "hp" ? -(1 + c) : 1 - c, a0 = 1 + al, a1 = -2 * c, a2 = 1 - al;
+    const y = new Float32Array(x.length); let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+    for (let i = 0; i < x.length; i++) { const v = (b0 * x[i] + b1 * x1 + b0 * x2 - a1 * y1 - a2 * y2) / a0; x2 = x1; x1 = x[i]; y2 = y1; y1 = v; y[i] = v; }
+    return y;
+  };
+  const L = biq(biq(L0.subarray(on, on + n), "hp", X.lo), "lp", X.hi), R = biq(biq(R0.subarray(on, on + n), "hp", X.lo), "lp", X.hi);
+  let eL = 0, eR = 0; for (let i = 0; i < n; i++) { eL += L[i] * L[i]; eR += R[i] * R[i]; }
+  const nrm = Math.sqrt(eL * eR) || 1;
+  const corr = d => { let s = 0; const a = Math.max(0, -d), e = Math.min(n, n - d); for (let i = a; i < e; i++) s += L[i + d] * R[i]; return s / nrm; };   // > 0:L 晚 d 個取樣
+  let best = -2, bd = 0;
+  for (let d = -M; d <= M; d += 2) { const c = corr(d); if (c > best) { best = c; bd = d; } }
+  for (let d = bd - 2; d <= bd + 2; d++) { const c = corr(d); if (c > best) { best = c; bd = d; } }
+  const c0 = corr(0), st = U ? (U.alignStats = U.alignStats || { n: 0, done: 0, ms: [] }) : null;
+  if (st) st.n++;
+  if (best < X.minCorr || best - c0 < X.minGain) return b;
+  const s = Math.round(bd * amt);
+  if (!s) return b;
+  const D = s > 0 ? R0 : L0, k = Math.abs(s);   // 早到的那邊延後
+  D.copyWithin(k, 0, len - k); D.fill(0, 0, k);
+  if (st) { st.done++; st.ms.push(s / sr * 1000); }
+  b.__alignMs = s / sr * 1000;
+  return b;
+}
 /* 每 1024 個取樣的峰值(所有聲道),給「聽不到的尾巴不播」用 */
 function userBufEnv(b){
   const blk = 1024, n = Math.ceil(b.length / blk), env = new Float32Array(n);
@@ -12842,6 +12898,7 @@ async function userPianoLoadNeeded(alive, quiet, U = userPiano){
     if (!alive()) return;
     try {
       let b = await audioCtx.decodeAudioData(await f.arrayBuffer());
+      userBufAlign(b, userPianoAlignAmt(), U);   // 左右對齊(設定;預設原始 = 不動)
       userBufEnv(b);
       if (trim) {
         const n = Math.min(b.length, Math.round(Math.max(2, trimSec(sec) * shrink) * b.sampleRate));
@@ -12854,6 +12911,7 @@ async function userPianoLoadNeeded(alive, quiet, U = userPiano){
   }), total > 1e9 ? 2 : USER_PIANO.conc);   // 大音源:同時解碼的檔案少一點(壓縮檔 + 解碼中的暫存一起算,同時 6 個時記憶體尖峰很高)
   if (!alive()) return;
   if (U === userPiano && typeof userPianoUiUpdate === "function") userPianoUiUpdate();
+  if (U.alignStats && U.alignStats.n) { const a = U.alignStats.ms.slice().sort((x, y) => Math.abs(x) - Math.abs(y)); console.log("自己的音源:左右對齊 " + U.alignStats.done + "/" + U.alignStats.n + " 個錄音(×" + userPianoAlignAmt() + "),移動中位數 " + (a.length ? Math.abs(a[a.length >> 1]).toFixed(2) : "0") + "ms"); }
   // 音量對齊:C4 力度 100、不踩踏板,前 2 秒的 RMS 對齊內建鋼琴(只算一次;C4 不在這首就先載來量)
   if (!U.layerLoud) {
     // 每一層(C4、不踩踏板、各層中間的力度)實際響度,給 userGainFor 把大小聲換算成內建鋼琴的曲線
