@@ -9325,7 +9325,7 @@ function initUserPianoUi(){
   // 左右對齊(USER_PIANO_ALIGN):記在 ss_userPianoAlign;改了就把已解碼的錄音丟掉、照新設定重讀
   const aln = $("userPianoAlign");
   aln.value = String(userPianoAlignAmt());
-  aln.addEventListener("change", () => { try { if (+aln.value > 0) localStorage.setItem("ss_userPianoAlign", aln.value); else localStorage.removeItem("ss_userPianoAlign"); } catch (e) {} if (userPiano) { userPiano.buf.clear(); userPiano.alignStats = null; userPianoReload(); } });
+  aln.addEventListener("change", () => { try { localStorage.setItem("ss_userPianoAlign", +aln.value > 0 ? "1" : "0"); } catch (e) {} if (userPiano) { userPiano.buf.clear(); userPiano.alignStats = null; userPianoReload(); } });
   mem.addEventListener("change", () => { try { if (mem.value) localStorage.setItem("ss_userPianoMem", mem.value); else localStorage.removeItem("ss_userPianoMem"); } catch (e) {} if (userPiano) userPianoReload(); });
 }
 
@@ -12484,13 +12484,13 @@ function userPianoXLag(pa, pb, U = userPiano){
 /* 左右對齊(USER_PIANO_ALIGN,使用者 2026-11 用 300 Grand:「音聽起來裡面是空心的」「手機上轟」;設定「左右對齊」原始/部分/完全,預設原始):
    300 Grand 是兩支分開擺的麥克風(琴外 AB),同一個音到左右差 1.5~3.3ms,某些頻率左右相反 → 單聲道(手機)抵消:
    A2 250~500Hz −6.7dB、C4 500~1k −9.6dB、C6 基音 500~2k −13.2dB(左右相關 −0.66/−0.78/−0.91);耳機上是「中間空空的」。
-   每個錄音解碼時量左右的時間差(起音後 win 秒、60~2kHz、±maxMs 內找互相關最大),把早到的那邊延後(設定:原始 0 / 對齊 1;2026-11 使用者:部分 0.65 跟完全聽起來太像,拿掉部分,舊設定 0.65 當成對齊)。
+   每個錄音解碼時量左右的時間差(起音後 win 秒、60~2kHz、±maxMs 內找互相關最大),把早到的那邊延後(設定:原始 0 / 對齊 1;2026-11 使用者:部分 0.65 跟完全聽起來太像,拿掉部分,舊設定 0.65 當成對齊;2026-11 使用者決定預設「對齊」,沒存過設定 = 1,選原始存 "0")。
    對齊後(使用者傳的真實錄音)C6 −13.2 → −0.1dB、C4 −9.6 → −0.9、A2 −6.7 → −1.0;同一種錄音不同力度量出來的時間差一致(放鍵聲 1.50~1.72ms),
    琴音與放鍵聲方向相反(發聲位置不同),所以每個錄音各自量。太短(< minSec)、量不準(對齊後相關 < minCorr、比原本好不到 minGain)的照原樣 */
 const USER_PIANO_ALIGN = Object.assign({ maxMs: 4, win: 0.5, minSec: 0.2, minCorr: 0.3, minGain: 0.1, lo: 60, hi: 2000 }, window.USER_PIANO_ALIGN_OVERRIDE || {});
 function userPianoAlignAmt(){
   if (USER_PIANO_ALIGN.amt != null) return USER_PIANO_ALIGN.amt;   // 測試用(window.USER_PIANO_ALIGN_OVERRIDE {amt})
-  try { const v = parseFloat(localStorage.getItem("ss_userPianoAlign") || "0"); return isFinite(v) && v > 0 ? 1 : 0; } catch (e) { return 0; }
+  try { const raw = localStorage.getItem("ss_userPianoAlign"); if (raw == null) return 1; const v = parseFloat(raw); return isFinite(v) && v > 0 ? 1 : 0; } catch (e) { return 1; }
 }
 function userBufAlign(b, amt, U){
   const X = USER_PIANO_ALIGN;
