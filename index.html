@@ -11985,10 +11985,17 @@ const USER_PIANO = { refRms: 0.081, budget: 1.0e9, conc: 6, raw: true, maxSrc: 1
    第二版(使用者 2026-11 用〈欲落未落〉無母帶影片:「這個音色比打開母帶還好聽」「更立體、飽滿,但不要糊」,試聽 A/B/C 選 B):
    壓縮器拿掉(lightComp false;它在大聲處壓 2~3dB,聲音變扁),改成 音量 trimDb → 140Hz 低頻架 +1.5dB(琴身)→ 350Hz −2dB Q1(會糊的那層)
    → 只動左右差的加寬:side 的 300~3kHz 帶通 × 1.35(左右相關 0.34 → 0.10,單聲道完全不變)→ masterBus。2kHz 以上不補(會變硬)。
-   匯出照樣標準化到 −14 LUFS(那首無母帶時就是 −14.1,限幅器只碰到 3.6% 的時間) */
+   匯出照樣標準化到 −14 LUFS(那首無母帶時就是 −14.1,限幅器只碰到 3.6% 的時間)
+   第三版 D(使用者 2026-11:B 版「兩個版本都很轟」,用 iPhone 15 Pro Max 喇叭、耳機、Tannoy 監聽聽;選 D):
+   拿同一台鋼琴(Yamaha CFX)的商業音色 Noire demo 當參考,三種裝置模型(translation_check 的監聽/耳塞/手機)逐八度比:
+   300 Grand 原樣 500Hz 八度多 1.9、1kHz 少 3.2dB(手機上聽起來轟的主因),B 版的 140Hz 低頻架讓 63Hz 再多 2dB、加寬讓 500~1k 兩側比中間大。
+   現在 lightEq = 100Hz 低頻架 −2 → 500Hz −2.5(Q1)→ 1kHz +2(Q1.4)→ 2.5kHz −1.5(Q1,抵消 1k 帶上去的 2~4k,不變硬);
+   拿掉 B 的低頻架、350Hz 與加寬。三種裝置跟 Noire 差距多在 ±2dB 內(8kHz 少 4dB 是錄音本身,10kHz 以上加 2.5dB 只改 0.3dB,不加),
+   手機清晰度 −4.9(原樣)→ −3.0、削波失真 −20.3 → −21.1dB */
 const USER_PIANO_MASTER = Object.assign({ on: true, micDb: -6, inDb: -0.3,
-  light: /300[ _-]?grand/i, lightTrimDb: 0, lightComp: false, lightThr: -18, lightKnee: 10, lightRatio: 3, lightAtk: 0.03, lightRel: 0.3, lightMakeupDb: 0,
-  lightLowF: 140, lightLowDb: 1.5, lightMudF: 350, lightMudDb: -2, lightMudQ: 1, lightWide: 1.35, lightWideLo: 300, lightWideHi: 3000 }, window.USER_PIANO_MASTER_OVERRIDE || {});
+  light: /300[ _-]?grand/i, lightTrimDb: 0.5, lightComp: false, lightThr: -18, lightKnee: 10, lightRatio: 3, lightAtk: 0.03, lightRel: 0.3, lightMakeupDb: 0,
+  lightLowF: 140, lightLowDb: 0, lightMudF: 350, lightMudDb: 0, lightMudQ: 1, lightWide: 1, lightWideLo: 300, lightWideHi: 3000,
+  lightEq: [["lowshelf", 100, -2], ["peaking", 500, -2.5, 1], ["peaking", 1000, 2, 1.4], ["peaking", 2500, -1.5, 1]] }, window.USER_PIANO_MASTER_OVERRIDE || {});
 function userPianoLightMaster(U = userPiano){ const L = USER_PIANO_MASTER.light; return !!(L && U && L.test(String(U.sfzName || U.name || ""))); }
 function userPianoMasterOn(){
   if (!USER_PIANO_MASTER.on) return false;
@@ -12380,6 +12387,7 @@ function getUserPianoBus(){
       x.connect(c); x = c;
     }
     const bq = (type, f, gain, q) => { const b = audioCtx.createBiquadFilter(); b.type = type; b.frequency.value = f; if (gain !== undefined) b.gain.value = gain; if (q !== undefined) b.Q.value = q; return b; };
+    for (const [type, fq, gain, q] of (M.lightEq || [])) { const b = bq(type, fq, gain, q); x.connect(b); x = b; }   // 第三版 D
     if (M.lightLowDb) { const b = bq("lowshelf", M.lightLowF, M.lightLowDb); x.connect(b); x = b; }
     if (M.lightMudDb) { const b = bq("peaking", M.lightMudF, M.lightMudDb, M.lightMudQ); x.connect(b); x = b; }
     if (M.lightWide && M.lightWide !== 1) {   // L += k·BP(S)、R −= k·BP(S),S = (L−R)/2:左+右完全不變
